@@ -6,6 +6,7 @@ Mobilní PWA pro organizaci školního úklidu. Základ používá lokální úl
 
 ```bash
 npm install
+npm run typecheck
 npm run dev
 ```
 
