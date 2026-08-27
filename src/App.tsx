@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { defaultShifts } from './data'
-import { schoolRepository, type Profile } from './schoolRepository'
+import { isTestCleaningDay, schoolRepository, type Profile } from './schoolRepository'
 import { isSupabaseConfigured } from './supabase'
 import type { Attendance, Frequency, Task } from './types'
 
@@ -9,7 +9,7 @@ type Section = 'Dnes' | 'Úklid' | 'Docházka' | 'Kalendář' | 'Zásoby' | 'Pra
 const sections: Section[] = ['Dnes', 'Úklid', 'Docházka', 'Kalendář', 'Zásoby', 'Praní', 'Závady', 'Nastavení']
 const icon: Record<Section, string> = { Dnes: '☀', Úklid: '✓', Docházka: '◷', Kalendář: '▣', Zásoby: '▤', Praní: '♨', Závady: '⚠', Nastavení: '⚙' }
 const todayLabel = new Intl.DateTimeFormat('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())
-const isCleaningDay = [1, 3, 5].includes(new Date().getDay())
+const isCleaningDay = isTestCleaningDay || [1, 3, 5].includes(new Date().getDay())
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null); const [profile, setProfile] = useState<Profile | null>(null)
@@ -30,7 +30,7 @@ export default function App() {
   const clock = async () => { const open = attendance.find(item => !item.end); try { setNotice(''); if (open?.id) await schoolRepository.finishAttendance(open.id); else await schoolRepository.startAttendance(profile.id); await load(session, profile) } catch (error) { setNotice(error instanceof Error ? error.message : 'Docházku se nepodařilo uložit.') } }
   const openShift = attendance.find(item => !item.end); const visible = section === 'Dnes' ? tasks.filter(task => task.dueToday) : tasks
   return <main className="app"><header><div><p className="eyebrow">ÚKLID ŠKOLY · ŠKOLA</p><h1>{section}</h1><p className="date">{todayLabel}</p></div><button className="avatar" aria-label="Odhlásit" title="Odhlásit" onClick={() => schoolRepository.signOut()}>{profile.full_name[0]}</button></header>{notice && <div className="notice">{notice}</div>}
-    {section === 'Dnes' && <><section className="hero"><span>{isCleaningDay ? 'Dnes je standardní úklidový den.' : 'Dnes není pravidelný úklidový den.'}</span><strong>{tasks.filter(task => task.done).length} / {tasks.length} hotovo</strong></section><h2>Nejdříve připravit cestu</h2><TaskList tasks={visible} onComplete={complete} /></>}
+    {section === 'Dnes' && <><section className="hero"><span>{isTestCleaningDay ? 'Testovací zobrazení úklidového dne.' : isCleaningDay ? 'Dnes je standardní úklidový den.' : 'Dnes není pravidelný úklidový den.'}</span><strong>{tasks.filter(task => task.done).length} / {tasks.length} hotovo</strong></section><h2>Nejdříve připravit cestu</h2><TaskList tasks={visible} onComplete={complete} /></>}
     {section === 'Úklid' && <><div className="filters">{(['denně', 'týdně', '1–2× týdně', 'měsíčně', 'mimořádně'] as Frequency[]).map(frequency => <span key={frequency}>{frequency}</span>)}</div><TaskList tasks={visible} onComplete={complete} /></>}
     {section === 'Docházka' && <section className="panel"><div className="timecard"><small>{openShift ? 'Směna probíhá' : 'Připraveno k evidenci'}</small><strong>{profile.full_name}</strong><button onClick={clock}>{openShift ? 'Ukončit směnu' : 'Začít směnu'}</button></div><div className="summary"><span>Dnes <b>{attendance.filter(item => item.date === new Date().toISOString().slice(0, 10)).length} směna</b></span><span>Měsíc <b>{hours.toFixed(1)} h</b></span></div><p className="hint">Docházka se ukládá do sdílené databáze. Praní se do pracovní doby nezapočítává.</p></section>}
     {section === 'Kalendář' && <Placeholder title="Plán úklidu" text="Připraveno pro budoucí propojení sdíleného Google Kalendáře a kontrolu kolizí školních akcí." />}{section === 'Zásoby' && <Placeholder title="Zásoby" text="Datový model zásob je připraven. Správu zásob doplníme v další fázi." />}{section === 'Praní' && <Placeholder title="Praní" text="Datový model praní je samostatný a nezapočítává se do docházky." />}{section === 'Závady' && <Placeholder title="Závady" text="Datový model závad a budoucích fotografií je připraven." />}

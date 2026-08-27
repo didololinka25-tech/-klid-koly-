@@ -6,6 +6,9 @@ export type Profile = { id: string; full_name: Worker; role: 'cleaner' | 'careta
 const today = () => new Date().toISOString().slice(0, 10)
 const frequency: Record<string, Task['frequency']> = { cleaning_day: 'denně', weekly: 'týdně', once_or_twice_weekly: '1–2× týdně', monthly: 'měsíčně', extraordinary: 'mimořádně' }
 
+// Dočasný režim pro vizuální kontrolu: ?testCleaningDay=1 nasimuluje úklidový den.
+export const isTestCleaningDay = new URLSearchParams(window.location.search).get('testCleaningDay') === '1'
+
 function dateParts(date: string) {
   const [year, month, day] = date.split('-').map(Number)
   return { year, month, day }
@@ -19,6 +22,7 @@ function isoDay(date: string) {
 
 function isDueToday(task: any, date: string) {
   const { day } = dateParts(date)
+  if (isTestCleaningDay && task.frequency === 'cleaning_day') return true
   if (task.frequency === 'monthly') return task.monthly_day === day
   if (task.frequency === 'extraordinary') return false
   return Array.isArray(task.schedule_days) && task.schedule_days.includes(isoDay(date))
