@@ -10,7 +10,13 @@ function client() { if (!supabase) throw new Error('Supabase není nakonfigurova
 export const schoolRepository = {
   getSession: async (): Promise<Session | null> => (await client().auth.getSession()).data.session,
   onAuthChange: (callback: (session: Session | null) => void) => client().auth.onAuthStateChange((_event, session) => callback(session)),
-  signIn: async (email: string, password: string) => { const { error } = await client().auth.signInWithPassword({ email, password }); if (error) throw error },
+  signInWithGoogle: async () => {
+    const { error } = await client().auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin },
+    })
+    if (error) throw error
+  },
   signOut: async () => { const { error } = await client().auth.signOut(); if (error) throw error },
   profile: async (id: string): Promise<Profile | null> => { const { data, error } = await client().from('profiles').select('id,full_name,role,active').eq('id', id).maybeSingle(); if (error) throw error; return data as Profile | null },
   tasks: async (profile: Profile): Promise<Task[]> => {
