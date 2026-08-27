@@ -38,11 +38,8 @@ comment on column public.cleaning_tasks.schedule_days is 'Dny v týdnu ISO: 1=po
 comment on column public.cleaning_tasks.assignment_mode is 'fixed = jeden pracovník; rotating = střídání podle rotation_order, rotation_anchor_date a rotation_interval_weeks.';
 comment on column public.cleaning_tasks.work_part_id is 'Pracovní část A/B. Pravidelné úkoly patří části, ne trvale konkrétní osobě.';
 
--- Stávající úkoly dostanou správný výchozí režim, beze změny jejich názvů ani záznamů.
-update public.cleaning_tasks set schedule_days = array[1,3,5]::smallint[] where frequency = 'cleaning_day' and schedule_days = '{}';
-update public.cleaning_tasks set schedule_days = array[3]::smallint[] where frequency = 'weekly' and schedule_days = '{}';
-
--- Doplnění místností pro celé patro školy. Původní místnosti zůstávají zachované.
+-- Jediný schválený plán úklidu se seeduje zde; první migrace nevkládá provizorní úkoly.
+-- Doplnění místností pro celé patro školy.
 insert into public.rooms (building_id, floor_id, name, sort_order)
 select b.id, f.id, 'Chodba – ' || f.name, f.sort_order * 10 + 1
 from public.buildings b join public.floors f on f.building_id = b.id
@@ -54,6 +51,14 @@ select b.id, f.id, 'Toalety – ' || f.name, f.sort_order * 10 + 2
 from public.buildings b join public.floors f on f.building_id = b.id
 where b.name = 'Škola' and f.name in ('Přízemí', '1. patro', '2. patro', '3. patro', '4. patro')
   and not exists (select 1 from public.rooms r where r.building_id = b.id and r.name = 'Toalety – ' || f.name);
+
+-- David před úklidem projde školu a odstraní věci z cesty. Tento úkol nepatří části A/B.
+insert into public.cleaning_tasks (room_id, name, frequency, schedule_days, sort_order, assignment_mode)
+select null, 'Projít školu a odstranit věci z cesty', 'cleaning_day', array[1,3,5]::smallint[], 1, 'fixed'
+where not exists (
+  select 1 from public.cleaning_tasks
+  where room_id is null and name = 'Projít školu a odstranit věci z cesty'
+);
 
 -- Chodby: při každém úklidovém dni; vytírání je závislé na předchozím zametení/vysátí.
 insert into public.cleaning_tasks (room_id, name, frequency, schedule_days, sort_order)
