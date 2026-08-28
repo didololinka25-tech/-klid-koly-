@@ -5,6 +5,7 @@ export type Task = {
   frequency: Frequency; assignedTo: string; done: boolean; prerequisite?: string; canComplete?: boolean; dueToday: boolean
   sortOrder: number; scheduleDays: number[]; monthlyDay?: number | null; workPartId?: string | null
   assignmentMode: 'fixed' | 'rotating'; rotationAnchorDate?: string | null; rotationIntervalWeeks?: number | null; active: boolean
+  rotationAssignments: { workerId: string; name: string; order: number }[]
 }
 export type Shift = { worker: Worker; start: string; end: string }
 export type Attendance = { id?: string; worker: Worker; start: string; end?: string; date: string; type: 'směna' | 'praní' }
