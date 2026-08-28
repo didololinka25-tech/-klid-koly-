@@ -79,7 +79,7 @@ export const schoolRepository = {
   },
   signOut: async () => { const { error } = await client().auth.signOut(); if (error) throw error },
   profile: async (id: string): Promise<Profile | null> => { const { data, error } = await client().from('profiles').select('id,full_name,role,active').eq('id', id).maybeSingle(); if (error) throw error; return data as Profile | null },
-  tasks: async (profile: Profile): Promise<TaskLoad> => {
+  tasks: async (profile: Profile, includeAll = false): Promise<TaskLoad> => {
     const db = client(); const date = today(); const planningDate = effectivePlanningDate(date)
     const [
       { data: rows, error },
@@ -117,6 +117,7 @@ export const schoolRepository = {
       .filter((row: any) => {
         const room: any = row.room_id ? roomById.get(row.room_id) : null
         const taskAssignments = assignmentsByTask.get(row.id) ?? []
+        if (includeAll) return true
         if (!row.active && profile.role !== 'caretaker') return false
         if (room && !room.active && profile.role !== 'caretaker') return false
         if (profile.role === 'caretaker') return true

@@ -60,6 +60,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [planTasks, setPlanTasks] = useState<Task[]>([]);
   const [hasWorkPart, setHasWorkPart] = useState(false);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [attendanceView, setAttendanceView] = useState<Attendance[]>([]);
@@ -89,8 +90,9 @@ export default function App() {
         return;
       }
       setProfile(activeProfile);
-      const [taskResult, attendanceResult] = await Promise.allSettled([
+      const [taskResult, planTaskResult, attendanceResult] = await Promise.allSettled([
         schoolRepository.tasks(activeProfile),
+        schoolRepository.tasks(activeProfile, true),
         schoolRepository.attendance(activeProfile.id),
       ]);
       if (taskResult.status === "fulfilled") {
@@ -105,6 +107,11 @@ export default function App() {
             : "Úkoly se nepodařilo načíst.",
         );
       }
+      if (planTaskResult.status === "fulfilled") {
+        setPlanTasks(planTaskResult.value.tasks);
+      } else {
+        setPlanTasks([]);
+      }
       if (attendanceResult.status === "fulfilled") {
         setAttendance(attendanceResult.value);
       } else {
@@ -115,27 +122,17 @@ export default function App() {
             : "Docházku se nepodařilo načíst.",
         );
       }
-      if (activeProfile.role === "caretaker") {
-        const [optionsResult, workersResult] = await Promise.allSettled([
-          schoolRepository.planOptions(),
-          schoolRepository.attendanceWorkers(),
-        ]);
-        if (optionsResult.status === "fulfilled") {
-          setPlanOptions(optionsResult.value);
-        } else {
-          throw optionsResult.reason;
-        }
-        if (workersResult.status === "fulfilled") {
-          setAttendanceWorkers(workersResult.value);
-        } else {
-          setAttendanceWorkers([
-            {
-              id: activeProfile.id,
-              name: activeProfile.full_name,
-              role: activeProfile.role,
-            },
-          ]);
-        }
+      const [optionsResult, workersResult] = await Promise.allSettled([
+        schoolRepository.planOptions(),
+        schoolRepository.attendanceWorkers(),
+      ]);
+      if (optionsResult.status === "fulfilled") {
+        setPlanOptions(optionsResult.value);
+      } else {
+        throw optionsResult.reason;
+      }
+      if (workersResult.status === "fulfilled") {
+        setAttendanceWorkers(workersResult.value);
       } else {
         setAttendanceWorkers([
           {
@@ -158,6 +155,7 @@ export default function App() {
       setSession(next);
       setProfile(null);
       setTasks([]);
+      setPlanTasks([]);
       setHasWorkPart(false);
       setAttendance([]);
       setAttendanceView([]);
@@ -372,10 +370,7 @@ export default function App() {
     section === "Dnes"
       ? tasks.filter((task) => task.active && task.dueToday)
       : tasks;
-  const navigation =
-    profile.role === "caretaker"
-      ? sections
-      : sections.filter((item) => item !== "Správa");
+  const navigation = sections;
   return (
     <main className="app">
       <header>
@@ -426,31 +421,15 @@ export default function App() {
         </>
       )}
       {section === "Správa" && (
-        <>
-          {profile.role === "caretaker" ? (
-            <Management
-              tasks={tasks}
-              options={planOptions}
-              editing={editing}
-              onEdit={setEditing}
-              onCancel={() => setEditing(null)}
-              onSaveTask={saveTask}
-              onSaveRoom={saveRoom}
-            />
-          ) : (
-            <>
-              <div className="filters">
-                {frequencies.map((frequency) => (
-                  <span key={frequency}>{frequency}</span>
-                ))}
-              </div>
-              <TaskHierarchy
-                tasks={visible.filter((task) => task.active)}
-                onComplete={complete}
-              />
-            </>
-          )}
-        </>
+        <Management
+          tasks={planTasks}
+          options={planOptions}
+          editing={editing}
+          onEdit={setEditing}
+          onCancel={() => setEditing(null)}
+          onSaveTask={saveTask}
+          onSaveRoom={saveRoom}
+        />
       )}
       {section === "Docházka" && (
         <AttendanceDashboard
@@ -460,7 +439,7 @@ export default function App() {
           onSelectWorker={setSelectedAttendanceWorker}
           settings={attendanceSettings}
           currentUserId={profile.id}
-          isCaretaker={profile.role === "caretaker"}
+          isCaretaker
           onClock={clock}
           ownRecords={attendance}
           onSaveAttendance={saveAttendance}
