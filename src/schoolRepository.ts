@@ -4,6 +4,7 @@ import { supabase } from './supabase'
 
 export type Profile = { id: string; full_name: string; role: 'cleaner' | 'caretaker'; active: boolean }
 export type TaskLoad = { tasks: Task[]; hasWorkPart: boolean }
+export type PlanOptions = { rooms: { id: string; name: string; floor: string; floorSort: number; building: string }[]; workParts: { id: string; code: string; name: string }[] }
 const today = () => new Date().toISOString().slice(0, 10)
 const frequency: Record<string, Task['frequency']> = { cleaning_day: 'denně', weekly: 'týdně', once_or_twice_weekly: '1–2× týdně', monthly: 'měsíčně', extraordinary: 'mimořádně' }
 
@@ -65,7 +66,7 @@ export const schoolRepository = {
   tasks: async (profile: Profile): Promise<TaskLoad> => {
     const db = client(); const date = today(); const planningDate = effectivePlanningDate(date)
     const [{ data: rows, error }, { data: completions, error: completionError }, { data: workParts, error: workPartsError }] = await Promise.all([
-      db.from('cleaning_tasks').select('id,name,frequency,requires_task_id,schedule_days,monthly_day,assignment_mode,rotation_anchor_date,rotation_interval_weeks,work_part_id,rooms(name),task_assignments(worker_id,rotation_order,profiles(full_name))').eq('active', true).order('sort_order'),
+      db.from('cleaning_tasks').select('id,name,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,assignment_mode,rotation_anchor_date,rotation_interval_weeks,work_part_id,rooms(id,name,floors(name,sort_order),buildings(name)),task_assignments(worker_id,rotation_order,profiles(full_name))').order('sort_order'),
       db.from('cleaning_completions').select('task_id,completed').eq('completion_date', date),
       db.from('work_part_assignments').select('work_part_id').eq('worker_id', profile.id).eq('active', true)
     ])
@@ -74,6 +75,7 @@ export const schoolRepository = {
     const assignedWorkParts = new Set((workParts ?? []).map((assignment: { work_part_id: string }) => assignment.work_part_id))
     const tasks = (rows ?? [])
       .filter((row: any) => {
+        if (!row.active && profile.role !== 'caretaker') return false
         if (profile.role === 'caretaker') return true
         if (row.assignment_mode === 'rotating' && !row.task_assignments?.some((assignment: any) => assignment.worker_id === profile.id && isCurrentRotation(row, assignment.rotation_order, planningDate))) return false
         if (row.work_part_id && assignedWorkParts.has(row.work_part_id)) return true
@@ -81,9 +83,30 @@ export const schoolRepository = {
       })
       .map((row: any) => {
         const ownAssignment = row.task_assignments?.find((assignment: any) => assignment.worker_id === profile.id)
-        return { id: row.id, room: row.rooms?.name ?? 'Celá škola', title: row.name, frequency: frequency[row.frequency] ?? 'mimořádně', assignedTo: ownAssignment?.profiles?.full_name ?? (row.work_part_id ? 'moje pracovní část' : 'nepřiřazeno'), done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: true, dueToday: isTaskDueOnDate(row, planningDate) }
+        return { id: row.id, roomId: row.rooms?.id, room: row.rooms?.name ?? 'Společný úkol', floor: row.rooms?.floors?.name ?? 'Společné úkoly', floorSort: row.rooms?.floors?.sort_order ?? -1, building: row.rooms?.buildings?.name ?? 'Škola', title: row.name, frequency: frequency[row.frequency] ?? 'mimořádně', assignedTo: ownAssignment?.profiles?.full_name ?? (row.work_part_id ? 'moje pracovní část' : 'nepřiřazeno'), done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: true, dueToday: isTaskDueOnDate(row, planningDate), sortOrder: row.sort_order, scheduleDays: row.schedule_days ?? [], monthlyDay: row.monthly_day, workPartId: row.work_part_id, assignmentMode: row.assignment_mode, rotationAnchorDate: row.rotation_anchor_date, rotationIntervalWeeks: row.rotation_interval_weeks, active: row.active }
       })
     return { tasks, hasWorkPart: profile.role === 'caretaker' || assignedWorkParts.size > 0 }
+  },
+  planOptions: async (): Promise<PlanOptions> => {
+    const db = client()
+    const [{ data: rooms, error: roomsError }, { data: workParts, error: partsError }] = await Promise.all([
+      db.from('rooms').select('id,name,floors(name,sort_order),buildings(name)').order('sort_order'),
+      db.from('cleaning_work_parts').select('id,code,name').eq('active', true).order('code'),
+    ])
+    if (roomsError || partsError) throw roomsError ?? partsError
+    return {
+      rooms: (rooms ?? []).map((room: any) => ({ id: room.id, name: room.name, floor: room.floors?.name ?? 'Bez patra', floorSort: room.floors?.sort_order ?? 0, building: room.buildings?.name ?? 'Škola' })),
+      workParts: (workParts ?? []).map((part: any) => ({ id: part.id, code: part.code, name: part.name })),
+    }
+  },
+  updateTask: async (task: Task) => {
+    const { error } = await client().from('cleaning_tasks').update({
+      room_id: task.roomId ?? null, name: task.title, frequency: Object.entries(frequency).find(([, label]) => label === task.frequency)?.[0],
+      active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.monthlyDay ?? null,
+      work_part_id: task.workPartId ?? null, assignment_mode: task.assignmentMode, rotation_anchor_date: task.rotationAnchorDate ?? null,
+      rotation_interval_weeks: task.rotationIntervalWeeks ?? 1,
+    }).eq('id', task.id)
+    if (error) throw error
   },
   setCompletion: async (taskId: string, workerId: string, completed: boolean) => {
     const { error } = await client().from('cleaning_completions').upsert({ completion_date: today(), task_id: taskId, worker_id: workerId, completed }, { onConflict: 'completion_date,task_id' }); if (error) throw error
