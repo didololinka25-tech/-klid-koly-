@@ -6,7 +6,7 @@ export type Profile = { id: string; full_name: Worker; role: 'cleaner' | 'careta
 const today = () => new Date().toISOString().slice(0, 10)
 const frequency: Record<string, Task['frequency']> = { cleaning_day: 'denně', weekly: 'týdně', once_or_twice_weekly: '1–2× týdně', monthly: 'měsíčně', extraordinary: 'mimořádně' }
 
-// Dočasný režim pro vizuální kontrolu: ?testCleaningDay=1 nasimuluje úklidový den.
+// Dočasný režim pro vizuální kontrolu: ?testCleaningDay=1 nasimuluje pondělní úklidový den.
 export const isTestCleaningDay = new URLSearchParams(window.location.search).get('testCleaningDay') === '1'
 
 function dateParts(date: string) {
@@ -14,13 +14,21 @@ function dateParts(date: string) {
   return { year, month, day }
 }
 
-function isoDay(date: string) {
+export function isoDay(date: string) {
   const { year, month, day } = dateParts(date)
   const dayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay()
   return dayOfWeek === 0 ? 7 : dayOfWeek
 }
 
-function isDueToday(task: any, date: string) {
+export function effectivePlanningDate(date: string) {
+  if (!isTestCleaningDay) return date
+  const { year, month, day } = dateParts(date)
+  const monday = new Date(Date.UTC(year, month - 1, day))
+  monday.setUTCDate(monday.getUTCDate() - (isoDay(date) - 1))
+  return monday.toISOString().slice(0, 10)
+}
+
+export function isTaskDueOnDate(task: any, date: string) {
   const { day } = dateParts(date)
   if (isTestCleaningDay && task.frequency === 'cleaning_day') return true
   if (task.frequency === 'monthly') return task.monthly_day === day
@@ -28,7 +36,7 @@ function isDueToday(task: any, date: string) {
   return Array.isArray(task.schedule_days) && task.schedule_days.includes(isoDay(date))
 }
 
-function isCurrentRotation(task: any, rotationOrder: number | null | undefined, date: string) {
+export function isCurrentRotation(task: any, rotationOrder: number | null | undefined, date: string) {
   if (task.assignment_mode !== 'rotating') return true
   if (!rotationOrder || !task.rotation_anchor_date) return false
   const current = dateParts(date)
@@ -47,14 +55,14 @@ export const schoolRepository = {
   signInWithGoogle: async () => {
     const { error } = await client().auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: window.location.origin },
+      options: { redirectTo: `${window.location.origin}${window.location.pathname}${window.location.search}` },
     })
     if (error) throw error
   },
   signOut: async () => { const { error } = await client().auth.signOut(); if (error) throw error },
   profile: async (id: string): Promise<Profile | null> => { const { data, error } = await client().from('profiles').select('id,full_name,role,active').eq('id', id).maybeSingle(); if (error) throw error; return data as Profile | null },
   tasks: async (profile: Profile): Promise<Task[]> => {
-    const db = client(); const date = today()
+    const db = client(); const date = today(); const planningDate = effectivePlanningDate(date)
     const [{ data: rows, error }, { data: completions, error: completionError }, { data: workParts, error: workPartsError }] = await Promise.all([
       db.from('cleaning_tasks').select('id,name,frequency,requires_task_id,schedule_days,monthly_day,assignment_mode,rotation_anchor_date,rotation_interval_weeks,work_part_id,rooms(name),task_assignments(worker_id,rotation_order,profiles(full_name))').eq('active', true).order('sort_order'),
       db.from('cleaning_completions').select('task_id,completed').eq('completion_date', date),
@@ -66,12 +74,13 @@ export const schoolRepository = {
     return (rows ?? [])
       .filter((row: any) => {
         if (profile.role === 'caretaker') return true
+        if (row.assignment_mode === 'rotating' && !row.task_assignments?.some((assignment: any) => assignment.worker_id === profile.id && isCurrentRotation(row, assignment.rotation_order, planningDate))) return false
         if (row.work_part_id && assignedWorkParts.has(row.work_part_id)) return true
-        return row.task_assignments?.some((assignment: any) => assignment.worker_id === profile.id && isCurrentRotation(row, assignment.rotation_order, date))
+        return row.task_assignments?.some((assignment: any) => assignment.worker_id === profile.id)
       })
       .map((row: any) => {
         const ownAssignment = row.task_assignments?.find((assignment: any) => assignment.worker_id === profile.id)
-        return { id: row.id, room: row.rooms?.name ?? 'Celá škola', title: row.name, frequency: frequency[row.frequency] ?? 'mimořádně', assignedTo: ownAssignment?.profiles?.full_name ?? (row.work_part_id ? 'moje pracovní část' : 'nepřiřazeno'), done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: true, dueToday: isDueToday(row, date) }
+        return { id: row.id, room: row.rooms?.name ?? 'Celá škola', title: row.name, frequency: frequency[row.frequency] ?? 'mimořádně', assignedTo: ownAssignment?.profiles?.full_name ?? (row.work_part_id ? 'moje pracovní část' : 'nepřiřazeno'), done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: true, dueToday: isTaskDueOnDate(row, planningDate) }
       })
   },
   setCompletion: async (taskId: string, workerId: string, completed: boolean) => {
