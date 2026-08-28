@@ -91,7 +91,7 @@ export const schoolRepository = {
       { data: workParts, error: workPartsError },
       { data: profiles },
     ] = await Promise.all([
-      db.from('cleaning_tasks').select('id,name,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,assignment_mode,rotation_anchor_date,rotation_interval_weeks,work_part_id,room_id').order('sort_order'),
+      db.from('cleaning_tasks').select('id,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,assignment_mode,rotation_anchor_date,rotation_interval_weeks,work_part_id,room_id').order('sort_order'),
       db.from('rooms').select('id,name,active,floor_id,building_id'),
       db.from('floors').select('id,name,sort_order,building_id'),
       db.from('buildings').select('id,name'),
@@ -132,7 +132,7 @@ export const schoolRepository = {
         const taskAssignments = assignmentsByTask.get(row.id) ?? []
         const ownAssignment = taskAssignments.find((assignment: any) => assignment.worker_id === profile.id)
         const scheduleDays = Array.isArray(row.schedule_days) ? row.schedule_days.map(Number) : []
-        return { id: row.id, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1, building: building?.name ?? 'Škola', title: row.name, frequency: frequency[row.frequency] ?? 'mimořádně', assignedTo: ownAssignment ? profileById.get(ownAssignment.worker_id) ?? profile.full_name : (row.work_part_id ? 'moje pracovní část' : 'nepřiřazeno'), done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: true, dueToday: room?.active !== false && isTaskDueOnDate(row, planningDate), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day, workPartId: row.work_part_id, assignmentMode: row.assignment_mode, rotationAnchorDate: row.rotation_anchor_date, rotationIntervalWeeks: row.rotation_interval_weeks, active: row.active, rotationAssignments: taskAssignments.filter((assignment: any) => assignment.active !== false && assignment.rotation_order).map((assignment: any) => ({ workerId: assignment.worker_id, name: profileById.get(assignment.worker_id) ?? 'Pracovník', order: assignment.rotation_order })) }
+        return { id: row.id, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1, building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně', assignedTo: ownAssignment ? profileById.get(ownAssignment.worker_id) ?? profile.full_name : (row.work_part_id ? 'moje pracovní část' : 'nepřiřazeno'), done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: true, dueToday: room?.active !== false && isTaskDueOnDate(row, planningDate), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day, workPartId: row.work_part_id, assignmentMode: row.assignment_mode, rotationAnchorDate: row.rotation_anchor_date, rotationIntervalWeeks: row.rotation_interval_weeks, active: row.active, rotationAssignments: taskAssignments.filter((assignment: any) => assignment.active !== false && assignment.rotation_order).map((assignment: any) => ({ workerId: assignment.worker_id, name: profileById.get(assignment.worker_id) ?? 'Pracovník', order: assignment.rotation_order })) }
       })
     return { tasks, hasWorkPart: profile.role === 'caretaker' || assignedWorkParts.size > 0 }
   },
@@ -171,7 +171,7 @@ export const schoolRepository = {
     const rotationWorkers = new Set(rotationAssignments.map(assignment => assignment.workerId))
     if (task.assignmentMode === 'rotating' && (rotationAssignments.length !== 2 || rotationWorkers.size !== 2)) throw new Error('Pro střídání vyberte dva různé pracovníky.')
     const values = {
-      room_id: task.roomId ?? null, name: task.title, frequency: Object.entries(frequency).find(([, label]) => label === task.frequency)?.[0],
+      room_id: task.roomId ?? null, name: task.title, activity_type: task.activityType, frequency: Object.entries(frequency).find(([, label]) => label === task.frequency)?.[0],
       active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.monthlyDay ?? null,
       work_part_id: task.workPartId ?? null, assignment_mode: task.assignmentMode, rotation_anchor_date: task.rotationAnchorDate ?? null,
       rotation_interval_weeks: task.rotationIntervalWeeks ?? 1,
@@ -193,6 +193,12 @@ export const schoolRepository = {
   },
   setCompletion: async (taskId: string, workerId: string, completed: boolean) => {
     const { error } = await client().from('cleaning_completions').upsert({ completion_date: today(), task_id: taskId, worker_id: workerId, completed }, { onConflict: 'completion_date,task_id' }); if (error) throw error
+  },
+  setCompletions: async (taskIds: string[], workerId: string) => {
+    for (const taskId of taskIds) {
+      const { error } = await client().from('cleaning_completions').upsert({ completion_date: today(), task_id: taskId, worker_id: workerId, completed: true }, { onConflict: 'completion_date,task_id' })
+      if (error) throw error
+    }
   },
   attendance: async (workerId: string): Promise<Attendance[]> => { const { data, error } = await client().from('attendance').select('id,worker_id,started_at,ended_at,attendance_date,note').eq('worker_id', workerId).order('started_at', { ascending: false }); if (error) throw error; return (data ?? []).map((row: any) => ({ id: row.id, workerId: row.worker_id, start: row.started_at, end: row.ended_at ?? undefined, date: row.attendance_date, note: row.note ?? undefined })) },
   attendanceWorkers: async (): Promise<AttendanceWorker[]> => { const { data, error } = await client().from('profiles').select('id,full_name,role').eq('active', true).order('full_name'); if (error) throw error; return (data ?? []).map((row: any) => ({ id: row.id, name: row.full_name, role: row.role })) },

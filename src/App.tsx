@@ -11,7 +11,7 @@ import {
   type Profile,
 } from "./schoolRepository";
 import { isSupabaseConfigured } from "./supabase";
-import type { Attendance, Frequency, Task } from "./types";
+import type { ActivityType, Attendance, Frequency, Task } from "./types";
 
 type Section =
   | "Dnes"
@@ -49,6 +49,22 @@ const frequencies: Frequency[] = [
   "měsíčně",
   "mimořádně",
 ];
+const activityTypes: Record<
+  ActivityType,
+  { icon: string; label: string }
+> = {
+  trash: { icon: "🗑", label: "Koš" },
+  toilet: { icon: "🚽", label: "WC" },
+  sink: { icon: "🚰", label: "Umyvadlo" },
+  mirror: { icon: "🪞", label: "Zrcadlo" },
+  vacuum: { icon: "🧹", label: "Zamést" },
+  mop: { icon: "🧽", label: "Vytřít" },
+  disinfect: { icon: "✦", label: "Dezinfekce" },
+  tables: { icon: "▤", label: "Stoly" },
+  windows: { icon: "▦", label: "Okna" },
+  laundry: { icon: "♨", label: "Praní" },
+  other: { icon: "✓", label: "Ostatní" },
+};
 const weekdays = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
 const todayLabel = new Intl.DateTimeFormat("cs-CZ", {
   weekday: "long",
@@ -228,6 +244,52 @@ export default function App() {
       setNotice(
         error instanceof Error ? error.message : "Úkol se nepodařilo uložit.",
       );
+    }
+  };
+  const completeMany = async (selectedTasks: Task[]) => {
+    const remaining = new Map(
+      selectedTasks.filter((task) => !task.done).map((task) => [task.id, task]),
+    );
+    const orderedIds: string[] = [];
+    try {
+      setNotice("");
+      for (const task of remaining.values()) {
+        if (
+          task.prerequisite &&
+          !tasks.find((item) => item.id === task.prerequisite)?.done &&
+          !remaining.has(task.prerequisite)
+        ) {
+          throw new Error(
+            `Nejdříve dokončete předchozí činnost pro „${task.title}“.`,
+          );
+        }
+      }
+      while (remaining.size > 0) {
+        const ready = [...remaining.values()]
+          .filter(
+            (task) =>
+              !task.prerequisite ||
+              tasks.find((item) => item.id === task.prerequisite)?.done ||
+              !remaining.has(task.prerequisite),
+          )
+          .sort((a, b) => a.sortOrder - b.sortOrder);
+        if (ready.length === 0) {
+          throw new Error("Úkoly mají neplatnou kruhovou závislost.");
+        }
+        for (const task of ready) {
+          orderedIds.push(task.id);
+          remaining.delete(task.id);
+        }
+      }
+      await schoolRepository.setCompletions(orderedIds, profile.id);
+      await load(session, profile);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Úkoly místnosti se nepodařilo uložit.",
+      );
+      throw error;
     }
   };
   const clock = async () => {
@@ -421,7 +483,11 @@ export default function App() {
             </section>
           )}
           {(profile.role === "caretaker" || hasWorkPart) && (
-            <TaskHierarchy tasks={visible} onComplete={complete} />
+            <TaskHierarchy
+              tasks={visible}
+              onComplete={complete}
+              onCompleteAll={completeMany}
+            />
           )}
         </>
       )}
@@ -1073,9 +1139,11 @@ function AttendanceEditor({
 function TaskHierarchy({
   tasks,
   onComplete,
+  onCompleteAll,
 }: {
   tasks: Task[];
-  onComplete: (id: string) => void;
+  onComplete: (id: string) => Promise<void>;
+  onCompleteAll: (tasks: Task[]) => Promise<void>;
 }) {
   const common = tasks.filter((task) => !task.roomId);
   const floorGroups = new Map<string, Task[]>();
@@ -1103,6 +1171,7 @@ function TaskHierarchy({
             label={key.split("|")[1]}
             tasks={floorTasks}
             onComplete={onComplete}
+            onCompleteAll={onCompleteAll}
           />
         ))}
       {tasks.length === 0 && (
@@ -1118,10 +1187,12 @@ function FloorGroup({
   label,
   tasks,
   onComplete,
+  onCompleteAll,
 }: {
   label: string;
   tasks: Task[];
-  onComplete: (id: string) => void;
+  onComplete: (id: string) => Promise<void>;
+  onCompleteAll: (tasks: Task[]) => Promise<void>;
 }) {
   const [open, setOpen] = useState(true);
   const rooms = new Map<string, Task[]>();
@@ -1147,46 +1218,90 @@ function FloorGroup({
       {open && (
         <div className="room-list">
           {[...rooms.entries()].map(([room, roomTasks]) => (
-            <section className="room-group" key={room}>
-              <h3>{room}</h3>
-              <TaskRows tasks={roomTasks} onComplete={onComplete} />
-            </section>
+            <RoomActivityGroup
+              key={room}
+              room={room}
+              tasks={roomTasks}
+              onComplete={onComplete}
+              onCompleteAll={onCompleteAll}
+            />
           ))}
         </div>
       )}
     </section>
   );
 }
+
+function RoomActivityGroup({
+  room,
+  tasks,
+  onComplete,
+  onCompleteAll,
+}: {
+  room: string;
+  tasks: Task[];
+  onComplete: (id: string) => Promise<void>;
+  onCompleteAll: (tasks: Task[]) => Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+  const completed = tasks.filter((task) => task.done).length;
+  return (
+    <section className="room-group">
+      <header className="room-heading">
+        <span>
+          <h3>{room}</h3>
+          <small>
+            {completed}/{tasks.length}
+          </small>
+        </span>
+        <button
+          className="complete-room"
+          disabled={saving || completed === tasks.length}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              await onCompleteAll(tasks);
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {saving ? "Ukládám…" : "Hotovo vše"}
+        </button>
+      </header>
+      <TaskRows tasks={tasks} onComplete={onComplete} />
+    </section>
+  );
+}
+
 function TaskRows({
   tasks,
   onComplete,
 }: {
   tasks: Task[];
-  onComplete: (id: string) => void;
+  onComplete: (id: string) => Promise<void>;
 }) {
   return (
-    <div className="tasks">
+    <div className="activity-grid">
       {[...tasks]
         .sort((a, b) => a.sortOrder - b.sortOrder)
-        .map((task) => (
-          <article className={task.done ? "task done" : "task"} key={task.id}>
+        .map((task) => {
+          const activity = activityTypes[task.activityType] ?? activityTypes.other;
+          return (
             <button
-              className="check"
+              className={task.done ? "activity-check done" : "activity-check"}
               disabled={!task.canComplete}
-              onClick={() => onComplete(task.id)}
-              aria-label={`Označit ${task.title} hotovo`}
+              onClick={() => void onComplete(task.id)}
+              aria-pressed={task.done}
+              aria-label={`${task.done ? "Zrušit dokončení" : "Dokončit"}: ${task.title}`}
+              title={`${task.title}${task.prerequisite ? " – nejdříve zamést nebo vysát" : ""}`}
+              key={task.id}
             >
-              {task.done ? "✓" : ""}
+              <span aria-hidden="true">{task.done ? "✓" : activity.icon}</span>
+              <small>{activity.label}</small>
             </button>
-            <div>
-              <h4>{task.title}</h4>
-              <p>
-                {task.assignedTo}
-                {task.prerequisite ? " · nejdříve zamést / vysát" : ""}
-              </p>
-            </div>
-          </article>
-        ))}
+          );
+        })}
     </div>
   );
 }
@@ -1268,6 +1383,7 @@ function PlanManager({
       floorSort: -1,
       building: "Škola",
       title: "",
+      activityType: "other",
       frequency: "denně",
       assignedTo: "nepřiřazeno",
       done: false,
@@ -1620,6 +1736,23 @@ function TaskEditor({
           onChange={(event) => update("title", event.target.value)}
           required
         />
+      </label>
+      <label>
+        Typ činnosti / ikona
+        <select
+          value={draft.activityType}
+          onChange={(event) =>
+            update("activityType", event.target.value as ActivityType)
+          }
+        >
+          {(Object.entries(activityTypes) as [ActivityType, { icon: string; label: string }][]).map(
+            ([value, activity]) => (
+              <option value={value} key={value}>
+                {activity.icon} {activity.label}
+              </option>
+            ),
+          )}
+        </select>
       </label>
       <label>
         Místnost / společný úkol
