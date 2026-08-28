@@ -68,7 +68,6 @@ const activityTypes: Record<
   mirror: { icon: "🪞", label: "Zrcadlo" },
   vacuum: { icon: "🧹", label: "Zamést" },
   mop: { icon: "🧽", label: "Vytřít" },
-  disinfect: { icon: "✦", label: "Dezinfekce" },
   tables: { icon: "▤", label: "Stoly" },
   windows: { icon: "▦", label: "Okna" },
   laundry: { icon: "♨", label: "Praní" },
@@ -1445,12 +1444,7 @@ function PlanManager({
       sortOrder: 10,
       scheduleDays: [1, 3, 5],
       monthlyDay: null,
-      workPartId: null,
-      assignmentMode: "fixed",
-      rotationAnchorDate: null,
-      rotationIntervalWeeks: 1,
       active: true,
-      rotationAssignments: [],
     });
   return (
     <section className="plan-manager">

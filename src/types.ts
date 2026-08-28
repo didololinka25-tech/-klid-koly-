@@ -1,13 +1,11 @@
 export type Worker = 'Dana' | 'Martina' | 'David'
 export type Frequency = 'denně' | 'týdně' | '1–2× týdně' | 'měsíčně' | 'mimořádně'
-export type ActivityType = 'trash' | 'toilet' | 'sink' | 'mirror' | 'vacuum' | 'mop' | 'disinfect' | 'tables' | 'windows' | 'laundry' | 'other'
+export type ActivityType = 'trash' | 'toilet' | 'sink' | 'mirror' | 'vacuum' | 'mop' | 'tables' | 'windows' | 'laundry' | 'other'
 export type Task = {
   id: string; roomId?: string; room: string; floor: string; floorSort: number; building: string; title: string
   activityType: ActivityType
   frequency: Frequency; assignedTo: string; done: boolean; prerequisite?: string; canComplete?: boolean; dueToday: boolean
-  sortOrder: number; scheduleDays: number[]; monthlyDay?: number | null; workPartId?: string | null
-  assignmentMode: 'fixed' | 'rotating'; rotationAnchorDate?: string | null; rotationIntervalWeeks?: number | null; active: boolean
-  rotationAssignments: { workerId: string; name: string; order: number }[]
+  sortOrder: number; scheduleDays: number[]; monthlyDay?: number | null; active: boolean
 }
 export type Shift = { worker: Worker; start: string; end: string }
 export type Attendance = { id: string; workerId: string; start: string; end?: string; date: string; note?: string; editedAt?: string }

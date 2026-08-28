@@ -102,7 +102,7 @@ export const schoolRepository = {
     const db = client()
     const date = localToday()
     const [{ data: rows, error }, { data: rooms, error: roomsError }, { data: floors, error: floorsError }, { data: buildings, error: buildingsError }, { data: completions, error: completionError }] = await Promise.all([
-      db.from('cleaning_tasks').select('id,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,assignment_mode,rotation_anchor_date,rotation_interval_weeks,work_part_id,room_id').order('sort_order'),
+      db.from('cleaning_tasks').select('id,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id').order('sort_order'),
       db.from('rooms').select('id,name,active,floor_id,building_id'),
       db.from('floors').select('id,name,sort_order,building_id'),
       db.from('buildings').select('id,name'),
@@ -114,6 +114,8 @@ export const schoolRepository = {
     const buildingById = new Map((buildings ?? []).map((building: any) => [building.id, building]))
     const done = new Map((completions ?? []).map((completion: { task_id: string; completed: boolean }) => [completion.task_id, completion.completed]))
     const tasks = (rows ?? []).filter((row: any) => {
+      if (row.activity_type === 'disinfect') return false
+      if (row.activity_type === 'windows' && row.name !== 'Mytí oken') return false
       const room: any = row.room_id ? roomById.get(row.room_id) : null
       return includeAll || (row.active && (!room || room.active))
     }).map((row: any): Task => {
@@ -126,8 +128,7 @@ export const schoolRepository = {
         building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
         assignedTo: 'Úklidový tým', done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile) && !isTestCleaningDay,
         dueToday: room?.active !== false && isTaskDueOnDate(row, date, isTestCleaningDay), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
-        workPartId: row.work_part_id, assignmentMode: row.assignment_mode, rotationAnchorDate: row.rotation_anchor_date,
-        rotationIntervalWeeks: row.rotation_interval_weeks, active: row.active, rotationAssignments: [],
+        active: row.active,
       }
     })
     return { tasks }
