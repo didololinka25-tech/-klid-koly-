@@ -99,13 +99,16 @@ export const schoolRepository = {
       workParts: (workParts ?? []).map((part: any) => ({ id: part.id, code: part.code, name: part.name })),
     }
   },
-  updateTask: async (task: Task) => {
-    const { error } = await client().from('cleaning_tasks').update({
+  saveTask: async (task: Task) => {
+    const values = {
       room_id: task.roomId ?? null, name: task.title, frequency: Object.entries(frequency).find(([, label]) => label === task.frequency)?.[0],
       active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.monthlyDay ?? null,
       work_part_id: task.workPartId ?? null, assignment_mode: task.assignmentMode, rotation_anchor_date: task.rotationAnchorDate ?? null,
       rotation_interval_weeks: task.rotationIntervalWeeks ?? 1,
-    }).eq('id', task.id)
+    }
+    const { error } = task.id
+      ? await client().from('cleaning_tasks').update(values).eq('id', task.id)
+      : await client().from('cleaning_tasks').insert(values)
     if (error) throw error
   },
   setCompletion: async (taskId: string, workerId: string, completed: boolean) => {
