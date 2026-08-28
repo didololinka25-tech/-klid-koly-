@@ -69,6 +69,225 @@ h1 {
   white-space: nowrap;
   color: #123d36;
 }
+.today-attendance {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 14px;
+  border-radius: 15px;
+  background: #165e56;
+  color: #fff;
+}
+.today-attendance > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+.today-attendance small {
+  color: #bfe5dc;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.today-attendance strong {
+  font-size: 17px;
+}
+.today-attendance button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  padding: 0 15px;
+  background: #fff;
+  color: #165e56;
+  font-weight: 900;
+}
+.today-attendance .attendance-alert {
+  grid-column: 1 / -1;
+}
+.attendance-dashboard {
+  display: grid;
+  gap: 14px;
+}
+.attendance-worker-picker {
+  display: grid;
+  gap: 6px;
+  font-weight: 700;
+}
+.attendance-worker-picker select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #c7ddd6;
+  border-radius: 10px;
+  padding: 8px 11px;
+  background: #fff;
+  font: inherit;
+}
+.attendance-owner {
+  margin: 0;
+  color: #568078;
+  font-size: 13px;
+}
+.attendance-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.attendance-summary-grid article {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid #dbe8e4;
+  border-radius: 13px;
+  background: #fff;
+  display: grid;
+  gap: 4px;
+}
+.attendance-summary-grid small {
+  color: #568078;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.attendance-summary-grid strong {
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.attendance-summary-grid span {
+  color: #6d827d;
+  font-size: 11px;
+}
+.dpp-progress {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dce9e5;
+}
+.dpp-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2b8879;
+}
+.attendance-alert {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff2d9;
+  color: #805000;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.attendance-alert.danger {
+  background: #ffe2de;
+  color: #9b2c23;
+  font-weight: 800;
+}
+.pace-card,
+.week-detail,
+.attendance-history {
+  padding: 15px;
+  border: 1px solid #dbe8e4;
+  border-radius: 15px;
+  background: #fff;
+}
+.pace-card {
+  display: grid;
+  gap: 8px;
+}
+.pace-card p,
+.pace-card small {
+  margin: 0;
+  color: #627a75;
+  line-height: 1.4;
+}
+.shift-setting {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  margin-top: 5px;
+}
+.shift-setting label {
+  flex: 1;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.shift-setting input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #c7ddd6;
+  border-radius: 8px;
+  padding: 7px;
+  font: inherit;
+}
+.shift-setting button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 13px;
+  background: #165e56;
+  color: #fff;
+  font-weight: 800;
+}
+.shift-setting button:disabled {
+  opacity: 0.45;
+}
+.week-detail h2,
+.attendance-history h2 {
+  margin-top: 0;
+}
+.week-detail > div,
+.week-detail footer span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #e8f0ed;
+}
+.week-detail footer {
+  margin-top: 6px;
+}
+.week-detail footer p {
+  margin: 10px 0 0;
+  color: #24675d;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.attendance-history details {
+  border-top: 1px solid #e3ece9;
+}
+.attendance-history summary {
+  padding: 12px 0;
+  cursor: pointer;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+.attendance-history article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-top: 1px solid #edf3f1;
+}
+.attendance-history article div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.attendance-history article span,
+.attendance-history article small {
+  color: #6d827d;
+  font-size: 12px;
+}
+.attendance-history article button {
+  min-height: 38px;
+  border: 1px solid #bcd4ce;
+  border-radius: 8px;
+  background: #fff;
+  color: #165e56;
+  font-weight: 800;
+}
 h2 {
   font-size: 18px;
   margin: 16px 0 10px;

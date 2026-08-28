@@ -1,10 +1,12 @@
 import type { RealtimeChannel, Session } from '@supabase/supabase-js'
-import type { Attendance, Task, Worker } from './types'
+import type { Attendance, Task } from './types'
 import { supabase } from './supabase'
 
 export type Profile = { id: string; full_name: string; role: 'cleaner' | 'caretaker'; active: boolean }
 export type TaskLoad = { tasks: Task[]; hasWorkPart: boolean }
 export type ManagedRoom = { id: string; buildingId: string; floorId: string | null; name: string; active: boolean; sortOrder: number }
+export type AttendanceWorker = { id: string; name: string; role: 'cleaner' | 'caretaker' }
+export type AttendanceSettings = { plannedShiftsPerWeek: number; configurable: boolean }
 export type PlanOptions = {
   buildings: { id: string; name: string }[]
   floors: { id: string; buildingId: string; name: string; sortOrder: number }[]
@@ -13,6 +15,7 @@ export type PlanOptions = {
   cleaners: { id: string; name: string }[]
 }
 const today = () => new Date().toISOString().slice(0, 10)
+const localToday = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
 const frequency: Record<string, Task['frequency']> = { cleaning_day: 'denně', weekly: 'týdně', once_or_twice_weekly: '1–2× týdně', monthly: 'měsíčně', extraordinary: 'mimořádně' }
 
 // Dočasný režim pro vizuální kontrolu: ?testCleaningDay=1 nasimuluje pondělní úklidový den.
@@ -149,8 +152,12 @@ export const schoolRepository = {
   setCompletion: async (taskId: string, workerId: string, completed: boolean) => {
     const { error } = await client().from('cleaning_completions').upsert({ completion_date: today(), task_id: taskId, worker_id: workerId, completed }, { onConflict: 'completion_date,task_id' }); if (error) throw error
   },
-  attendance: async (workerId: string): Promise<Attendance[]> => { const month = `${today().slice(0, 7)}-01`; const { data, error } = await client().from('attendance').select('id,started_at,ended_at,attendance_date,note').eq('worker_id', workerId).gte('attendance_date', month).order('started_at', { ascending: false }); if (error) throw error; return (data ?? []).map((row: any) => ({ id: row.id, worker: '' as Worker, start: row.started_at, end: row.ended_at ?? undefined, date: row.attendance_date, type: 'směna' })) },
-  startAttendance: async (workerId: string) => { const db = client(); const { data: building, error: buildingError } = await db.from('buildings').select('id').eq('name', 'Škola').single(); if (buildingError) throw buildingError; const { error } = await db.from('attendance').insert({ worker_id: workerId, building_id: building.id, attendance_date: today() }); if (error) throw error },
+  attendance: async (workerId: string): Promise<Attendance[]> => { const { data, error } = await client().from('attendance').select('id,worker_id,started_at,ended_at,attendance_date,note').eq('worker_id', workerId).order('started_at', { ascending: false }); if (error) throw error; return (data ?? []).map((row: any) => ({ id: row.id, workerId: row.worker_id, start: row.started_at, end: row.ended_at ?? undefined, date: row.attendance_date, note: row.note ?? undefined })) },
+  attendanceWorkers: async (): Promise<AttendanceWorker[]> => { const { data, error } = await client().from('profiles').select('id,full_name,role').eq('active', true).order('full_name'); if (error) throw error; return (data ?? []).map((row: any) => ({ id: row.id, name: row.full_name, role: row.role })) },
+  attendanceSettings: async (workerId: string): Promise<AttendanceSettings> => { const { data, error } = await client().from('profiles').select('planned_shifts_per_week').eq('id', workerId).maybeSingle(); if (error) { if (error.code === '42703' || error.message.includes('planned_shifts_per_week')) return { plannedShiftsPerWeek: 3, configurable: false }; throw error } return { plannedShiftsPerWeek: data?.planned_shifts_per_week ?? 3, configurable: true } },
+  setPlannedShiftsPerWeek: async (workerId: string, ownUserId: string, value: number) => { const db = client(); const { error } = workerId === ownUserId ? await db.rpc('set_own_planned_shifts_per_week', { value }) : await db.from('profiles').update({ planned_shifts_per_week: value }).eq('id', workerId); if (error) throw error },
+  updateAttendance: async (id: string, startedAt: string, endedAt?: string) => { const start = new Date(startedAt); const end = endedAt ? new Date(endedAt) : null; if (Number.isNaN(start.getTime()) || (end && (Number.isNaN(end.getTime()) || end < start))) throw new Error('Zkontrolujte začátek a konec směny.'); const localDate = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`; const { error } = await client().from('attendance').update({ started_at: start.toISOString(), ended_at: end?.toISOString() ?? null, attendance_date: localDate }).eq('id', id); if (error) throw error },
+  startAttendance: async (workerId: string) => { const db = client(); const { data: building, error: buildingError } = await db.from('buildings').select('id').eq('name', 'Škola').single(); if (buildingError) throw buildingError; const { error } = await db.from('attendance').insert({ worker_id: workerId, building_id: building.id, attendance_date: localToday() }); if (error) throw error },
   finishAttendance: async (id: string) => { const { error } = await client().from('attendance').update({ ended_at: new Date().toISOString() }).eq('id', id); if (error) throw error },
   subscribe: (onChange: () => void): RealtimeChannel => client().channel('school-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_completions' }, onChange).on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, onChange).subscribe()
 }

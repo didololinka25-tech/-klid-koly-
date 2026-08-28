@@ -4,6 +4,8 @@ import { defaultShifts } from "./data";
 import {
   isTestCleaningDay,
   schoolRepository,
+  type AttendanceSettings,
+  type AttendanceWorker,
   type ManagedRoom,
   type PlanOptions,
   type Profile,
@@ -60,6 +62,14 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [hasWorkPart, setHasWorkPart] = useState(false);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
+  const [attendanceView, setAttendanceView] = useState<Attendance[]>([]);
+  const [attendanceWorkers, setAttendanceWorkers] = useState<AttendanceWorker[]>([]);
+  const [selectedAttendanceWorker, setSelectedAttendanceWorker] = useState("");
+  const [attendanceSettings, setAttendanceSettings] = useState<AttendanceSettings>({
+    plannedShiftsPerWeek: 3,
+    configurable: false,
+  });
+  const [attendanceRefresh, setAttendanceRefresh] = useState(0);
   const [section, setSection] = useState<Section>("Dnes");
   const [notice, setNotice] = useState("");
   const [planOptions, setPlanOptions] = useState<PlanOptions>({
@@ -70,19 +80,6 @@ export default function App() {
     cleaners: [],
   });
   const [editing, setEditing] = useState<Task | null>(null);
-  const hours = useMemo(
-    () =>
-      attendance
-        .filter((item) => item.end)
-        .reduce(
-          (sum, item) =>
-            sum +
-            (new Date(item.end!).getTime() - new Date(item.start).getTime()) /
-              36e5,
-          0,
-        ),
-    [attendance],
-  );
   const load = useCallback(
     async (current: Session, knownProfile?: Profile | null) => {
       const activeProfile =
@@ -99,8 +96,18 @@ export default function App() {
       setTasks(taskLoad.tasks);
       setHasWorkPart(taskLoad.hasWorkPart);
       setAttendance(nextAttendance);
-      if (activeProfile.role === "caretaker")
+      if (activeProfile.role === "caretaker") {
         setPlanOptions(await schoolRepository.planOptions());
+        setAttendanceWorkers(await schoolRepository.attendanceWorkers());
+      } else {
+        setAttendanceWorkers([
+          {
+            id: activeProfile.id,
+            name: activeProfile.full_name,
+            role: activeProfile.role,
+          },
+        ]);
+      }
     },
     [],
   );
@@ -116,19 +123,37 @@ export default function App() {
       setTasks([]);
       setHasWorkPart(false);
       setAttendance([]);
+      setAttendanceView([]);
+      setAttendanceWorkers([]);
+      setSelectedAttendanceWorker("");
       if (next) load(next).catch((error) => setNotice(error.message));
     });
     return () => data.subscription.unsubscribe();
   }, [load]);
   useEffect(() => {
     if (!session || !profile) return;
-    const channel = schoolRepository.subscribe(() =>
-      load(session, profile).catch((error) => setNotice(error.message)),
-    );
+    const channel = schoolRepository.subscribe(() => {
+      setAttendanceRefresh((value) => value + 1);
+      load(session, profile).catch((error) => setNotice(error.message));
+    });
     return () => {
       channel.unsubscribe();
     };
   }, [session, profile, load]);
+  useEffect(() => {
+    if (!profile) return;
+    const workerId = selectedAttendanceWorker || profile.id;
+    if (!selectedAttendanceWorker) setSelectedAttendanceWorker(workerId);
+    Promise.all([
+      schoolRepository.attendance(workerId),
+      schoolRepository.attendanceSettings(workerId),
+    ])
+      .then(([records, settings]) => {
+        setAttendanceView(records);
+        setAttendanceSettings(settings);
+      })
+      .catch((error) => setNotice(error.message));
+  }, [profile, selectedAttendanceWorker, attendanceRefresh]);
   if (!isSupabaseConfigured) return <SetupScreen />;
   if (!session || !profile)
     return (
@@ -175,11 +200,48 @@ export default function App() {
       if (open?.id) await schoolRepository.finishAttendance(open.id);
       else await schoolRepository.startAttendance(profile.id);
       await load(session, profile);
+      setAttendanceRefresh((value) => value + 1);
     } catch (error) {
       setNotice(
         error instanceof Error
           ? error.message
           : "Docházku se nepodařilo uložit.",
+      );
+    }
+  };
+  const saveAttendance = async (
+    id: string,
+    startedAt: string,
+    endedAt?: string,
+  ) => {
+    try {
+      setNotice("");
+      await schoolRepository.updateAttendance(id, startedAt, endedAt);
+      await load(session, profile);
+      setAttendanceRefresh((value) => value + 1);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Opravu docházky se nepodařilo uložit.",
+      );
+      throw error;
+    }
+  };
+  const saveAttendanceSettings = async (value: number) => {
+    try {
+      setNotice("");
+      await schoolRepository.setPlannedShiftsPerWeek(
+        selectedAttendanceWorker || profile.id,
+        profile.id,
+        value,
+      );
+      setAttendanceRefresh((current) => current + 1);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Nastavení směn se nepodařilo uložit.",
       );
     }
   };
@@ -209,7 +271,6 @@ export default function App() {
       throw error;
     }
   };
-  const openShift = attendance.find((item) => !item.end);
   const visible =
     section === "Dnes"
       ? tasks.filter((task) => task.active && task.dueToday)
@@ -238,6 +299,7 @@ export default function App() {
       {notice && <div className="notice">{notice}</div>}
       {section === "Dnes" && (
         <>
+          <TodayAttendance records={attendance} onClock={clock} />
           <section className="hero">
             <span>
               {isTestCleaningDay
@@ -294,38 +356,19 @@ export default function App() {
         </>
       )}
       {section === "Docházka" && (
-        <section className="panel">
-          <div className="timecard">
-            <small>
-              {openShift ? "Směna probíhá" : "Připraveno k evidenci"}
-            </small>
-            <strong>{profile.full_name}</strong>
-            <button onClick={clock}>
-              {openShift ? "Ukončit směnu" : "Začít směnu"}
-            </button>
-          </div>
-          <div className="summary">
-            <span>
-              Dnes{" "}
-              <b>
-                {
-                  attendance.filter(
-                    (item) =>
-                      item.date === new Date().toISOString().slice(0, 10),
-                  ).length
-                }{" "}
-                směna
-              </b>
-            </span>
-            <span>
-              Měsíc <b>{hours.toFixed(1)} h</b>
-            </span>
-          </div>
-          <p className="hint">
-            Docházka se ukládá do sdílené databáze. Praní se do pracovní doby
-            nezapočítává.
-          </p>
-        </section>
+        <AttendanceDashboard
+          records={attendanceView}
+          workers={attendanceWorkers}
+          selectedWorkerId={selectedAttendanceWorker || profile.id}
+          onSelectWorker={setSelectedAttendanceWorker}
+          settings={attendanceSettings}
+          currentUserId={profile.id}
+          isCaretaker={profile.role === "caretaker"}
+          onClock={clock}
+          ownRecords={attendance}
+          onSaveAttendance={saveAttendance}
+          onSaveSettings={saveAttendanceSettings}
+        />
       )}
       {section === "Kalendář" && (
         <Placeholder
@@ -389,6 +432,481 @@ export default function App() {
         ))}
       </nav>
     </main>
+  );
+}
+
+const DPP_YEAR_LIMIT_HOURS = 300;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+
+function localDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function useCurrentTime() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
+}
+
+function shiftDuration(record: Attendance, now: Date) {
+  return Math.max(
+    0,
+    (record.end ? new Date(record.end) : now).getTime() -
+      new Date(record.start).getTime(),
+  );
+}
+
+function sumDuration(records: Attendance[], now: Date) {
+  return records.reduce((sum, record) => sum + shiftDuration(record, now), 0);
+}
+
+function formatDuration(milliseconds: number) {
+  const minutes = Math.max(0, Math.round(milliseconds / 60_000));
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")} min`;
+}
+
+function formatClockDuration(milliseconds: number) {
+  const minutes = Math.max(0, Math.round(milliseconds / 60_000));
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function formatTime(value: string) {
+  return new Intl.DateTimeFormat("cs-CZ", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function mondayOf(date: Date) {
+  const result = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = result.getDay() || 7;
+  result.setDate(result.getDate() - day + 1);
+  return result;
+}
+
+function attendanceMetrics(
+  records: Attendance[],
+  now: Date,
+  plannedShiftsPerWeek: number,
+) {
+  const today = localDateKey(now);
+  const year = now.getFullYear();
+  const month = today.slice(0, 7);
+  const weekStart = mondayOf(now);
+  const weekKeys = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(weekStart);
+    date.setDate(date.getDate() + index);
+    return localDateKey(date);
+  });
+  const todayMs = sumDuration(
+    records.filter((record) => record.date === today),
+    now,
+  );
+  const weekMs = sumDuration(
+    records.filter((record) => weekKeys.includes(record.date)),
+    now,
+  );
+  const monthMs = sumDuration(
+    records.filter((record) => record.date.startsWith(month)),
+    now,
+  );
+  const yearMs = sumDuration(
+    records.filter((record) => record.date.startsWith(`${year}-`)),
+    now,
+  );
+  const yearHours = yearMs / HOUR_MS;
+  const remainingHours = Math.max(0, DPP_YEAR_LIMIT_HOURS - yearHours);
+  const endOfYear = new Date(year, 11, 31, 23, 59, 59, 999);
+  const weeksRemaining = Math.max(
+    1,
+    Math.ceil((endOfYear.getTime() - now.getTime()) / (7 * DAY_MS)),
+  );
+  const recommendedWeeklyHours = remainingHours / weeksRemaining;
+  const recommendedShiftHours =
+    recommendedWeeklyHours / Math.max(1, plannedShiftsPerWeek);
+  return {
+    today,
+    weekKeys,
+    todayMs,
+    weekMs,
+    monthMs,
+    yearMs,
+    yearHours,
+    remainingHours,
+    weeksRemaining,
+    recommendedWeeklyHours,
+    recommendedShiftHours,
+  };
+}
+
+function ShiftWarnings({ records, now }: { records: Attendance[]; now: Date }) {
+  const longest = records.reduce(
+    (maximum, record) => Math.max(maximum, shiftDuration(record, now)),
+    0,
+  );
+  return (
+    <>
+      {longest > 12 * HOUR_MS && (
+        <div className="attendance-alert danger">
+          Pozor: evidovaná směna přesáhla zákonné maximum 12 hodin.
+        </div>
+      )}
+      {longest > 6 * HOUR_MS && (
+        <div className="attendance-alert">
+          U směny delší než 6 hodin je potřeba řešit přestávku.
+        </div>
+      )}
+    </>
+  );
+}
+
+function TodayAttendance({
+  records,
+  onClock,
+}: {
+  records: Attendance[];
+  onClock: () => Promise<void>;
+}) {
+  const now = useCurrentTime();
+  const todayRecords = records.filter(
+    (record) => record.date === localDateKey(now),
+  );
+  const open = records.find((record) => !record.end);
+  const todayMs = sumDuration(todayRecords, now);
+  return (
+    <section className="today-attendance">
+      <div>
+        <small>DOCHÁZKA</small>
+        {!todayRecords.length && !open && <strong>Směna ještě nezačala</strong>}
+        {open && (
+          <>
+            <span>Příchod: {formatTime(open.start)}</span>
+            <strong>Pracuji: {formatDuration(shiftDuration(open, now))}</strong>
+          </>
+        )}
+        {!open && todayRecords.length > 0 && (
+          <strong>Dnes odpracováno: {formatDuration(todayMs)}</strong>
+        )}
+      </div>
+      {(!todayRecords.length || open) && (
+        <button onClick={() => void onClock()}>
+          {open ? "Odchod" : "Příchod"}
+        </button>
+      )}
+      <ShiftWarnings records={todayRecords} now={now} />
+    </section>
+  );
+}
+
+function AttendanceDashboard({
+  records,
+  workers,
+  selectedWorkerId,
+  onSelectWorker,
+  settings,
+  currentUserId,
+  isCaretaker,
+  onClock,
+  ownRecords,
+  onSaveAttendance,
+  onSaveSettings,
+}: {
+  records: Attendance[];
+  workers: AttendanceWorker[];
+  selectedWorkerId: string;
+  onSelectWorker: (id: string) => void;
+  settings: AttendanceSettings;
+  currentUserId: string;
+  isCaretaker: boolean;
+  onClock: () => Promise<void>;
+  ownRecords: Attendance[];
+  onSaveAttendance: (
+    id: string,
+    startedAt: string,
+    endedAt?: string,
+  ) => Promise<void>;
+  onSaveSettings: (value: number) => Promise<void>;
+}) {
+  const now = useCurrentTime();
+  const [editingRecord, setEditingRecord] = useState<Attendance | null>(null);
+  const [plannedShifts, setPlannedShifts] = useState(
+    settings.plannedShiftsPerWeek,
+  );
+  useEffect(
+    () => setPlannedShifts(settings.plannedShiftsPerWeek),
+    [settings.plannedShiftsPerWeek],
+  );
+  const metrics = useMemo(
+    () => attendanceMetrics(records, now, settings.plannedShiftsPerWeek),
+    [records, now, settings.plannedShiftsPerWeek],
+  );
+  const isOwn = selectedWorkerId === currentUserId;
+  const progress = Math.min(100, (metrics.yearHours / 300) * 100);
+  const selectedName =
+    workers.find((worker) => worker.id === selectedWorkerId)?.name ?? "Pracovník";
+  const yearWarning =
+    metrics.yearHours >= 300
+      ? "Roční limit DPP vyčerpán. Evidence dále zaznamenává skutečnou práci."
+      : metrics.yearHours >= 280
+        ? "Pozor, roční fond DPP je téměř vyčerpán."
+        : metrics.yearHours >= 250
+          ? "Roční fond DPP se blíží limitu 300 hodin."
+          : "";
+  const weeklyDifference =
+    metrics.weekMs / HOUR_MS - metrics.recommendedWeeklyHours;
+  return (
+    <section className="attendance-dashboard">
+      {isCaretaker && (
+        <label className="attendance-worker-picker">
+          Docházka pracovníka
+          <select
+            value={selectedWorkerId}
+            onChange={(event) => onSelectWorker(event.target.value)}
+          >
+            {workers.map((worker) => (
+              <option key={worker.id} value={worker.id}>
+                {worker.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <p className="attendance-owner">
+        Zobrazená evidence: <b>{selectedName}</b>
+      </p>
+      {isOwn && <TodayAttendance records={ownRecords} onClock={onClock} />}
+      <div className="attendance-summary-grid">
+        <article>
+          <small>DNES</small>
+          <strong>{formatDuration(metrics.todayMs)}</strong>
+        </article>
+        <article>
+          <small>TENTO TÝDEN</small>
+          <strong>{formatDuration(metrics.weekMs)}</strong>
+          <span>
+            plán {formatDuration(metrics.recommendedWeeklyHours * HOUR_MS)}
+          </span>
+        </article>
+        <article>
+          <small>TENTO MĚSÍC</small>
+          <strong>{formatDuration(metrics.monthMs)}</strong>
+        </article>
+        <article>
+          <small>ROK – DPP</small>
+          <strong>
+            {metrics.yearHours.toFixed(1)} / {DPP_YEAR_LIMIT_HOURS} h
+          </strong>
+          <span>Zbývá {metrics.remainingHours.toFixed(1)} h</span>
+        </article>
+      </div>
+      <div className="dpp-progress" aria-label="Čerpání ročního limitu DPP">
+        <span style={{ width: `${progress}%` }} />
+      </div>
+      {yearWarning && (
+        <div
+          className={`attendance-alert ${metrics.yearHours >= 280 ? "danger" : ""}`}
+        >
+          {yearWarning}
+        </div>
+      )}
+      <section className="pace-card">
+        <p className="eyebrow">DOPORUČENÉ TEMPO</p>
+        <strong>
+          Průměr do konce roku: cca {metrics.recommendedWeeklyHours.toFixed(1)} h
+          týdně
+        </strong>
+        <p>
+          Zbývá {metrics.remainingHours.toFixed(1)} h a přibližně {metrics.weeksRemaining}{" "}
+          plánovatelných týdnů do 31. 12.
+        </p>
+        <p>
+          Při {settings.plannedShiftsPerWeek} směnách týdně: cca{" "}
+          {metrics.recommendedShiftHours.toFixed(1)} h / směnu.
+        </p>
+        <b>Zákonné maximum jedné směny: 12 h.</b>
+        <small>
+          Jde o rovnoměrné plánovací tempo, nikoli o zákonné týdenní maximum.
+        </small>
+        <div className="shift-setting">
+          <label>
+            Směn týdně
+            <input
+              type="number"
+              min="1"
+              max="7"
+              value={plannedShifts}
+              onChange={(event) => setPlannedShifts(Number(event.target.value))}
+              disabled={!settings.configurable}
+            />
+          </label>
+          <button
+            onClick={() => void onSaveSettings(plannedShifts)}
+            disabled={!settings.configurable}
+          >
+            Uložit
+          </button>
+        </div>
+        {!settings.configurable && (
+          <small>Nastavení bude dostupné po aplikaci připravené migrace.</small>
+        )}
+      </section>
+      <ShiftWarnings records={records} now={now} />
+      <section className="week-detail">
+        <h2>Aktuální týden</h2>
+        {metrics.weekKeys.map((date, index) => {
+          const value = sumDuration(
+            records.filter((record) => record.date === date),
+            now,
+          );
+          return (
+            <div key={date}>
+              <span>{weekdays[index]}</span>
+              <b>{value ? formatClockDuration(value) : "–"}</b>
+            </div>
+          );
+        })}
+        <footer>
+          <span>
+            Celkem tento týden <b>{formatClockDuration(metrics.weekMs)}</b>
+          </span>
+          <span>
+            Doporučené tempo{" "}
+            <b>{formatClockDuration(metrics.recommendedWeeklyHours * HOUR_MS)}</b>
+          </span>
+          <p>
+            {weeklyDifference > 0
+              ? `Tento týden jsi o ${formatDuration(weeklyDifference * HOUR_MS)} nad rovnoměrným tempem.`
+              : `Do doporučeného tempa zbývá ${formatDuration(-weeklyDifference * HOUR_MS)}.`}
+          </p>
+        </footer>
+      </section>
+      <AttendanceHistory
+        records={records}
+        now={now}
+        onEdit={setEditingRecord}
+      />
+      {editingRecord && (
+        <AttendanceEditor
+          record={editingRecord}
+          onCancel={() => setEditingRecord(null)}
+          onSave={async (start, end) => {
+            await onSaveAttendance(editingRecord.id, start, end);
+            setEditingRecord(null);
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+function AttendanceHistory({
+  records,
+  now,
+  onEdit,
+}: {
+  records: Attendance[];
+  now: Date;
+  onEdit: (record: Attendance) => void;
+}) {
+  const months = new Map<string, Attendance[]>();
+  records.forEach((record) =>
+    months.set(record.date.slice(0, 7), [
+      ...(months.get(record.date.slice(0, 7)) ?? []),
+      record,
+    ]),
+  );
+  return (
+    <section className="attendance-history">
+      <h2>Historie směn</h2>
+      {[...months.entries()].map(([month, monthRecords], index) => (
+        <details key={month} open={index === 0}>
+          <summary>
+            {new Intl.DateTimeFormat("cs-CZ", {
+              month: "long",
+              year: "numeric",
+            }).format(new Date(`${month}-01T12:00:00`))}
+          </summary>
+          {monthRecords.map((record) => (
+            <article key={record.id}>
+              <div>
+                <b>
+                  {new Intl.DateTimeFormat("cs-CZ").format(
+                    new Date(`${record.date}T12:00:00`),
+                  )}
+                </b>
+                <span>
+                  {formatTime(record.start)}–{record.end ? formatTime(record.end) : "probíhá"}
+                </span>
+                <small>{formatDuration(shiftDuration(record, now))}</small>
+              </div>
+              <button onClick={() => onEdit(record)}>Opravit</button>
+            </article>
+          ))}
+        </details>
+      ))}
+      {!records.length && <p className="hint">Zatím nejsou evidované žádné směny.</p>}
+    </section>
+  );
+}
+
+function localDateTimeInput(value: string) {
+  const date = new Date(value);
+  return `${localDateKey(date)}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function AttendanceEditor({
+  record,
+  onCancel,
+  onSave,
+}: {
+  record: Attendance;
+  onCancel: () => void;
+  onSave: (start: string, end?: string) => Promise<void>;
+}) {
+  const [start, setStart] = useState(localDateTimeInput(record.start));
+  const [end, setEnd] = useState(
+    record.end ? localDateTimeInput(record.end) : "",
+  );
+  return (
+    <form
+      className="task-editor attendance-editor"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onSave(start, end || undefined);
+      }}
+    >
+      <h2>Opravit směnu</h2>
+      <label>
+        Příchod
+        <input
+          type="datetime-local"
+          value={start}
+          onChange={(event) => setStart(event.target.value)}
+          required
+        />
+      </label>
+      <label>
+        Odchod
+        <input
+          type="datetime-local"
+          value={end}
+          onChange={(event) => setEnd(event.target.value)}
+        />
+      </label>
+      <p className="hint">
+        Oprava zachová stejný záznam směny. Historická data se nemažou.
+      </p>
+      <div className="editor-actions">
+        <button type="button" onClick={onCancel}>
+          Zrušit
+        </button>
+        <button type="submit">Uložit opravu</button>
+      </div>
+    </form>
   );
 }
 

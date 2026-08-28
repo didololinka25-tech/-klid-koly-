@@ -8,4 +8,4 @@ export type Task = {
   rotationAssignments: { workerId: string; name: string; order: number }[]
 }
 export type Shift = { worker: Worker; start: string; end: string }
-export type Attendance = { id?: string; worker: Worker; start: string; end?: string; date: string; type: 'směna' | 'praní' }
+export type Attendance = { id: string; workerId: string; start: string; end?: string; date: string; note?: string; editedAt?: string }
