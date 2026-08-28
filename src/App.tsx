@@ -2,13 +2,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { defaultShifts } from "./data";
 import {
+  accessRole,
+  canManageOperations,
+  canViewSchool,
+  canWork,
   isTestCleaningDay,
   schoolRepository,
+  type AccessRole,
   type AttendanceSettings,
   type AttendanceWorker,
   type ManagedRoom,
   type PlanOptions,
   type Profile,
+  type UserProfile,
 } from "./schoolRepository";
 import { isSupabaseConfigured } from "./supabase";
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
@@ -16,6 +22,7 @@ import type { ActivityType, Attendance, Frequency, Task } from "./types";
 type Section =
   | "Dnes"
   | "Správa"
+  | "Uživatelé"
   | "Docházka"
   | "Kalendář"
   | "Zásoby"
@@ -25,6 +32,7 @@ type Section =
 const sections: Section[] = [
   "Dnes",
   "Správa",
+  "Uživatelé",
   "Docházka",
   "Kalendář",
   "Zásoby",
@@ -35,6 +43,7 @@ const sections: Section[] = [
 const icon: Record<Section, string> = {
   Dnes: "☀",
   Správa: "✓",
+  Uživatelé: "♙",
   Docházka: "◷",
   Kalendář: "▣",
   Zásoby: "▤",
@@ -76,7 +85,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [hasWorkPart, setHasWorkPart] = useState(false);
+  const [users, setUsers] = useState<UserProfile[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [attendanceView, setAttendanceView] = useState<Attendance[]>([]);
   const [attendanceWorkers, setAttendanceWorkers] = useState<AttendanceWorker[]>([]);
@@ -92,49 +101,52 @@ export default function App() {
     buildings: [],
     floors: [],
     rooms: [],
-    workParts: [],
-    cleaners: [],
   });
   const [editing, setEditing] = useState<Task | null>(null);
   const load = useCallback(
     async (current: Session, knownProfile?: Profile | null) => {
       const activeProfile =
         knownProfile ?? (await schoolRepository.profile(current.user.id));
-      if (!activeProfile?.active) {
-        setNotice("Účet není aktivní. Obraťte se na správce.");
+      if (!activeProfile) {
+        setNotice("Profil se zatím nepodařilo načíst.");
         return;
       }
       setProfile(activeProfile);
-      const [taskResult, attendanceResult] = await Promise.allSettled([
-        schoolRepository.tasks(activeProfile),
-        schoolRepository.attendance(activeProfile.id),
-      ]);
+      if (!activeProfile.active || !canViewSchool(activeProfile)) {
+        setTasks([]);
+        setAttendance([]);
+        setAttendanceView([]);
+        setAttendanceWorkers([]);
+        setUsers([]);
+        return;
+      }
+      const taskResult = await Promise.resolve(
+        schoolRepository.tasks(activeProfile, canManageOperations(activeProfile)),
+      ).then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (reason) => ({ status: "rejected" as const, reason }),
+      );
       if (taskResult.status === "fulfilled") {
         setTasks(taskResult.value.tasks);
-        setHasWorkPart(taskResult.value.hasWorkPart);
       } else {
         setTasks([]);
-        setHasWorkPart(activeProfile.role === "caretaker");
         setNotice(
           taskResult.reason instanceof Error
             ? taskResult.reason.message
             : "Úkoly se nepodařilo načíst.",
         );
       }
-      if (attendanceResult.status === "fulfilled") {
-        setAttendance(attendanceResult.value);
+      if (canWork(activeProfile)) {
+        const attendanceResult = await schoolRepository.attendance(activeProfile.id);
+        setAttendance(attendanceResult);
       } else {
         setAttendance([]);
-        setNotice(
-          attendanceResult.reason instanceof Error
-            ? attendanceResult.reason.message
-            : "Docházku se nepodařilo načíst.",
-        );
       }
-      if (activeProfile.role === "caretaker") {
-        const [optionsResult, workersResult] = await Promise.allSettled([
+      if (canManageOperations(activeProfile)) {
+        const [optionsResult, workersResult, usersResult] = await Promise.allSettled([
           schoolRepository.planOptions(),
           schoolRepository.attendanceWorkers(),
+          activeProfile.is_owner ? schoolRepository.users() : Promise.resolve([]),
         ]);
         if (optionsResult.status === "fulfilled") {
           setPlanOptions(optionsResult.value);
@@ -148,18 +160,20 @@ export default function App() {
             {
               id: activeProfile.id,
               name: activeProfile.full_name,
-              role: activeProfile.role,
+              role: accessRole(activeProfile),
             },
           ]);
         }
+        setUsers(usersResult.status === "fulfilled" ? usersResult.value : []);
       } else {
         setAttendanceWorkers([
           {
             id: activeProfile.id,
             name: activeProfile.full_name,
-            role: activeProfile.role,
+            role: accessRole(activeProfile),
           },
         ]);
+        setUsers([]);
       }
     },
     [],
@@ -174,7 +188,7 @@ export default function App() {
       setSession(next);
       setProfile(null);
       setTasks([]);
-      setHasWorkPart(false);
+      setUsers([]);
       setAttendance([]);
       setAttendanceView([]);
       setAttendanceWorkers([]);
@@ -184,7 +198,7 @@ export default function App() {
     return () => data.subscription.unsubscribe();
   }, [load]);
   useEffect(() => {
-    if (!session || !profile) return;
+    if (!session || !profile || !canViewSchool(profile)) return;
     const channel = schoolRepository.subscribe(() => {
       setAttendanceRefresh((value) => value + 1);
       load(session, profile).catch((error) => setNotice(error.message));
@@ -194,7 +208,7 @@ export default function App() {
     };
   }, [session, profile, load]);
   useEffect(() => {
-    if (!profile) return;
+    if (!profile || !canWork(profile)) return;
     const workerId = selectedAttendanceWorker || profile.id;
     if (!selectedAttendanceWorker) setSelectedAttendanceWorker(workerId);
     Promise.all([
@@ -226,6 +240,22 @@ export default function App() {
         }}
       />
     );
+  if (!profile.active)
+    return (
+      <AccessStateScreen
+        title="Účet je deaktivovaný"
+        text="Obraťte se na hlavního správce aplikace."
+        onSignOut={() => schoolRepository.signOut()}
+      />
+    );
+  if (accessRole(profile) === "pending")
+    return (
+      <AccessStateScreen
+        title="Čeká na schválení"
+        text="Hlavní správce zatím vašemu účtu nepřidělil přístup."
+        onSignOut={() => schoolRepository.signOut()}
+      />
+    );
   const complete = async (id: string) => {
     const target = tasks.find((task) => task.id === id);
     if (!target || !target.canComplete) return;
@@ -247,6 +277,7 @@ export default function App() {
     }
   };
   const completeMany = async (selectedTasks: Task[]) => {
+    if (selectedTasks.some((task) => !task.canComplete)) return;
     const remaining = new Map(
       selectedTasks.filter((task) => !task.done).map((task) => [task.id, task]),
     );
@@ -430,14 +461,35 @@ export default function App() {
       throw error;
     }
   };
+  const saveUserAccess = async (
+    userId: string,
+    role: AccessRole,
+    active: boolean,
+  ) => {
+    try {
+      setNotice("");
+      await schoolRepository.updateUserAccess(userId, role, active);
+      setUsers(await schoolRepository.users());
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Přístup uživatele se nepodařilo změnit.",
+      );
+      throw error;
+    }
+  };
   const visible =
     section === "Dnes"
       ? tasks.filter((task) => task.active && task.dueToday)
       : tasks;
-  const navigation =
-    profile.role === "caretaker"
-      ? sections
-      : sections.filter((item) => item !== "Správa");
+  const navigation = sections.filter((item) => {
+    if (item === "Správa") return canManageOperations(profile);
+    if (item === "Uživatelé") return Boolean(profile.is_owner);
+    if (item === "Docházka") return canWork(profile);
+    if (accessRole(profile) === "visitor") return ["Dnes", "Nastavení"].includes(item);
+    return true;
+  });
   return (
     <main className="app">
       <header>
@@ -458,7 +510,7 @@ export default function App() {
       {notice && <div className="notice">{notice}</div>}
       {section === "Dnes" && (
         <>
-          <TodayAttendance records={attendance} onClock={clock} />
+          {canWork(profile) && <TodayAttendance records={attendance} onClock={clock} />}
           <section className="hero">
             <span>
               {isTestCleaningDay
@@ -472,26 +524,17 @@ export default function App() {
               hotovo
             </strong>
           </section>
-          {profile.role === "cleaner" && !hasWorkPart && (
-            <section className="empty assignment-empty">
-              <span>⚙</span>
-              <h2>Nemáte zatím přiřazenou pracovní část.</h2>
-              <p>
-                Správce vám musí přiřadit část A nebo B. Google jméno se pro
-                oprávnění nepoužívá.
-              </p>
-            </section>
+          {accessRole(profile) === "visitor" && (
+            <p className="readonly-note">Návštěvnický přístup je pouze pro čtení.</p>
           )}
-          {(profile.role === "caretaker" || hasWorkPart) && (
-            <TaskHierarchy
-              tasks={visible}
-              onComplete={complete}
-              onCompleteAll={completeMany}
-            />
-          )}
+          <TaskHierarchy
+            tasks={visible}
+            onComplete={complete}
+            onCompleteAll={completeMany}
+          />
         </>
       )}
-      {section === "Správa" && profile.role === "caretaker" && (
+      {section === "Správa" && canManageOperations(profile) && (
         <Management
           tasks={tasks}
           options={planOptions}
@@ -502,6 +545,13 @@ export default function App() {
           onSaveRoom={saveRoom}
         />
       )}
+      {section === "Uživatelé" && profile.is_owner && (
+        <UserManagement
+          users={users}
+          currentUserId={profile.id}
+          onSave={saveUserAccess}
+        />
+      )}
       {section === "Docházka" && (
         <AttendanceDashboard
           records={attendanceView}
@@ -510,7 +560,7 @@ export default function App() {
           onSelectWorker={setSelectedAttendanceWorker}
           settings={attendanceSettings}
           currentUserId={profile.id}
-          isCaretaker={profile.role === "caretaker"}
+          isCaretaker={canManageOperations(profile)}
           onClock={clock}
           ownRecords={attendance}
           onSaveAttendance={saveAttendance}
@@ -563,7 +613,7 @@ export default function App() {
           ))}
           <p className="hint">
             Přihlášen: {profile.full_name} ·{" "}
-            {profile.role === "caretaker" ? "správce" : "uklízečka"}
+            {roleLabel(accessRole(profile))}
           </p>
         </section>
       )}
@@ -1256,7 +1306,11 @@ function RoomActivityGroup({
         </span>
         <button
           className="complete-room"
-          disabled={saving || completed === tasks.length}
+          disabled={
+            saving ||
+            completed === tasks.length ||
+            tasks.some((task) => !task.canComplete)
+          }
           onClick={async () => {
             setSaving(true);
             try {
@@ -1710,16 +1764,6 @@ function TaskEditor({
         ? draft.scheduleDays.filter((item) => item !== day)
         : [...draft.scheduleDays, day].sort(),
     );
-  const setRotationWorker = (order: number, workerId: string) => {
-    const worker = options.cleaners.find((item) => item.id === workerId);
-    update(
-      "rotationAssignments",
-      [
-        ...draft.rotationAssignments.filter((item) => item.order !== order),
-        ...(worker ? [{ workerId: worker.id, name: worker.name, order }] : []),
-      ].sort((a, b) => a.order - b.order),
-    );
-  };
   return (
     <form
       className="task-editor"
@@ -1819,81 +1863,6 @@ function TaskEditor({
         </label>
       )}
       <label>
-        Pracovní část
-        <select
-          value={draft.workPartId ?? ""}
-          onChange={(event) => update("workPartId", event.target.value || null)}
-        >
-          <option value="">Bez části A/B</option>
-          {options.workParts.map((part) => (
-            <option key={part.id} value={part.id}>
-              {part.code} – {part.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Typ přiřazení
-        <select
-          value={draft.assignmentMode}
-          onChange={(event) =>
-            update("assignmentMode", event.target.value as "fixed" | "rotating")
-          }
-        >
-          <option value="fixed">Pevné / část A-B</option>
-          <option value="rotating">Střídání</option>
-        </select>
-      </label>
-      {draft.assignmentMode === "rotating" && (
-        <>
-          <label>
-            Začátek střídání
-            <input
-              type="date"
-              value={draft.rotationAnchorDate ?? ""}
-              onChange={(event) =>
-                update("rotationAnchorDate", event.target.value || null)
-              }
-              required
-            />
-          </label>
-          <label>
-            Interval střídání (týdny)
-            <input
-              type="number"
-              min="1"
-              value={draft.rotationIntervalWeeks ?? 1}
-              onChange={(event) =>
-                update("rotationIntervalWeeks", Number(event.target.value))
-              }
-            />
-          </label>
-          {[1, 2].map((order) => (
-            <label key={order}>
-              Pracovník – pořadí {order}
-              <select
-                value={
-                  draft.rotationAssignments.find(
-                    (assignment) => assignment.order === order,
-                  )?.workerId ?? ""
-                }
-                onChange={(event) =>
-                  setRotationWorker(order, event.target.value)
-                }
-                required
-              >
-                <option value="">Vyberte pracovníka</option>
-                {options.cleaners.map((worker) => (
-                  <option key={worker.id} value={worker.id}>
-                    {worker.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ))}
-        </>
-      )}
-      <label>
         Pořadí
         <input
           type="number"
@@ -1918,6 +1887,149 @@ function TaskEditor({
     </form>
   );
 }
+
+const roleLabel = (role: AccessRole) =>
+  ({
+    pending: "čeká na schválení",
+    cleaning_team: "úklidový tým",
+    admin: "správce",
+    visitor: "návštěvník",
+  })[role];
+
+function UserManagement({
+  users,
+  currentUserId,
+  onSave,
+}: {
+  users: UserProfile[];
+  currentUserId: string;
+  onSave: (id: string, role: AccessRole, active: boolean) => Promise<void>;
+}) {
+  return (
+    <section className="user-management">
+      <p className="hint">
+        Nové účty čekají na schválení. Role ani hlavního správce nelze změnit
+        samotným uživatelem.
+      </p>
+      <div className="user-list">
+        {users.map((user) => (
+          <UserAccessCard
+            key={user.id}
+            user={user}
+            isCurrent={user.id === currentUserId}
+            onSave={onSave}
+          />
+        ))}
+      </div>
+      {users.length === 0 && (
+        <p className="hint">Zatím nejsou dostupné žádné uživatelské profily.</p>
+      )}
+    </section>
+  );
+}
+
+function UserAccessCard({
+  user,
+  isCurrent,
+  onSave,
+}: {
+  user: UserProfile;
+  isCurrent: boolean;
+  onSave: (id: string, role: AccessRole, active: boolean) => Promise<void>;
+}) {
+  const [role, setRole] = useState(user.role);
+  const [active, setActive] = useState(user.active);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setRole(user.role);
+    setActive(user.active);
+  }, [user.role, user.active]);
+  const locked = user.isOwner;
+  return (
+    <article className={`user-card ${active ? "" : "inactive"}`}>
+      <header>
+        <span>
+          <b>{user.fullName}</b>
+          <small>{user.email || "E-mail není dostupný"}</small>
+        </span>
+        {user.isOwner && <strong>Hlavní správce</strong>}
+      </header>
+      <div className="user-dates">
+        <small>První přihlášení: {formatProfileDate(user.firstSignedInAt)}</small>
+        <small>
+          Poslední přihlášení: {formatProfileDate(user.lastSignedInAt)}
+        </small>
+      </div>
+      <label>
+        Role
+        <select
+          value={role}
+          disabled={locked}
+          onChange={(event) => setRole(event.target.value as AccessRole)}
+        >
+          <option value="pending">Čeká na schválení</option>
+          <option value="cleaning_team">Úklidový tým</option>
+          <option value="visitor">Návštěvník</option>
+          <option value="admin">Správce</option>
+        </select>
+      </label>
+      <label className="switch">
+        <input
+          type="checkbox"
+          checked={active}
+          disabled={locked}
+          onChange={(event) => setActive(event.target.checked)}
+        />
+        Aktivní účet
+      </label>
+      <button
+        disabled={locked || saving || (role === user.role && active === user.active)}
+        onClick={async () => {
+          setSaving(true);
+          try {
+            await onSave(user.id, role, active);
+          } finally {
+            setSaving(false);
+          }
+        }}
+      >
+        {saving ? "Ukládám…" : isCurrent ? "Uložit můj profil" : "Uložit přístup"}
+      </button>
+    </article>
+  );
+}
+
+function formatProfileDate(value?: string) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : new Intl.DateTimeFormat("cs-CZ", { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function AccessStateScreen({
+  title,
+  text,
+  onSignOut,
+}: {
+  title: string;
+  text: string;
+  onSignOut: () => Promise<void>;
+}) {
+  return (
+    <main className="app">
+      <section className="panel login access-state">
+        <p className="eyebrow">ÚKLID ŠKOLY</p>
+        <h1>{title}</h1>
+        <p>{text}</p>
+        <button type="button" onClick={() => void onSignOut()}>
+          Odhlásit se
+        </button>
+      </section>
+    </main>
+  );
+}
+
 function Placeholder({ title, text }: { title: string; text: string }) {
   return (
     <section className="empty">
