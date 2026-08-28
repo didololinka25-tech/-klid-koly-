@@ -2,7 +2,8 @@ import type { RealtimeChannel, Session } from '@supabase/supabase-js'
 import type { Attendance, Task, Worker } from './types'
 import { supabase } from './supabase'
 
-export type Profile = { id: string; full_name: Worker; role: 'cleaner' | 'caretaker'; active: boolean }
+export type Profile = { id: string; full_name: string; role: 'cleaner' | 'caretaker'; active: boolean }
+export type TaskLoad = { tasks: Task[]; hasWorkPart: boolean }
 const today = () => new Date().toISOString().slice(0, 10)
 const frequency: Record<string, Task['frequency']> = { cleaning_day: 'denně', weekly: 'týdně', once_or_twice_weekly: '1–2× týdně', monthly: 'měsíčně', extraordinary: 'mimořádně' }
 
@@ -61,7 +62,7 @@ export const schoolRepository = {
   },
   signOut: async () => { const { error } = await client().auth.signOut(); if (error) throw error },
   profile: async (id: string): Promise<Profile | null> => { const { data, error } = await client().from('profiles').select('id,full_name,role,active').eq('id', id).maybeSingle(); if (error) throw error; return data as Profile | null },
-  tasks: async (profile: Profile): Promise<Task[]> => {
+  tasks: async (profile: Profile): Promise<TaskLoad> => {
     const db = client(); const date = today(); const planningDate = effectivePlanningDate(date)
     const [{ data: rows, error }, { data: completions, error: completionError }, { data: workParts, error: workPartsError }] = await Promise.all([
       db.from('cleaning_tasks').select('id,name,frequency,requires_task_id,schedule_days,monthly_day,assignment_mode,rotation_anchor_date,rotation_interval_weeks,work_part_id,rooms(name),task_assignments(worker_id,rotation_order,profiles(full_name))').eq('active', true).order('sort_order'),
@@ -71,7 +72,7 @@ export const schoolRepository = {
     if (error || completionError || workPartsError) throw error ?? completionError ?? workPartsError
     const done = new Map((completions ?? []).map((completion: { task_id: string; completed: boolean }) => [completion.task_id, completion.completed]))
     const assignedWorkParts = new Set((workParts ?? []).map((assignment: { work_part_id: string }) => assignment.work_part_id))
-    return (rows ?? [])
+    const tasks = (rows ?? [])
       .filter((row: any) => {
         if (profile.role === 'caretaker') return true
         if (row.assignment_mode === 'rotating' && !row.task_assignments?.some((assignment: any) => assignment.worker_id === profile.id && isCurrentRotation(row, assignment.rotation_order, planningDate))) return false
@@ -82,6 +83,7 @@ export const schoolRepository = {
         const ownAssignment = row.task_assignments?.find((assignment: any) => assignment.worker_id === profile.id)
         return { id: row.id, room: row.rooms?.name ?? 'Celá škola', title: row.name, frequency: frequency[row.frequency] ?? 'mimořádně', assignedTo: ownAssignment?.profiles?.full_name ?? (row.work_part_id ? 'moje pracovní část' : 'nepřiřazeno'), done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: true, dueToday: isTaskDueOnDate(row, planningDate) }
       })
+    return { tasks, hasWorkPart: profile.role === 'caretaker' || assignedWorkParts.size > 0 }
   },
   setCompletion: async (taskId: string, workerId: string, completed: boolean) => {
     const { error } = await client().from('cleaning_completions').upsert({ completion_date: today(), task_id: taskId, worker_id: workerId, completed }, { onConflict: 'completion_date,task_id' }); if (error) throw error
