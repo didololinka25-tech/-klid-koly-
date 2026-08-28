@@ -60,7 +60,6 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [planTasks, setPlanTasks] = useState<Task[]>([]);
   const [hasWorkPart, setHasWorkPart] = useState(false);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [attendanceView, setAttendanceView] = useState<Attendance[]>([]);
@@ -90,9 +89,8 @@ export default function App() {
         return;
       }
       setProfile(activeProfile);
-      const [taskResult, planTaskResult, attendanceResult] = await Promise.allSettled([
+      const [taskResult, attendanceResult] = await Promise.allSettled([
         schoolRepository.tasks(activeProfile),
-        schoolRepository.tasks(activeProfile, true),
         schoolRepository.attendance(activeProfile.id),
       ]);
       if (taskResult.status === "fulfilled") {
@@ -107,11 +105,6 @@ export default function App() {
             : "Úkoly se nepodařilo načíst.",
         );
       }
-      if (planTaskResult.status === "fulfilled") {
-        setPlanTasks(planTaskResult.value.tasks);
-      } else {
-        setPlanTasks([]);
-      }
       if (attendanceResult.status === "fulfilled") {
         setAttendance(attendanceResult.value);
       } else {
@@ -122,17 +115,27 @@ export default function App() {
             : "Docházku se nepodařilo načíst.",
         );
       }
-      const [optionsResult, workersResult] = await Promise.allSettled([
-        schoolRepository.planOptions(),
-        schoolRepository.attendanceWorkers(),
-      ]);
-      if (optionsResult.status === "fulfilled") {
-        setPlanOptions(optionsResult.value);
-      } else {
-        throw optionsResult.reason;
-      }
-      if (workersResult.status === "fulfilled") {
-        setAttendanceWorkers(workersResult.value);
+      if (activeProfile.role === "caretaker") {
+        const [optionsResult, workersResult] = await Promise.allSettled([
+          schoolRepository.planOptions(),
+          schoolRepository.attendanceWorkers(),
+        ]);
+        if (optionsResult.status === "fulfilled") {
+          setPlanOptions(optionsResult.value);
+        } else {
+          throw optionsResult.reason;
+        }
+        if (workersResult.status === "fulfilled") {
+          setAttendanceWorkers(workersResult.value);
+        } else {
+          setAttendanceWorkers([
+            {
+              id: activeProfile.id,
+              name: activeProfile.full_name,
+              role: activeProfile.role,
+            },
+          ]);
+        }
       } else {
         setAttendanceWorkers([
           {
@@ -155,7 +158,6 @@ export default function App() {
       setSession(next);
       setProfile(null);
       setTasks([]);
-      setPlanTasks([]);
       setHasWorkPart(false);
       setAttendance([]);
       setAttendanceView([]);
@@ -370,7 +372,10 @@ export default function App() {
     section === "Dnes"
       ? tasks.filter((task) => task.active && task.dueToday)
       : tasks;
-  const navigation = sections;
+  const navigation =
+    profile.role === "caretaker"
+      ? sections
+      : sections.filter((item) => item !== "Správa");
   return (
     <main className="app">
       <header>
@@ -420,9 +425,9 @@ export default function App() {
           )}
         </>
       )}
-      {section === "Správa" && (
+      {section === "Správa" && profile.role === "caretaker" && (
         <Management
-          tasks={planTasks}
+          tasks={tasks}
           options={planOptions}
           editing={editing}
           onEdit={setEditing}
@@ -439,7 +444,7 @@ export default function App() {
           onSelectWorker={setSelectedAttendanceWorker}
           settings={attendanceSettings}
           currentUserId={profile.id}
-          isCaretaker
+          isCaretaker={profile.role === "caretaker"}
           onClock={clock}
           ownRecords={attendance}
           onSaveAttendance={saveAttendance}

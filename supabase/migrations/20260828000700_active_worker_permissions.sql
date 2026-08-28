@@ -1,5 +1,5 @@
--- Jednoduché společné oprávnění pro všechny aktivní přihlášené pracovníky.
--- RLS zůstává zapnuté; anonymní a neaktivní účty nezískají přístup.
+-- Role-based oprávnění pro aktivní přihlášené pracovníky.
+-- RLS zůstává zapnuté. Identita je vždy auth.uid(); jméno se pro oprávnění nepoužívá.
 create or replace function public.is_active_worker()
 returns boolean
 language sql
@@ -17,15 +17,20 @@ $$;
 revoke all on function public.is_active_worker() from public;
 grant execute on function public.is_active_worker() to authenticated;
 
--- Aktivní pracovníci potřebují vidět kolegy ve výběru docházky a rotací.
+-- Profily: cleaner vidí sebe, caretaker všechny profily.
 drop policy if exists "profiles own or caretaker" on public.profiles;
 drop policy if exists "active workers read profiles" on public.profiles;
-create policy "active workers read profiles"
+create policy "profiles own or caretaker"
 on public.profiles for select to authenticated
-using (public.is_active_worker());
+using (
+  public.is_active_worker()
+  and (id = auth.uid() or public.is_caretaker())
+);
 
--- Příchod smí vždy vzniknout jen přihlášenému uživateli.
--- Následnou opravu nebo smazání konkrétní směny může udělat každý aktivní pracovník.
+-- Docházka:
+-- cleaner SELECT/UPDATE/DELETE pouze worker_id = auth.uid();
+-- caretaker SELECT/UPDATE/DELETE všechny řádky;
+-- INSERT je pro obě role vždy pouze worker_id = auth.uid().
 drop policy if exists "read own attendance" on public.attendance;
 drop policy if exists "start own attendance" on public.attendance;
 drop policy if exists "update own attendance" on public.attendance;
@@ -35,70 +40,113 @@ drop policy if exists "active worker starts own attendance" on public.attendance
 drop policy if exists "active workers update attendance" on public.attendance;
 drop policy if exists "active workers delete attendance" on public.attendance;
 
-create policy "active workers read attendance"
+create policy "read own attendance"
 on public.attendance for select to authenticated
-using (public.is_active_worker());
+using (
+  public.is_active_worker()
+  and (worker_id = auth.uid() or public.is_caretaker())
+);
 
-create policy "active worker starts own attendance"
+create policy "start own attendance"
 on public.attendance for insert to authenticated
-with check (public.is_active_worker() and worker_id = auth.uid());
+with check (
+  public.is_active_worker()
+  and worker_id = auth.uid()
+);
 
-create policy "active workers update attendance"
+create policy "update own attendance"
 on public.attendance for update to authenticated
-using (public.is_active_worker())
-with check (public.is_active_worker());
+using (
+  public.is_active_worker()
+  and (worker_id = auth.uid() or public.is_caretaker())
+)
+with check (
+  public.is_active_worker()
+  and (worker_id = auth.uid() or public.is_caretaker())
+);
 
-create policy "active workers delete attendance"
+create policy "delete own attendance"
 on public.attendance for delete to authenticated
+using (
+  public.is_active_worker()
+  and (worker_id = auth.uid() or public.is_caretaker())
+);
+
+-- Společná struktura je čitelná aktivním pracovníkům, měnit ji smí jen caretaker.
+drop policy if exists "read buildings" on public.buildings;
+create policy "read buildings"
+on public.buildings for select to authenticated
 using (public.is_active_worker());
 
--- Místnosti mohou spravovat všichni aktivní pracovníci.
+drop policy if exists "read floors" on public.floors;
+create policy "read floors"
+on public.floors for select to authenticated
+using (public.is_active_worker());
+
+drop policy if exists "read rooms" on public.rooms;
 drop policy if exists "manage rooms" on public.rooms;
 drop policy if exists "active workers manage rooms" on public.rooms;
-create policy "active workers manage rooms"
+create policy "read rooms"
+on public.rooms for select to authenticated
+using (public.is_active_worker());
+create policy "manage rooms"
 on public.rooms for all to authenticated
-using (public.is_active_worker())
-with check (public.is_active_worker());
+using (public.is_caretaker())
+with check (public.is_caretaker());
 
--- Celý plán včetně neaktivních úkolů a rotačních přiřazení je společně spravovatelný.
+-- Cleaner čte aktivní plán; caretaker vidí i neaktivní záznamy a jediný je spravuje.
 drop policy if exists "read tasks" on public.cleaning_tasks;
 drop policy if exists "manage tasks" on public.cleaning_tasks;
 drop policy if exists "active workers read tasks" on public.cleaning_tasks;
 drop policy if exists "active workers manage tasks" on public.cleaning_tasks;
-create policy "active workers read tasks"
+create policy "read tasks"
 on public.cleaning_tasks for select to authenticated
-using (public.is_active_worker());
-create policy "active workers manage tasks"
+using (public.is_active_worker() and (active or public.is_caretaker()));
+create policy "manage tasks"
 on public.cleaning_tasks for all to authenticated
-using (public.is_active_worker())
-with check (public.is_active_worker());
+using (public.is_caretaker())
+with check (public.is_caretaker());
 
+-- Cleaner čte pouze svoje konkrétní task assignments; caretaker je spravuje všechny.
 drop policy if exists "read own assignments" on public.task_assignments;
 drop policy if exists "manage assignments" on public.task_assignments;
 drop policy if exists "active workers read task assignments" on public.task_assignments;
 drop policy if exists "active workers manage task assignments" on public.task_assignments;
-create policy "active workers read task assignments"
+create policy "read own assignments"
 on public.task_assignments for select to authenticated
-using (public.is_active_worker());
-create policy "active workers manage task assignments"
+using (
+  public.is_active_worker()
+  and (worker_id = auth.uid() or public.is_caretaker())
+);
+create policy "manage assignments"
 on public.task_assignments for all to authenticated
-using (public.is_active_worker())
-with check (public.is_active_worker());
+using (public.is_caretaker())
+with check (public.is_caretaker());
 
+-- Pracovní části a jejich aktuální držitelé jsou potřebná sdílená data.
+drop policy if exists "read work parts" on public.cleaning_work_parts;
 drop policy if exists "manage work parts" on public.cleaning_work_parts;
 drop policy if exists "active workers manage work parts" on public.cleaning_work_parts;
-create policy "active workers manage work parts"
+create policy "read work parts"
+on public.cleaning_work_parts for select to authenticated
+using (public.is_active_worker());
+create policy "manage work parts"
 on public.cleaning_work_parts for all to authenticated
-using (public.is_active_worker())
-with check (public.is_active_worker());
+using (public.is_caretaker())
+with check (public.is_caretaker());
 
+drop policy if exists "read work part assignments" on public.work_part_assignments;
 drop policy if exists "manage work part assignments" on public.work_part_assignments;
 drop policy if exists "active workers manage work part assignments" on public.work_part_assignments;
-create policy "active workers manage work part assignments"
+create policy "read work part assignments"
+on public.work_part_assignments for select to authenticated
+using (public.is_active_worker());
+create policy "manage work part assignments"
 on public.work_part_assignments for all to authenticated
-using (public.is_active_worker())
-with check (public.is_active_worker());
+using (public.is_caretaker())
+with check (public.is_caretaker());
 
+-- Střídání A/B je správcovská operace a nepoužívá zobrazované jméno.
 create or replace function public.swap_cleaning_work_parts()
 returns void
 language plpgsql
@@ -111,8 +159,8 @@ declare
   part_a uuid;
   part_b uuid;
 begin
-  if not public.is_active_worker() then
-    raise exception 'Pouze aktivní pracovník může prohodit pracovní části.';
+  if not public.is_caretaker() then
+    raise exception 'Pouze správce může prohodit pracovní části.';
   end if;
   select id into part_a from public.cleaning_work_parts where code = 'A' and active limit 1;
   select id into part_b from public.cleaning_work_parts where code = 'B' and active limit 1;
