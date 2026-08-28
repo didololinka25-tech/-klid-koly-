@@ -162,30 +162,157 @@ stable
 as $$ select public.can_work_in_app(); $$;
 
 -- Úkol je společný pro tým; A/B a konkrétní assignment nejsou podmínkou.
-create or replace function public.can_complete_task(target_task_id uuid)
-returns boolean
-language sql
-security definer
-set search_path = public
-stable
-as $$
-  select public.can_work_in_app() and exists (
-    select 1
-    from public.cleaning_tasks task
-    left join public.rooms room on room.id = task.room_id
-    where task.id = target_task_id
-      and task.active
-      and (task.room_id is null or room.active)
-  );
-$$;
-
+-- Splatnost se ale vždy ověřuje serverově pro konkrétní datum.
 create or replace function public.can_complete_task(target_task_id uuid, target_date date)
 returns boolean
 language sql
 security definer
 set search_path = public
 stable
-as $$ select public.can_complete_task(target_task_id); $$;
+as $$
+  select target_date is not null
+    and public.can_work_in_app()
+    and exists (
+    select 1
+    from public.cleaning_tasks task
+    left join public.rooms room on room.id = task.room_id
+    where task.id = target_task_id
+      and task.active
+      and (task.room_id is null or room.active)
+      and case task.frequency::text
+        when 'cleaning_day' then extract(isodow from target_date)::smallint = any(task.schedule_days)
+        when 'weekly' then extract(isodow from target_date)::smallint = any(task.schedule_days)
+        when 'once_or_twice_weekly' then extract(isodow from target_date)::smallint = any(task.schedule_days)
+        when 'monthly' then task.monthly_day = extract(day from target_date)::smallint
+        when 'extraordinary' then false
+        else false
+      end
+  );
+$$;
+
+create or replace function public.app_current_date()
+returns date
+language sql
+stable
+set search_path = public
+as $$
+  select (now() at time zone 'Europe/Prague')::date;
+$$;
+
+create or replace function public.can_complete_task(target_task_id uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$ select public.can_complete_task(target_task_id, public.app_current_date()); $$;
+
+-- Jediná zapisovací cesta pro běžné dokončování úkolů. Klient neposílá
+-- worker_id; autora vždy určuje databáze z auth.uid(). Redundantní označení
+-- již hotového úkolu je no-op a původního autora nepřepíše.
+create or replace function public.set_cleaning_task_completion(
+  target_task_id uuid,
+  target_completion_date date,
+  target_completed boolean
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  actor_id uuid := auth.uid();
+  current_completion public.cleaning_completions%rowtype;
+  inserted_id uuid;
+begin
+  if actor_id is null or not public.can_work_in_app() then
+    raise exception 'K dokončování úkolů nemáte oprávnění.';
+  end if;
+
+  if target_task_id is null or target_completion_date is null or target_completed is null then
+    raise exception 'Úkol, datum a stav dokončení jsou povinné.';
+  end if;
+
+  -- Běžné klientské RPC nezapisuje historii ani budoucnost. Případná ruční
+  -- oprava historie musí mít samostatné, výhradně adminské RPC.
+  if target_completion_date <> public.app_current_date() then
+    raise exception 'Úkol lze běžně změnit pouze pro dnešní datum.';
+  end if;
+
+  if not public.can_complete_task(target_task_id, target_completion_date) then
+    raise exception 'Úkol není pro zvolené datum splatný nebo k němu nemáte oprávnění.';
+  end if;
+
+  select completion.*
+  into current_completion
+  from public.cleaning_completions completion
+  where completion.completion_date = target_completion_date
+    and completion.task_id = target_task_id
+  for update;
+
+  if not found then
+    if not target_completed then
+      return;
+    end if;
+
+    insert into public.cleaning_completions (
+      completion_date, task_id, worker_id, completed
+    ) values (
+      target_completion_date, target_task_id, actor_id, true
+    )
+    on conflict (completion_date, task_id) do nothing
+    returning id into inserted_id;
+
+    if inserted_id is not null then
+      return;
+    end if;
+
+    -- Souběžný požadavek mohl řádek právě vytvořit. Zamkneme jej a znovu
+    -- vyhodnotíme stav, aby redundantní HOTOVO nepřepsalo prvního autora.
+    select completion.*
+    into current_completion
+    from public.cleaning_completions completion
+    where completion.completion_date = target_completion_date
+      and completion.task_id = target_task_id
+    for update;
+  end if;
+
+  if target_completed then
+    if current_completion.completed then
+      return;
+    end if;
+
+    update public.cleaning_completions
+    set completed = true,
+        worker_id = actor_id,
+        completed_at = null
+    where id = current_completion.id;
+    return;
+  end if;
+
+  if not current_completion.completed then
+    return;
+  end if;
+
+  if exists (
+    select 1
+    from public.cleaning_tasks dependent_task
+    join public.cleaning_completions dependent_completion
+      on dependent_completion.task_id = dependent_task.id
+     and dependent_completion.completion_date = target_completion_date
+     and dependent_completion.completed
+    where dependent_task.requires_task_id = target_task_id
+      and dependent_task.active
+  ) then
+    raise exception 'Nejdříve vraťte na nehotovo navazující činnost.';
+  end if;
+
+  update public.cleaning_completions
+  set completed = false,
+      completed_at = null
+  where id = current_completion.id;
+end;
+$$;
 
 revoke all on function public.current_access_role() from public;
 revoke all on function public.is_active_profile() from public;
@@ -197,6 +324,8 @@ revoke all on function public.is_caretaker() from public;
 revoke all on function public.is_active_worker() from public;
 revoke all on function public.can_complete_task(uuid) from public;
 revoke all on function public.can_complete_task(uuid, date) from public;
+revoke all on function public.app_current_date() from public;
+revoke all on function public.set_cleaning_task_completion(uuid, date, boolean) from public, anon;
 grant execute on function public.current_access_role() to authenticated;
 grant execute on function public.is_active_profile() to authenticated;
 grant execute on function public.can_view_school_data() to authenticated;
@@ -207,6 +336,7 @@ grant execute on function public.is_caretaker() to authenticated;
 grant execute on function public.is_active_worker() to authenticated;
 grant execute on function public.can_complete_task(uuid) to authenticated;
 grant execute on function public.can_complete_task(uuid, date) to authenticated;
+grant execute on function public.set_cleaning_task_completion(uuid, date, boolean) to authenticated;
 
 -- Jednorázový owner bootstrap je dostupný pouze důvěryhodné serverové roli
 -- (např. postgres v Supabase SQL Editoru), nikdy frontendovému uživateli.
@@ -594,10 +724,8 @@ drop policy if exists "approved users read completions" on public.cleaning_compl
 drop policy if exists "team creates shared completions" on public.cleaning_completions;
 drop policy if exists "team updates shared completions" on public.cleaning_completions;
 create policy "approved users read completions" on public.cleaning_completions for select to authenticated using (public.can_view_school_data());
-create policy "team creates shared completions" on public.cleaning_completions for insert to authenticated with check (worker_id = auth.uid() and public.can_complete_task(task_id, completion_date));
-create policy "team updates shared completions" on public.cleaning_completions for update to authenticated
-using (public.can_work_in_app())
-with check (worker_id = auth.uid() and public.can_complete_task(task_id, completion_date));
+-- INSERT/UPDATE nemají přímou klientskou policy. Zápis je možný pouze přes
+-- set_cleaning_task_completion(), které serverově určuje autora i splatnost.
 
 drop policy if exists "read own attendance" on public.attendance;
 drop policy if exists "start own attendance" on public.attendance;

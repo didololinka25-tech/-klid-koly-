@@ -124,7 +124,7 @@ export const schoolRepository = {
       return {
         id: row.id, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1,
         building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
-        assignedTo: 'Úklidový tým', done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile),
+        assignedTo: 'Úklidový tým', done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile) && !isTestCleaningDay,
         dueToday: room?.active !== false && isTaskDueOnDate(row, date, isTestCleaningDay), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
         workPartId: row.work_part_id, assignmentMode: row.assignment_mode, rotationAnchorDate: row.rotation_anchor_date,
         rotationIntervalWeeks: row.rotation_interval_weeks, active: row.active, rotationAssignments: [],
@@ -159,13 +159,13 @@ export const schoolRepository = {
     const result = task.id ? await client().from('cleaning_tasks').update(values).eq('id', task.id).select('id').single() : await client().from('cleaning_tasks').insert(values).select('id').single()
     if (result.error) throw result.error
   },
-  setCompletion: async (taskId: string, workerId: string, completed: boolean) => {
-    const { error } = await client().from('cleaning_completions').upsert({ completion_date: localToday(), task_id: taskId, worker_id: workerId, completed }, { onConflict: 'completion_date,task_id' })
+  setCompletion: async (taskId: string, completed: boolean) => {
+    const { error } = await client().rpc('set_cleaning_task_completion', { target_task_id: taskId, target_completion_date: localToday(), target_completed: completed })
     if (error) throw error
   },
-  setCompletions: async (taskIds: string[], workerId: string) => {
+  setCompletions: async (taskIds: string[]) => {
     for (const taskId of taskIds) {
-      const { error } = await client().from('cleaning_completions').upsert({ completion_date: localToday(), task_id: taskId, worker_id: workerId, completed: true }, { onConflict: 'completion_date,task_id' })
+      const { error } = await client().rpc('set_cleaning_task_completion', { target_task_id: taskId, target_completion_date: localToday(), target_completed: true })
       if (error) throw error
     }
   },

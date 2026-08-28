@@ -268,7 +268,7 @@ export default function App() {
     }
     try {
       setNotice("");
-      await schoolRepository.setCompletion(id, profile.id, !target.done);
+      await schoolRepository.setCompletion(id, !target.done);
       await load(session, profile);
     } catch (error) {
       setNotice(
@@ -312,7 +312,7 @@ export default function App() {
           remaining.delete(task.id);
         }
       }
-      await schoolRepository.setCompletions(orderedIds, profile.id);
+      await schoolRepository.setCompletions(orderedIds);
       await load(session, profile);
     } catch (error) {
       setNotice(
