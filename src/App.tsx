@@ -89,16 +89,53 @@ export default function App() {
         return;
       }
       setProfile(activeProfile);
-      const [taskLoad, nextAttendance] = await Promise.all([
+      const [taskResult, attendanceResult] = await Promise.allSettled([
         schoolRepository.tasks(activeProfile),
         schoolRepository.attendance(activeProfile.id),
       ]);
-      setTasks(taskLoad.tasks);
-      setHasWorkPart(taskLoad.hasWorkPart);
-      setAttendance(nextAttendance);
+      if (taskResult.status === "fulfilled") {
+        setTasks(taskResult.value.tasks);
+        setHasWorkPart(taskResult.value.hasWorkPart);
+      } else {
+        setTasks([]);
+        setHasWorkPart(activeProfile.role === "caretaker");
+        setNotice(
+          taskResult.reason instanceof Error
+            ? taskResult.reason.message
+            : "Úkoly se nepodařilo načíst.",
+        );
+      }
+      if (attendanceResult.status === "fulfilled") {
+        setAttendance(attendanceResult.value);
+      } else {
+        setAttendance([]);
+        setNotice(
+          attendanceResult.reason instanceof Error
+            ? attendanceResult.reason.message
+            : "Docházku se nepodařilo načíst.",
+        );
+      }
       if (activeProfile.role === "caretaker") {
-        setPlanOptions(await schoolRepository.planOptions());
-        setAttendanceWorkers(await schoolRepository.attendanceWorkers());
+        const [optionsResult, workersResult] = await Promise.allSettled([
+          schoolRepository.planOptions(),
+          schoolRepository.attendanceWorkers(),
+        ]);
+        if (optionsResult.status === "fulfilled") {
+          setPlanOptions(optionsResult.value);
+        } else {
+          throw optionsResult.reason;
+        }
+        if (workersResult.status === "fulfilled") {
+          setAttendanceWorkers(workersResult.value);
+        } else {
+          setAttendanceWorkers([
+            {
+              id: activeProfile.id,
+              name: activeProfile.full_name,
+              role: activeProfile.role,
+            },
+          ]);
+        }
       } else {
         setAttendanceWorkers([
           {
@@ -195,13 +232,57 @@ export default function App() {
   };
   const clock = async () => {
     const open = attendance.find((item) => !item.end);
+    const previousAttendance = attendance;
+    const previousAttendanceView = attendanceView;
+    const replaceRecord = (records: Attendance[], record: Attendance) => [
+      record,
+      ...records.filter((item) => item.id !== record.id),
+    ];
     try {
       setNotice("");
-      if (open?.id) await schoolRepository.finishAttendance(open.id);
-      else await schoolRepository.startAttendance(profile.id);
-      await load(session, profile);
+      if (open?.id) {
+        const optimistic = { ...open, end: new Date().toISOString() };
+        setAttendance((records) => replaceRecord(records, optimistic));
+        if ((selectedAttendanceWorker || profile.id) === profile.id) {
+          setAttendanceView((records) => replaceRecord(records, optimistic));
+        }
+        const saved = await schoolRepository.finishAttendance(open.id);
+        setAttendance((records) => replaceRecord(records, saved));
+        if ((selectedAttendanceWorker || profile.id) === profile.id) {
+          setAttendanceView((records) => replaceRecord(records, saved));
+        }
+      } else {
+        const startedAt = new Date();
+        const optimistic: Attendance = {
+          id: `pending-${startedAt.getTime()}`,
+          workerId: profile.id,
+          start: startedAt.toISOString(),
+          date: `${startedAt.getFullYear()}-${String(startedAt.getMonth() + 1).padStart(2, "0")}-${String(startedAt.getDate()).padStart(2, "0")}`,
+        };
+        setAttendance((records) => replaceRecord(records, optimistic));
+        if ((selectedAttendanceWorker || profile.id) === profile.id) {
+          setAttendanceView((records) => replaceRecord(records, optimistic));
+        }
+        const saved = await schoolRepository.startAttendance(profile.id);
+        setAttendance((records) => [
+          saved,
+          ...records.filter(
+            (item) => item.id !== optimistic.id && item.id !== saved.id,
+          ),
+        ]);
+        if ((selectedAttendanceWorker || profile.id) === profile.id) {
+          setAttendanceView((records) => [
+            saved,
+            ...records.filter(
+              (item) => item.id !== optimistic.id && item.id !== saved.id,
+            ),
+          ]);
+        }
+      }
       setAttendanceRefresh((value) => value + 1);
     } catch (error) {
+      setAttendance(previousAttendance);
+      setAttendanceView(previousAttendanceView);
       setNotice(
         error instanceof Error
           ? error.message
@@ -232,7 +313,8 @@ export default function App() {
     try {
       setNotice("");
       await schoolRepository.deleteAttendance(id, workerId);
-      await load(session, profile);
+      setAttendance((records) => records.filter((item) => item.id !== id));
+      setAttendanceView((records) => records.filter((item) => item.id !== id));
       setAttendanceRefresh((value) => value + 1);
     } catch (error) {
       setNotice(

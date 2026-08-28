@@ -14,8 +14,8 @@ export type PlanOptions = {
   workParts: { id: string; code: string; name: string }[]
   cleaners: { id: string; name: string }[]
 }
-const today = () => new Date().toISOString().slice(0, 10)
 const localToday = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
+const today = localToday
 const frequency: Record<string, Task['frequency']> = { cleaning_day: 'denně', weekly: 'týdně', once_or_twice_weekly: '1–2× týdně', monthly: 'měsíčně', extraordinary: 'mimořádně' }
 
 // Dočasný režim pro vizuální kontrolu: ?testCleaningDay=1 nasimuluje pondělní úklidový den.
@@ -45,7 +45,13 @@ export function isTaskDueOnDate(task: any, date: string) {
   if (isTestCleaningDay && task.frequency === 'cleaning_day') return true
   if (task.frequency === 'monthly') return task.monthly_day === day
   if (task.frequency === 'extraordinary') return false
-  return Array.isArray(task.schedule_days) && task.schedule_days.includes(isoDay(date))
+  const rawDays = task.schedule_days
+  const scheduleDays = Array.isArray(rawDays)
+    ? rawDays.map(Number)
+    : typeof rawDays === 'string'
+      ? rawDays.replace(/[{}]/g, '').split(',').filter(Boolean).map(Number)
+      : []
+  return scheduleDays.includes(isoDay(date))
 }
 
 export function isCurrentRotation(task: any, rotationOrder: number | null | undefined, date: string) {
@@ -75,26 +81,57 @@ export const schoolRepository = {
   profile: async (id: string): Promise<Profile | null> => { const { data, error } = await client().from('profiles').select('id,full_name,role,active').eq('id', id).maybeSingle(); if (error) throw error; return data as Profile | null },
   tasks: async (profile: Profile): Promise<TaskLoad> => {
     const db = client(); const date = today(); const planningDate = effectivePlanningDate(date)
-    const [{ data: rows, error }, { data: completions, error: completionError }, { data: workParts, error: workPartsError }] = await Promise.all([
-      db.from('cleaning_tasks').select('id,name,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,assignment_mode,rotation_anchor_date,rotation_interval_weeks,work_part_id,rooms(id,name,active,floors(name,sort_order),buildings(name)),task_assignments(worker_id,active,rotation_order,profiles(full_name))').order('sort_order'),
+    const [
+      { data: rows, error },
+      { data: rooms, error: roomsError },
+      { data: floors, error: floorsError },
+      { data: buildings, error: buildingsError },
+      { data: assignments, error: assignmentsError },
+      { data: completions, error: completionError },
+      { data: workParts, error: workPartsError },
+      { data: profiles },
+    ] = await Promise.all([
+      db.from('cleaning_tasks').select('id,name,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,assignment_mode,rotation_anchor_date,rotation_interval_weeks,work_part_id,room_id').order('sort_order'),
+      db.from('rooms').select('id,name,active,floor_id,building_id'),
+      db.from('floors').select('id,name,sort_order,building_id'),
+      db.from('buildings').select('id,name'),
+      db.from('task_assignments').select('task_id,worker_id,active,rotation_order'),
       db.from('cleaning_completions').select('task_id,completed').eq('completion_date', date),
-      db.from('work_part_assignments').select('work_part_id').eq('worker_id', profile.id).eq('active', true)
+      db.from('work_part_assignments').select('work_part_id').eq('worker_id', profile.id).eq('active', true),
+      db.from('profiles').select('id,full_name'),
     ])
-    if (error || completionError || workPartsError) throw error ?? completionError ?? workPartsError
+    if (error || roomsError || floorsError || buildingsError || assignmentsError || completionError || workPartsError) {
+      throw error ?? roomsError ?? floorsError ?? buildingsError ?? assignmentsError ?? completionError ?? workPartsError
+    }
+    const roomById = new Map((rooms ?? []).map((room: any) => [room.id, room]))
+    const floorById = new Map((floors ?? []).map((floor: any) => [floor.id, floor]))
+    const buildingById = new Map((buildings ?? []).map((building: any) => [building.id, building]))
+    const profileById = new Map((profiles ?? []).map((item: any) => [item.id, item.full_name]))
+    const assignmentsByTask = new Map<string, any[]>()
+    for (const assignment of assignments ?? []) {
+      assignmentsByTask.set(assignment.task_id, [...(assignmentsByTask.get(assignment.task_id) ?? []), assignment])
+    }
     const done = new Map((completions ?? []).map((completion: { task_id: string; completed: boolean }) => [completion.task_id, completion.completed]))
     const assignedWorkParts = new Set((workParts ?? []).map((assignment: { work_part_id: string }) => assignment.work_part_id))
     const tasks = (rows ?? [])
       .filter((row: any) => {
+        const room: any = row.room_id ? roomById.get(row.room_id) : null
+        const taskAssignments = assignmentsByTask.get(row.id) ?? []
         if (!row.active && profile.role !== 'caretaker') return false
-        if (row.rooms && !row.rooms.active && profile.role !== 'caretaker') return false
+        if (room && !room.active && profile.role !== 'caretaker') return false
         if (profile.role === 'caretaker') return true
-        if (row.assignment_mode === 'rotating' && !row.task_assignments?.some((assignment: any) => assignment.worker_id === profile.id && isCurrentRotation(row, assignment.rotation_order, planningDate))) return false
+        if (row.assignment_mode === 'rotating' && !taskAssignments.some((assignment: any) => assignment.active !== false && assignment.worker_id === profile.id && isCurrentRotation(row, assignment.rotation_order, planningDate))) return false
         if (row.work_part_id && assignedWorkParts.has(row.work_part_id)) return true
-        return row.task_assignments?.some((assignment: any) => assignment.worker_id === profile.id)
+        return taskAssignments.some((assignment: any) => assignment.active !== false && assignment.worker_id === profile.id)
       })
       .map((row: any) => {
-        const ownAssignment = row.task_assignments?.find((assignment: any) => assignment.worker_id === profile.id)
-        return { id: row.id, roomId: row.rooms?.id, room: row.rooms?.name ?? 'Společný úkol', floor: row.rooms?.floors?.name ?? 'Společné úkoly', floorSort: row.rooms?.floors?.sort_order ?? -1, building: row.rooms?.buildings?.name ?? 'Škola', title: row.name, frequency: frequency[row.frequency] ?? 'mimořádně', assignedTo: ownAssignment?.profiles?.full_name ?? (row.work_part_id ? 'moje pracovní část' : 'nepřiřazeno'), done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: true, dueToday: row.rooms?.active !== false && isTaskDueOnDate(row, planningDate), sortOrder: row.sort_order, scheduleDays: row.schedule_days ?? [], monthlyDay: row.monthly_day, workPartId: row.work_part_id, assignmentMode: row.assignment_mode, rotationAnchorDate: row.rotation_anchor_date, rotationIntervalWeeks: row.rotation_interval_weeks, active: row.active, rotationAssignments: (row.task_assignments ?? []).filter((assignment: any) => assignment.active !== false && assignment.rotation_order).map((assignment: any) => ({ workerId: assignment.worker_id, name: assignment.profiles?.full_name ?? 'Pracovník', order: assignment.rotation_order })) }
+        const room: any = row.room_id ? roomById.get(row.room_id) : null
+        const floor: any = room?.floor_id ? floorById.get(room.floor_id) : null
+        const building: any = room?.building_id ? buildingById.get(room.building_id) : null
+        const taskAssignments = assignmentsByTask.get(row.id) ?? []
+        const ownAssignment = taskAssignments.find((assignment: any) => assignment.worker_id === profile.id)
+        const scheduleDays = Array.isArray(row.schedule_days) ? row.schedule_days.map(Number) : []
+        return { id: row.id, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1, building: building?.name ?? 'Škola', title: row.name, frequency: frequency[row.frequency] ?? 'mimořádně', assignedTo: ownAssignment ? profileById.get(ownAssignment.worker_id) ?? profile.full_name : (row.work_part_id ? 'moje pracovní část' : 'nepřiřazeno'), done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: true, dueToday: room?.active !== false && isTaskDueOnDate(row, planningDate), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day, workPartId: row.work_part_id, assignmentMode: row.assignment_mode, rotationAnchorDate: row.rotation_anchor_date, rotationIntervalWeeks: row.rotation_interval_weeks, active: row.active, rotationAssignments: taskAssignments.filter((assignment: any) => assignment.active !== false && assignment.rotation_order).map((assignment: any) => ({ workerId: assignment.worker_id, name: profileById.get(assignment.worker_id) ?? 'Pracovník', order: assignment.rotation_order })) }
       })
     return { tasks, hasWorkPart: profile.role === 'caretaker' || assignedWorkParts.size > 0 }
   },
@@ -103,17 +140,21 @@ export const schoolRepository = {
     const [{ data: buildings, error: buildingsError }, { data: floors, error: floorsError }, { data: rooms, error: roomsError }, { data: workParts, error: partsError }, { data: cleaners, error: cleanersError }] = await Promise.all([
       db.from('buildings').select('id,name').eq('active', true).order('name'),
       db.from('floors').select('id,building_id,name,sort_order').order('sort_order'),
-      db.from('rooms').select('id,building_id,floor_id,name,active,sort_order,floors(name,sort_order),buildings(name)').order('sort_order'),
+      db.from('rooms').select('id,building_id,floor_id,name,active,sort_order').order('sort_order'),
       db.from('cleaning_work_parts').select('id,code,name').eq('active', true).order('code'),
       db.from('profiles').select('id,full_name').eq('role', 'cleaner').eq('active', true).order('full_name'),
     ])
-    if (buildingsError || floorsError || roomsError || partsError || cleanersError) throw buildingsError ?? floorsError ?? roomsError ?? partsError ?? cleanersError
+    // Struktura místností je provozně nezávislá na volitelných seznamech pro editor úkolů.
+    // Chyba seznamu pracovníků/částí proto nesmí vyprázdnit patra a místnosti.
+    if (buildingsError || floorsError || roomsError) throw buildingsError ?? floorsError ?? roomsError
+    const floorById = new Map((floors ?? []).map((floor: any) => [floor.id, floor]))
+    const buildingById = new Map((buildings ?? []).map((building: any) => [building.id, building]))
     return {
       buildings: (buildings ?? []).map((building: any) => ({ id: building.id, name: building.name })),
       floors: (floors ?? []).map((floor: any) => ({ id: floor.id, buildingId: floor.building_id, name: floor.name, sortOrder: floor.sort_order })),
-      rooms: (rooms ?? []).map((room: any) => ({ id: room.id, buildingId: room.building_id, floorId: room.floor_id, name: room.name, floor: room.floors?.name ?? 'Bez patra', floorSort: room.floors?.sort_order ?? 0, building: room.buildings?.name ?? 'Škola', active: room.active, sortOrder: room.sort_order })),
-      workParts: (workParts ?? []).map((part: any) => ({ id: part.id, code: part.code, name: part.name })),
-      cleaners: (cleaners ?? []).map((profile: any) => ({ id: profile.id, name: profile.full_name })),
+      rooms: (rooms ?? []).map((room: any) => { const floor: any = floorById.get(room.floor_id); const building: any = buildingById.get(room.building_id); return { id: room.id, buildingId: room.building_id, floorId: room.floor_id, name: room.name, floor: floor?.name ?? 'Bez patra', floorSort: floor?.sort_order ?? 0, building: building?.name ?? 'Škola', active: room.active, sortOrder: room.sort_order } }),
+      workParts: partsError ? [] : (workParts ?? []).map((part: any) => ({ id: part.id, code: part.code, name: part.name })),
+      cleaners: cleanersError ? [] : (cleaners ?? []).map((profile: any) => ({ id: profile.id, name: profile.full_name })),
     }
   },
   saveRoom: async (room: ManagedRoom) => {
@@ -158,7 +199,7 @@ export const schoolRepository = {
   setPlannedShiftsPerWeek: async (workerId: string, ownUserId: string, value: number) => { const db = client(); const { error } = workerId === ownUserId ? await db.rpc('set_own_planned_shifts_per_week', { value }) : await db.from('profiles').update({ planned_shifts_per_week: value }).eq('id', workerId); if (error) throw error },
   updateAttendance: async (id: string, startedAt: string, endedAt?: string) => { const start = new Date(startedAt); const end = endedAt ? new Date(endedAt) : null; if (Number.isNaN(start.getTime()) || (end && (Number.isNaN(end.getTime()) || end < start))) throw new Error('Zkontrolujte začátek a konec směny.'); const localDate = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`; const { error } = await client().from('attendance').update({ started_at: start.toISOString(), ended_at: end?.toISOString() ?? null, attendance_date: localDate }).eq('id', id); if (error) throw error },
   deleteAttendance: async (id: string, workerId: string) => { const { data, error } = await client().from('attendance').delete().eq('id', id).eq('worker_id', workerId).select('id').maybeSingle(); if (error) throw error; if (!data) throw new Error('Směnu se nepodařilo smazat nebo k ní nemáte oprávnění.') },
-  startAttendance: async (workerId: string) => { const db = client(); const { data: building, error: buildingError } = await db.from('buildings').select('id').eq('name', 'Škola').single(); if (buildingError) throw buildingError; const { error } = await db.from('attendance').insert({ worker_id: workerId, building_id: building.id, attendance_date: localToday() }); if (error) throw error },
-  finishAttendance: async (id: string) => { const { error } = await client().from('attendance').update({ ended_at: new Date().toISOString() }).eq('id', id); if (error) throw error },
+  startAttendance: async (workerId: string): Promise<Attendance> => { const db = client(); const { data: building, error: buildingError } = await db.from('buildings').select('id').eq('name', 'Škola').single(); if (buildingError) throw buildingError; const { data, error } = await db.from('attendance').insert({ worker_id: workerId, building_id: building.id, attendance_date: localToday() }).select('id,worker_id,started_at,ended_at,attendance_date,note').single(); if (error) throw error; return { id: data.id, workerId: data.worker_id, start: data.started_at, end: data.ended_at ?? undefined, date: data.attendance_date, note: data.note ?? undefined } },
+  finishAttendance: async (id: string): Promise<Attendance> => { const { data, error } = await client().from('attendance').update({ ended_at: new Date().toISOString() }).eq('id', id).select('id,worker_id,started_at,ended_at,attendance_date,note').single(); if (error) throw error; return { id: data.id, workerId: data.worker_id, start: data.started_at, end: data.ended_at ?? undefined, date: data.attendance_date, note: data.note ?? undefined } },
   subscribe: (onChange: () => void): RealtimeChannel => client().channel('school-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_completions' }, onChange).on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, onChange).subscribe()
 }
