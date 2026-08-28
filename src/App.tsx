@@ -228,6 +228,21 @@ export default function App() {
       throw error;
     }
   };
+  const deleteAttendance = async (id: string, workerId: string) => {
+    try {
+      setNotice("");
+      await schoolRepository.deleteAttendance(id, workerId);
+      await load(session, profile);
+      setAttendanceRefresh((value) => value + 1);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Směnu se nepodařilo smazat.",
+      );
+      throw error;
+    }
+  };
   const saveAttendanceSettings = async (value: number) => {
     try {
       setNotice("");
@@ -367,6 +382,7 @@ export default function App() {
           onClock={clock}
           ownRecords={attendance}
           onSaveAttendance={saveAttendance}
+          onDeleteAttendance={deleteAttendance}
           onSaveSettings={saveAttendanceSettings}
         />
       )}
@@ -613,6 +629,7 @@ function AttendanceDashboard({
   onClock,
   ownRecords,
   onSaveAttendance,
+  onDeleteAttendance,
   onSaveSettings,
 }: {
   records: Attendance[];
@@ -629,10 +646,12 @@ function AttendanceDashboard({
     startedAt: string,
     endedAt?: string,
   ) => Promise<void>;
+  onDeleteAttendance: (id: string, workerId: string) => Promise<void>;
   onSaveSettings: (value: number) => Promise<void>;
 }) {
   const now = useCurrentTime();
   const [editingRecord, setEditingRecord] = useState<Attendance | null>(null);
+  const [deletingRecord, setDeletingRecord] = useState<Attendance | null>(null);
   const [plannedShifts, setPlannedShifts] = useState(
     settings.plannedShiftsPerWeek,
   );
@@ -788,6 +807,7 @@ function AttendanceDashboard({
         records={records}
         now={now}
         onEdit={setEditingRecord}
+        onDelete={setDeletingRecord}
       />
       {editingRecord && (
         <AttendanceEditor
@@ -799,6 +819,19 @@ function AttendanceDashboard({
           }}
         />
       )}
+      {deletingRecord && (
+        <DeleteAttendanceConfirmation
+          record={deletingRecord}
+          onCancel={() => setDeletingRecord(null)}
+          onConfirm={async () => {
+            await onDeleteAttendance(
+              deletingRecord.id,
+              deletingRecord.workerId,
+            );
+            setDeletingRecord(null);
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -807,10 +840,12 @@ function AttendanceHistory({
   records,
   now,
   onEdit,
+  onDelete,
 }: {
   records: Attendance[];
   now: Date;
   onEdit: (record: Attendance) => void;
+  onDelete: (record: Attendance) => void;
 }) {
   const months = new Map<string, Attendance[]>();
   records.forEach((record) =>
@@ -843,13 +878,72 @@ function AttendanceHistory({
                 </span>
                 <small>{formatDuration(shiftDuration(record, now))}</small>
               </div>
-              <button onClick={() => onEdit(record)}>Opravit</button>
+              <div className="attendance-history-actions">
+                <button onClick={() => onEdit(record)}>Opravit</button>
+                <button className="delete" onClick={() => onDelete(record)}>
+                  Smazat
+                </button>
+              </div>
             </article>
           ))}
         </details>
       ))}
       {!records.length && <p className="hint">Zatím nejsou evidované žádné směny.</p>}
     </section>
+  );
+}
+
+function DeleteAttendanceConfirmation({
+  record,
+  onCancel,
+  onConfirm,
+}: {
+  record: Attendance;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  return (
+    <div className="confirmation-backdrop" role="presentation">
+      <section
+        className="confirmation-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-attendance-title"
+      >
+        <h2 id="delete-attendance-title">
+          Opravdu chcete tuto směnu smazat?
+        </h2>
+        <p>
+          {new Intl.DateTimeFormat("cs-CZ").format(
+            new Date(`${record.date}T12:00:00`),
+          )}{" "}
+          · {formatTime(record.start)}–
+          {record.end ? formatTime(record.end) : "probíhá"}
+        </p>
+        <div className="confirmation-actions">
+          <button disabled={deleting} onClick={onCancel}>
+            Zrušit
+          </button>
+          <button
+            className="danger"
+            disabled={deleting}
+            onClick={async () => {
+              setDeleting(true);
+              try {
+                await onConfirm();
+              } catch {
+                // Chybová zpráva se zobrazuje v hlavním upozornění aplikace.
+              } finally {
+                setDeleting(false);
+              }
+            }}
+          >
+            {deleting ? "Mažu…" : "Smazat směnu"}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 

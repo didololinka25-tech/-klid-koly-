@@ -270,7 +270,7 @@ h1 {
   padding: 11px 0;
   border-top: 1px solid #edf3f1;
 }
-.attendance-history article div {
+.attendance-history article > div:first-child {
   min-width: 0;
   display: grid;
   gap: 2px;
@@ -287,6 +287,60 @@ h1 {
   background: #fff;
   color: #165e56;
   font-weight: 800;
+}
+.attendance-history-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.attendance-history-actions button.delete {
+  border-color: #e8b4ae;
+  color: #a3342b;
+}
+.confirmation-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  padding: 18px;
+  display: grid;
+  place-items: center;
+  background: #0c2924a8;
+}
+.confirmation-dialog {
+  width: min(100%, 420px);
+  padding: 20px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 18px 50px #071d1952;
+}
+.confirmation-dialog h2 {
+  margin-top: 0;
+}
+.confirmation-dialog p {
+  color: #627a75;
+}
+.confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.confirmation-actions button {
+  min-height: 44px;
+  border: 1px solid #c7ddd6;
+  border-radius: 9px;
+  padding: 0 14px;
+  background: #fff;
+  color: #165e56;
+  font-weight: 800;
+}
+.confirmation-actions button.danger {
+  border-color: #b83b31;
+  background: #b83b31;
+  color: #fff;
+}
+.confirmation-actions button:disabled {
+  opacity: 0.55;
 }
 h2 {
   font-size: 18px;
