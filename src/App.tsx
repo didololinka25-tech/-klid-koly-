@@ -12,7 +12,7 @@ import type { Attendance, Frequency, Task } from "./types";
 
 type Section =
   | "Dnes"
-  | "Úklid"
+  | "Správa"
   | "Docházka"
   | "Kalendář"
   | "Zásoby"
@@ -21,7 +21,7 @@ type Section =
   | "Nastavení";
 const sections: Section[] = [
   "Dnes",
-  "Úklid",
+  "Správa",
   "Docházka",
   "Kalendář",
   "Zásoby",
@@ -31,7 +31,7 @@ const sections: Section[] = [
 ];
 const icon: Record<Section, string> = {
   Dnes: "☀",
-  Úklid: "✓",
+  Správa: "✓",
   Docházka: "◷",
   Kalendář: "▣",
   Zásoby: "▤",
@@ -197,6 +197,10 @@ export default function App() {
     section === "Dnes"
       ? tasks.filter((task) => task.active && task.dueToday)
       : tasks;
+  const navigation =
+    profile.role === "caretaker"
+      ? sections
+      : sections.filter((item) => item !== "Správa");
   return (
     <main className="app">
       <header>
@@ -245,7 +249,7 @@ export default function App() {
           )}
         </>
       )}
-      {section === "Úklid" && (
+      {section === "Správa" && (
         <>
           {profile.role === "caretaker" ? (
             <PlanManager
@@ -355,7 +359,7 @@ export default function App() {
         </section>
       )}
       <nav>
-        {sections.map((item) => (
+        {navigation.map((item) => (
           <button
             key={item}
             className={section === item ? "active" : ""}
