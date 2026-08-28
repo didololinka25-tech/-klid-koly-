@@ -4,6 +4,7 @@ import { defaultShifts } from "./data";
 import {
   isTestCleaningDay,
   schoolRepository,
+  type ManagedRoom,
   type PlanOptions,
   type Profile,
 } from "./schoolRepository";
@@ -62,6 +63,8 @@ export default function App() {
   const [section, setSection] = useState<Section>("Dnes");
   const [notice, setNotice] = useState("");
   const [planOptions, setPlanOptions] = useState<PlanOptions>({
+    buildings: [],
+    floors: [],
     rooms: [],
     workParts: [],
     cleaners: [],
@@ -192,6 +195,20 @@ export default function App() {
       );
     }
   };
+  const saveRoom = async (room: ManagedRoom) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveRoom(room);
+      await load(session, profile);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Místnost se nepodařilo uložit.",
+      );
+      throw error;
+    }
+  };
   const openShift = attendance.find((item) => !item.end);
   const visible =
     section === "Dnes"
@@ -252,13 +269,14 @@ export default function App() {
       {section === "Správa" && (
         <>
           {profile.role === "caretaker" ? (
-            <PlanManager
+            <Management
               tasks={tasks}
               options={planOptions}
               editing={editing}
               onEdit={setEditing}
               onCancel={() => setEditing(null)}
-              onSave={saveTask}
+              onSaveTask={saveTask}
+              onSaveRoom={saveRoom}
             />
           ) : (
             <>
@@ -495,6 +513,60 @@ function TaskRows({
   );
 }
 
+function Management({
+  tasks,
+  options,
+  editing,
+  onEdit,
+  onCancel,
+  onSaveTask,
+  onSaveRoom,
+}: {
+  tasks: Task[];
+  options: PlanOptions;
+  editing: Task | null;
+  onEdit: (task: Task) => void;
+  onCancel: () => void;
+  onSaveTask: (task: Task) => Promise<void>;
+  onSaveRoom: (room: ManagedRoom) => Promise<void>;
+}) {
+  const [view, setView] = useState<"plan" | "rooms">("plan");
+  return (
+    <>
+      <div className="management-tabs" role="tablist" aria-label="Správa školy">
+        <button
+          className={view === "plan" ? "active" : ""}
+          onClick={() => setView("plan")}
+          role="tab"
+          aria-selected={view === "plan"}
+        >
+          Plán úklidu
+        </button>
+        <button
+          className={view === "rooms" ? "active" : ""}
+          onClick={() => setView("rooms")}
+          role="tab"
+          aria-selected={view === "rooms"}
+        >
+          Místnosti
+        </button>
+      </div>
+      {view === "plan" ? (
+        <PlanManager
+          tasks={tasks}
+          options={options}
+          editing={editing}
+          onEdit={onEdit}
+          onCancel={onCancel}
+          onSave={onSaveTask}
+        />
+      ) : (
+        <RoomManager options={options} onSave={onSaveRoom} />
+      )}
+    </>
+  );
+}
+
 function PlanManager({
   tasks,
   options,
@@ -582,6 +654,236 @@ function PlanManager({
     </section>
   );
 }
+
+function RoomManager({
+  options,
+  onSave,
+}: {
+  options: PlanOptions;
+  onSave: (room: ManagedRoom) => Promise<void>;
+}) {
+  const school =
+    options.buildings.find((building) => building.name === "Škola") ??
+    options.buildings[0];
+  const schoolFloors = options.floors
+    .filter((floor) => !school || floor.buildingId === school.id)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  const [selectedFloorId, setSelectedFloorId] = useState("");
+  const [editingRoom, setEditingRoom] = useState<ManagedRoom | null>(null);
+  const activeFloorId = schoolFloors.some(
+    (floor) => floor.id === selectedFloorId,
+  )
+    ? selectedFloorId
+    : (schoolFloors[0]?.id ?? "");
+  const rooms = options.rooms
+    .filter((room) => room.floorId === activeFloorId)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "cs"));
+  const addRoom = () => {
+    const floor = schoolFloors.find((item) => item.id === activeFloorId);
+    if (!floor || !school) return;
+    setEditingRoom({
+      id: "",
+      buildingId: school.id,
+      floorId: floor.id,
+      name: "",
+      active: true,
+      sortOrder: (rooms[rooms.length - 1]?.sortOrder ?? 0) + 10,
+    });
+  };
+  const save = async (room: ManagedRoom) => {
+    await onSave(room);
+    setSelectedFloorId(room.floorId ?? "");
+    setEditingRoom(null);
+  };
+  return (
+    <section className="room-manager">
+      {editingRoom ? (
+        <RoomEditor
+          room={editingRoom}
+          options={options}
+          onCancel={() => setEditingRoom(null)}
+          onSave={save}
+        />
+      ) : (
+        <>
+          <label className="floor-picker">
+            Patro / sekce
+            <select
+              value={activeFloorId}
+              onChange={(event) => setSelectedFloorId(event.target.value)}
+            >
+              {schoolFloors.map((floor) => (
+                <option key={floor.id} value={floor.id}>
+                  {floor.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="room-manager-heading">
+            <div>
+              <h2>
+                {schoolFloors.find((floor) => floor.id === activeFloorId)
+                  ?.name ?? "Místnosti"}
+              </h2>
+              <small>{rooms.length} místností</small>
+            </div>
+            <button onClick={addRoom}>+ Místnost</button>
+          </div>
+          <div className="room-admin-list">
+            {rooms.map((room) => (
+              <button
+                key={room.id}
+                className={room.active ? "room-admin-row" : "room-admin-row inactive"}
+                onClick={() =>
+                  setEditingRoom({
+                    id: room.id,
+                    buildingId: room.buildingId,
+                    floorId: room.floorId,
+                    name: room.name,
+                    active: room.active,
+                    sortOrder: room.sortOrder,
+                  })
+                }
+              >
+                <span>
+                  <b>{room.name}</b>
+                  <small>
+                    Pořadí {room.sortOrder}
+                    {room.active ? "" : " · neaktivní"}
+                  </small>
+                </span>
+                <i>Upravit</i>
+              </button>
+            ))}
+            {rooms.length === 0 && (
+              <p className="hint">V této sekci zatím nejsou žádné místnosti.</p>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function RoomEditor({
+  room,
+  options,
+  onCancel,
+  onSave,
+}: {
+  room: ManagedRoom;
+  options: PlanOptions;
+  onCancel: () => void;
+  onSave: (room: ManagedRoom) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(room);
+  const floors = options.floors
+    .filter((floor) => floor.buildingId === draft.buildingId)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  const setFloor = (floorId: string) => {
+    const floor = options.floors.find((item) => item.id === floorId);
+    setDraft((current) => ({
+      ...current,
+      floorId: floorId || null,
+      buildingId: floor?.buildingId ?? current.buildingId,
+    }));
+  };
+  return (
+    <form
+      className="task-editor room-editor"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onSave(draft);
+      }}
+    >
+      <h2>{room.id ? "Upravit místnost" : "Nová místnost"}</h2>
+      <label>
+        Budova
+        <select
+          value={draft.buildingId}
+          onChange={(event) => {
+            const firstFloor = options.floors.find(
+              (floor) => floor.buildingId === event.target.value,
+            );
+            setDraft((current) => ({
+              ...current,
+              buildingId: event.target.value,
+              floorId: firstFloor?.id ?? null,
+            }));
+          }}
+        >
+          {options.buildings.map((building) => (
+            <option key={building.id} value={building.id}>
+              {building.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Patro / sekce
+        <select
+          value={draft.floorId ?? ""}
+          onChange={(event) => setFloor(event.target.value)}
+          required
+        >
+          <option value="">Vyberte patro nebo sekci</option>
+          {floors.map((floor) => (
+            <option key={floor.id} value={floor.id}>
+              {floor.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Název místnosti
+        <input
+          value={draft.name}
+          onChange={(event) =>
+            setDraft((current) => ({ ...current, name: event.target.value }))
+          }
+          required
+        />
+      </label>
+      <label>
+        Pořadí
+        <input
+          type="number"
+          value={draft.sortOrder}
+          onChange={(event) =>
+            setDraft((current) => ({
+              ...current,
+              sortOrder: Number(event.target.value),
+            }))
+          }
+        />
+      </label>
+      <label className="switch">
+        <input
+          type="checkbox"
+          checked={draft.active}
+          onChange={(event) =>
+            setDraft((current) => ({
+              ...current,
+              active: event.target.checked,
+            }))
+          }
+        />
+        Aktivní místnost
+      </label>
+      <p className="hint">
+        Deaktivace místnost nesmaže. Úkoly a historie zůstanou navázané na stejné
+        ID.
+      </p>
+      <div className="editor-actions">
+        <button type="button" onClick={onCancel}>
+          Zrušit
+        </button>
+        <button type="submit">Uložit místnost</button>
+      </div>
+    </form>
+  );
+}
+
 function TaskEditor({
   task,
   options,

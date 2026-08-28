@@ -298,6 +298,102 @@ h2 {
   display: grid;
   gap: 10px;
 }
+.management-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 4px;
+  background: #e5f0ed;
+  border-radius: 12px;
+}
+.management-tabs button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #568078;
+  font-weight: 800;
+}
+.management-tabs button.active {
+  background: #fff;
+  color: #165e56;
+  box-shadow: 0 1px 4px #09332a12;
+}
+.room-manager {
+  display: grid;
+  gap: 14px;
+}
+.floor-picker {
+  display: grid;
+  gap: 6px;
+  font-weight: 700;
+}
+.floor-picker select {
+  width: 100%;
+  padding: 11px;
+  border: 1px solid #c7ddd6;
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+}
+.room-manager-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.room-manager-heading h2 {
+  margin: 0 0 3px;
+}
+.room-manager-heading small {
+  color: #6d827d;
+}
+.room-manager-heading button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 10px;
+  padding: 0 13px;
+  background: #165e56;
+  color: #fff;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.room-admin-list {
+  display: grid;
+  gap: 8px;
+}
+.room-admin-row {
+  width: 100%;
+  min-height: 58px;
+  border: 1px solid #dbe8e4;
+  border-radius: 12px;
+  padding: 11px 12px;
+  background: #fff;
+  color: #173832;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.room-admin-row span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.room-admin-row small {
+  color: #6d827d;
+}
+.room-admin-row i {
+  color: #146057;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+.room-admin-row.inactive {
+  opacity: 0.58;
+}
 .plan-list {
   display: grid;
   gap: 7px;
