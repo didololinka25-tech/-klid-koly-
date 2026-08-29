@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "test": "node --experimental-strip-types --test src/*.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

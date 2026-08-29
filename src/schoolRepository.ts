@@ -1,7 +1,12 @@
 import type { RealtimeChannel, Session } from '@supabase/supabase-js'
 import type { Attendance, Task } from './types'
 import { supabase } from './supabase'
-import { isTaskDueOnDate } from './scheduling'
+import {
+  isTaskDueForCleaningDay,
+  resolveCleaningDay,
+  type CleaningDayContext,
+  type CleaningDayException,
+} from './scheduling'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -27,7 +32,24 @@ export type UserProfile = {
   firstSignedInAt: string
   lastSignedInAt?: string
 }
-export type TaskLoad = { tasks: Task[] }
+export type TaskLoad = { tasks: Task[]; cleaningDay: CleaningDayContext; cleaningDaysAvailable: boolean }
+export type CleaningDayRecord = CleaningDayException & {
+  buildingId: string
+  scopeType: 'whole_school'
+  createdBy: string
+}
+export type CleaningDayDraft = {
+  id?: string
+  buildingId: string
+  kind: 'extraordinary' | 'rescheduled'
+  executionDate: string
+  sourceDate?: string | null
+  title: string
+  note?: string | null
+}
+export type StockItem = { id: string; name: string; quantity: number; minimumQuantity: number; unit: string }
+export type Incident = { id: string; date: string; description: string; status: string; roomId?: string | null }
+export type OperationsData = { stock: StockItem[]; incidents: Incident[] }
 export type ManagedRoom = { id: string; buildingId: string; floorId: string | null; name: string; active: boolean; sortOrder: number }
 export type AttendanceWorker = { id: string; name: string; role: AccessRole }
 export type AttendanceSettings = { plannedShiftsPerWeek: number; configurable: boolean }
@@ -41,6 +63,8 @@ const localToday = () => {
   const date = new Date()
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
+const missingRelation = (error: { code?: string; message?: string } | null) =>
+  Boolean(error && ['42P01', 'PGRST205'].includes(error.code ?? ''))
 const frequency: Record<string, Task['frequency']> = { cleaning_day: 'denně', weekly: 'týdně', once_or_twice_weekly: '1–2× týdně', monthly: 'měsíčně', extraordinary: 'mimořádně' }
 export const isTestCleaningDay = new URLSearchParams(window.location.search).get('testCleaningDay') === '1'
 
@@ -92,7 +116,10 @@ export const schoolRepository = {
   users: async (): Promise<UserProfile[]> => {
     const { data, error } = await client().from('profiles').select('id,full_name,email,role,access_role,active,is_owner,created_at,first_signed_in_at,last_signed_in_at').order('first_signed_in_at')
     if (error) throw error
-    return (data ?? []).map(mappedProfile)
+    return (data ?? []).map(mappedProfile).sort((a, b) => {
+      const pendingOrder = Number(b.role === 'pending') - Number(a.role === 'pending')
+      return pendingOrder || a.firstSignedInAt.localeCompare(b.firstSignedInAt)
+    })
   },
   updateUserAccess: async (userId: string, role: AccessRole, active: boolean) => {
     const { error } = await client().rpc('owner_set_user_access', { target_user_id: userId, new_access_role: role, new_active: active })
@@ -109,6 +136,12 @@ export const schoolRepository = {
       db.from('cleaning_completions').select('task_id,completed').eq('completion_date', date),
     ])
     if (error || roomsError || floorsError || buildingsError || completionError) throw error ?? roomsError ?? floorsError ?? buildingsError ?? completionError
+    const exceptionResult = await db.from('cleaning_day_exceptions')
+      .select('id,building_id,kind,execution_date,source_date,title,note,scope_type,status,created_by')
+      .or(`execution_date.eq.${date},source_date.eq.${date}`)
+    if (exceptionResult.error && !missingRelation(exceptionResult.error)) throw exceptionResult.error
+    const exceptions = (exceptionResult.data ?? []).map(mapCleaningDay)
+    const cleaningDay = resolveCleaningDay(date, exceptions, isTestCleaningDay)
     const roomById = new Map((rooms ?? []).map((room: any) => [room.id, room]))
     const floorById = new Map((floors ?? []).map((floor: any) => [floor.id, floor]))
     const buildingById = new Map((buildings ?? []).map((building: any) => [building.id, building]))
@@ -127,11 +160,11 @@ export const schoolRepository = {
         id: row.id, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1,
         building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
         assignedTo: 'Úklidový tým', done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile) && !isTestCleaningDay,
-        dueToday: room?.active !== false && isTaskDueOnDate(row, date, isTestCleaningDay), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
+        dueToday: room?.active !== false && isTaskDueForCleaningDay(row, cleaningDay), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
         active: row.active,
       }
     })
-    return { tasks }
+    return { tasks, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
   },
   planOptions: async (): Promise<PlanOptions> => {
     const db = client()
@@ -156,7 +189,7 @@ export const schoolRepository = {
     if (error) throw error
   },
   saveTask: async (task: Task) => {
-    const values = { room_id: task.roomId ?? null, name: task.title, activity_type: task.activityType, frequency: Object.entries(frequency).find(([, label]) => label === task.frequency)?.[0], active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.monthlyDay ?? null }
+    const values = { room_id: task.roomId ?? null, name: task.title, activity_type: task.activityType, frequency: Object.entries(frequency).find(([, label]) => label === task.frequency)?.[0], active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.monthlyDay ?? null, requires_task_id: task.prerequisite ?? null }
     const result = task.id ? await client().from('cleaning_tasks').update(values).eq('id', task.id).select('id').single() : await client().from('cleaning_tasks').insert(values).select('id').single()
     if (result.error) throw result.error
   },
@@ -168,6 +201,45 @@ export const schoolRepository = {
     for (const taskId of taskIds) {
       const { error } = await client().rpc('set_cleaning_task_completion', { target_task_id: taskId, target_completion_date: localToday(), target_completed: true })
       if (error) throw error
+    }
+  },
+  cleaningDays: async (): Promise<{ records: CleaningDayRecord[]; available: boolean }> => {
+    const { data, error } = await client().from('cleaning_day_exceptions')
+      .select('id,building_id,kind,execution_date,source_date,title,note,scope_type,status,created_by')
+      .order('execution_date')
+    if (missingRelation(error)) return { records: [], available: false }
+    if (error) throw error
+    return { records: (data ?? []).map(mapCleaningDay), available: true }
+  },
+  saveCleaningDay: async (draft: CleaningDayDraft) => {
+    const values = {
+      building_id: draft.buildingId,
+      kind: draft.kind,
+      execution_date: draft.executionDate,
+      source_date: draft.kind === 'rescheduled' ? draft.sourceDate : null,
+      title: draft.title.trim(),
+      note: draft.note?.trim() || null,
+      scope_type: 'whole_school',
+      status: 'active',
+    }
+    const result = draft.id
+      ? await client().from('cleaning_day_exceptions').update(values).eq('id', draft.id)
+      : await client().from('cleaning_day_exceptions').insert(values)
+    if (result.error) throw result.error
+  },
+  cancelCleaningDay: async (id: string) => {
+    const { error } = await client().from('cleaning_day_exceptions').update({ status: 'cancelled' }).eq('id', id)
+    if (error) throw error
+  },
+  operations: async (): Promise<OperationsData> => {
+    const [{ data: stock, error: stockError }, { data: incidents, error: incidentError }] = await Promise.all([
+      client().from('stock_items').select('id,name,quantity,minimum_quantity,unit').eq('active', true).order('name'),
+      client().from('incidents').select('id,incident_date,description,status,room_id').order('incident_date', { ascending: false }).limit(30),
+    ])
+    if (stockError || incidentError) throw stockError ?? incidentError
+    return {
+      stock: (stock ?? []).map((item: any) => ({ id: item.id, name: item.name, quantity: Number(item.quantity), minimumQuantity: Number(item.minimum_quantity), unit: item.unit })),
+      incidents: (incidents ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, description: item.description, status: item.status, roomId: item.room_id })),
     }
   },
   attendance: async (workerId: string): Promise<Attendance[]> => {
@@ -217,4 +289,19 @@ export const schoolRepository = {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_completions' }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, onChange)
     .subscribe(),
+}
+
+function mapCleaningDay(row: any): CleaningDayRecord {
+  return {
+    id: row.id,
+    buildingId: row.building_id,
+    kind: row.kind,
+    executionDate: row.execution_date,
+    sourceDate: row.source_date,
+    title: row.title,
+    note: row.note,
+    scopeType: row.scope_type,
+    status: row.status,
+    createdBy: row.created_by,
+  }
 }

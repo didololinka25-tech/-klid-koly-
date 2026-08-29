@@ -11,45 +11,35 @@ import {
   type AccessRole,
   type AttendanceSettings,
   type AttendanceWorker,
+  type CleaningDayDraft,
+  type CleaningDayRecord,
   type ManagedRoom,
+  type OperationsData,
   type PlanOptions,
   type Profile,
   type UserProfile,
 } from "./schoolRepository";
 import { isSupabaseConfigured } from "./supabase";
+import type { CleaningDayContext } from "./scheduling";
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
 
 type Section =
   | "Dnes"
-  | "Správa"
-  | "Uživatelé"
   | "Docházka"
   | "Kalendář"
-  | "Zásoby"
-  | "Praní"
-  | "Závady"
-  | "Nastavení";
-const sections: Section[] = [
-  "Dnes",
-  "Správa",
-  "Uživatelé",
-  "Docházka",
-  "Kalendář",
-  "Zásoby",
-  "Praní",
-  "Závady",
-  "Nastavení",
-];
+  | "Provoz"
+  | "Více"
+  | "Správa"
+  | "Uživatelé";
+const sections: Section[] = ["Dnes", "Docházka", "Kalendář", "Provoz", "Více"];
 const icon: Record<Section, string> = {
   Dnes: "☀",
-  Správa: "✓",
-  Uživatelé: "♙",
   Docházka: "◷",
   Kalendář: "▣",
-  Zásoby: "▤",
-  Praní: "♨",
-  Závady: "⚠",
-  Nastavení: "⚙",
+  Provoz: "⚠",
+  Více: "•••",
+  Správa: "✓",
+  Uživatelé: "♙",
 };
 const frequencies: Frequency[] = [
   "denně",
@@ -85,6 +75,15 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [cleaningDays, setCleaningDays] = useState<CleaningDayRecord[]>([]);
+  const [cleaningDaysAvailable, setCleaningDaysAvailable] = useState(false);
+  const [cleaningDay, setCleaningDay] = useState<CleaningDayContext>({
+    kind: isTestCleaningDay ? "preview" : "standard",
+    executionDate: localDateKey(),
+    scheduleDate: localDateKey(),
+    title: isTestCleaningDay ? "Testovací standardní úklid" : "Standardní úklid",
+  });
+  const [operations, setOperations] = useState<OperationsData>({ stock: [], incidents: [] });
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [attendanceView, setAttendanceView] = useState<Attendance[]>([]);
   const [attendanceWorkers, setAttendanceWorkers] = useState<AttendanceWorker[]>([]);
@@ -102,6 +101,7 @@ export default function App() {
     rooms: [],
   });
   const [editing, setEditing] = useState<Task | null>(null);
+  const [managementView, setManagementView] = useState<"plan" | "rooms">("plan");
   const load = useCallback(
     async (current: Session, knownProfile?: Profile | null) => {
       const activeProfile =
@@ -127,6 +127,8 @@ export default function App() {
       );
       if (taskResult.status === "fulfilled") {
         setTasks(taskResult.value.tasks);
+        setCleaningDay(taskResult.value.cleaningDay);
+        setCleaningDaysAvailable(taskResult.value.cleaningDaysAvailable);
       } else {
         setTasks([]);
         setNotice(
@@ -174,6 +176,15 @@ export default function App() {
         ]);
         setUsers([]);
       }
+      const [daysResult, operationsResult] = await Promise.allSettled([
+        schoolRepository.cleaningDays(),
+        schoolRepository.operations(),
+      ]);
+      if (daysResult.status === "fulfilled") {
+        setCleaningDays(daysResult.value.records);
+        setCleaningDaysAvailable(daysResult.value.available);
+      }
+      if (operationsResult.status === "fulfilled") setOperations(operationsResult.value);
     },
     [],
   );
@@ -188,6 +199,7 @@ export default function App() {
       setProfile(null);
       setTasks([]);
       setUsers([]);
+      setCleaningDays([]);
       setAttendance([]);
       setAttendanceView([]);
       setAttendanceWorkers([]);
@@ -206,6 +218,19 @@ export default function App() {
       channel.unsubscribe();
     };
   }, [session, profile, load]);
+  useEffect(() => {
+    if (!session || !profile?.is_owner) return;
+    const refreshUsers = () => {
+      if (document.visibilityState === "hidden") return;
+      schoolRepository.users().then(setUsers).catch((error) => setNotice(error.message));
+    };
+    window.addEventListener("focus", refreshUsers);
+    document.addEventListener("visibilitychange", refreshUsers);
+    return () => {
+      window.removeEventListener("focus", refreshUsers);
+      document.removeEventListener("visibilitychange", refreshUsers);
+    };
+  }, [session, profile]);
   useEffect(() => {
     if (!profile || !canWork(profile)) return;
     const workerId = selectedAttendanceWorker || profile.id;
@@ -478,15 +503,46 @@ export default function App() {
       throw error;
     }
   };
+  const refreshCleaningDays = async () => {
+    const result = await schoolRepository.cleaningDays();
+    setCleaningDays(result.records);
+    setCleaningDaysAvailable(result.available);
+    await load(session, profile);
+  };
+  const saveCleaningDay = async (draft: CleaningDayDraft) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveCleaningDay(draft);
+      await refreshCleaningDays();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Úklidový den se nepodařilo uložit.");
+      throw error;
+    }
+  };
+  const cancelCleaningDay = async (id: string) => {
+    try {
+      setNotice("");
+      await schoolRepository.cancelCleaningDay(id);
+      await refreshCleaningDays();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Úklidový den se nepodařilo zrušit.");
+      throw error;
+    }
+  };
+  const openManagement = (view: "plan" | "rooms") => {
+    setManagementView(view);
+    setEditing(null);
+    setSection("Správa");
+  };
+  const pendingCount = profile.is_owner
+    ? users.filter((user) => user.active && user.role === "pending").length
+    : 0;
   const visible =
     section === "Dnes"
       ? tasks.filter((task) => task.active && task.dueToday)
       : tasks;
   const navigation = sections.filter((item) => {
-    if (item === "Správa") return false;
-    if (item === "Uživatelé") return Boolean(profile.is_owner);
     if (item === "Docházka") return canWork(profile);
-    if (accessRole(profile) === "visitor") return ["Dnes", "Nastavení"].includes(item);
     return true;
   });
   return (
@@ -512,11 +568,8 @@ export default function App() {
           {canWork(profile) && <TodayAttendance records={attendance} onClock={clock} />}
           <section className="hero">
             <span>
-              {isTestCleaningDay
-                ? "Testovací zobrazení pondělního úklidového dne."
-                : [1, 3, 5].includes(new Date().getDay())
-                  ? "Dnes je standardní úklidový den."
-                  : "Dnes není pravidelný úklidový den."}
+              <b>{cleaningDayHeading(cleaningDay, visible.length)}</b>
+              <small>{cleaningDayDescription(cleaningDay)}</small>
             </span>
             <strong>
               {visible.filter((task) => task.done).length} / {visible.length}{" "}
@@ -542,6 +595,8 @@ export default function App() {
           onCancel={() => setEditing(null)}
           onSaveTask={saveTask}
           onSaveRoom={saveRoom}
+          view={managementView}
+          onView={setManagementView}
         />
       )}
       {section === "Uživatelé" && profile.is_owner && (
@@ -568,65 +623,28 @@ export default function App() {
         />
       )}
       {section === "Kalendář" && (
-        <Placeholder
-          title="Plán úklidu"
-          text="Připraveno pro budoucí propojení sdíleného Google Kalendáře a kontrolu kolizí školních akcí."
+        <CleaningCalendar
+          records={cleaningDays}
+          available={cleaningDaysAvailable}
+          canManage={canManageOperations(profile)}
+          buildingId={planOptions.buildings.find((item) => item.name === "Škola")?.id ?? ""}
+          onSave={saveCleaningDay}
+          onCancel={cancelCleaningDay}
         />
       )}
-      {section === "Zásoby" && (
-        <Placeholder
-          title="Zásoby"
-          text="Datový model zásob je připraven. Správu zásob doplníme v další fázi."
+      {section === "Provoz" && <OperationsScreen data={operations} />}
+      {section === "Více" && (
+        <MoreScreen
+          profile={profile}
+          pendingCount={pendingCount}
+          onOpenPlan={() => openManagement("plan")}
+          onOpenRooms={() => openManagement("rooms")}
+          onOpenUsers={async () => {
+            setUsers(await schoolRepository.users());
+            setSection("Uživatelé");
+          }}
+          onOpenCleaningDays={() => setSection("Kalendář")}
         />
-      )}
-      {section === "Praní" && (
-        <Placeholder
-          title="Praní"
-          text="Datový model praní je samostatný a nezapočítává se do docházky."
-        />
-      )}
-      {section === "Závady" && (
-        <Placeholder
-          title="Závady"
-          text="Datový model závad a budoucích fotografií je připraven."
-        />
-      )}
-      {section === "Nastavení" && (
-        <section className="panel">
-          <h2>Budovy a výchozí směny</h2>
-          <div className="building">
-            <b>Škola</b>
-            <span>aktivní budova</span>
-          </div>
-          <div className="building muted">
-            <b>Školka</b>
-            <span>připravena k přidání</span>
-          </div>
-          {defaultShifts.map((shift) => (
-            <div className="shift" key={shift.worker}>
-              <span>{shift.worker}</span>
-              <span>
-                {shift.start}–{shift.end}
-              </span>
-            </div>
-          ))}
-          <p className="hint">
-            Přihlášen: {profile.full_name} ·{" "}
-            {roleLabel(accessRole(profile))}
-          </p>
-          {canManageOperations(profile) && (
-            <div className="settings-more">
-              <h2>Více</h2>
-              <button type="button" onClick={() => setSection("Správa")}>
-                <span>
-                  <b>Správa úklidu</b>
-                  <small>Plán úklidu a místnosti</small>
-                </span>
-                <i aria-hidden="true">›</i>
-              </button>
-            </div>
-          )}
-        </section>
       )}
       <nav>
         {navigation.map((item) => (
@@ -637,6 +655,11 @@ export default function App() {
           >
             <i>{icon[item]}</i>
             <span>{item}</span>
+            {item === "Více" && pendingCount > 0 && (
+              <em className="nav-badge" aria-label={`${pendingCount} čeká na schválení`}>
+                {pendingCount}
+              </em>
+            )}
           </button>
         ))}
       </nav>
@@ -996,6 +1019,7 @@ function AttendanceDashboard({
           </p>
         </footer>
       </section>
+      <MonthlyAttendanceReport records={records} now={now} workerName={selectedName} />
       <AttendanceHistory
         records={records}
         now={now}
@@ -1025,6 +1049,63 @@ function AttendanceDashboard({
           }}
         />
       )}
+    </section>
+  );
+}
+
+function MonthlyAttendanceReport({
+  records,
+  now,
+  workerName,
+}: {
+  records: Attendance[];
+  now: Date;
+  workerName: string;
+}) {
+  const availableMonths = [...new Set([
+    localDateKey(now).slice(0, 7),
+    ...records.map((record) => record.date.slice(0, 7)),
+  ])].sort().reverse();
+  const [month, setMonth] = useState(availableMonths[0]);
+  useEffect(() => {
+    if (!availableMonths.includes(month)) setMonth(availableMonths[0]);
+  }, [availableMonths, month]);
+  const monthRecords = records
+    .filter((record) => record.date.startsWith(month))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
+  const monthMs = sumDuration(monthRecords, now);
+  const year = month.slice(0, 4);
+  const yearToMonthMs = sumDuration(
+    records.filter((record) => record.date.startsWith(year) && record.date.slice(0, 7) <= month),
+    now,
+  );
+  return (
+    <section className="monthly-report">
+      <div className="section-heading">
+        <div><p className="eyebrow">MĚSÍČNÍ VÝKAZ</p><h2>{workerName}</h2></div>
+        <select value={month} onChange={(event) => setMonth(event.target.value)} aria-label="Měsíc výkazu">
+          {availableMonths.map((value) => (
+            <option key={value} value={value}>
+              {new Intl.DateTimeFormat("cs-CZ", { month: "long", year: "numeric" }).format(new Date(`${value}-01T12:00:00`))}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="monthly-report-summary">
+        <span>Měsíc <b>{formatClockDuration(monthMs)}</b></span>
+        <span>Rok průběžně <b>{formatClockDuration(yearToMonthMs)}</b></span>
+      </div>
+      <div className="monthly-shifts">
+        {monthRecords.map((record) => (
+          <div key={record.id}>
+            <span>{new Intl.DateTimeFormat("cs-CZ").format(new Date(`${record.date}T12:00:00`))}</span>
+            <span>{formatTime(record.start)}–{record.end ? formatTime(record.end) : "probíhá"}</span>
+            <b>{formatClockDuration(shiftDuration(record, now))}</b>
+          </div>
+        ))}
+        {!monthRecords.length && <p className="hint">V tomto měsíci nejsou evidované směny.</p>}
+      </div>
+      <small>Výkaz je aktuální přehled vypočtený z docházky. Schvalování a export zatím nejsou součástí této verze.</small>
     </section>
   );
 }
@@ -1379,6 +1460,8 @@ function Management({
   onCancel,
   onSaveTask,
   onSaveRoom,
+  view,
+  onView,
 }: {
   tasks: Task[];
   options: PlanOptions;
@@ -1387,14 +1470,15 @@ function Management({
   onCancel: () => void;
   onSaveTask: (task: Task) => Promise<void>;
   onSaveRoom: (room: ManagedRoom) => Promise<void>;
+  view: "plan" | "rooms";
+  onView: (view: "plan" | "rooms") => void;
 }) {
-  const [view, setView] = useState<"plan" | "rooms">("plan");
   return (
     <>
       <div className="management-tabs" role="tablist" aria-label="Správa školy">
         <button
           className={view === "plan" ? "active" : ""}
-          onClick={() => setView("plan")}
+          onClick={() => onView("plan")}
           role="tab"
           aria-selected={view === "plan"}
         >
@@ -1402,7 +1486,7 @@ function Management({
         </button>
         <button
           className={view === "rooms" ? "active" : ""}
-          onClick={() => setView("rooms")}
+          onClick={() => onView("rooms")}
           role="tab"
           aria-selected={view === "rooms"}
         >
@@ -1419,7 +1503,7 @@ function Management({
           onSave={onSaveTask}
         />
       ) : (
-        <RoomManager options={options} onSave={onSaveRoom} />
+        <RoomManager options={options} tasks={tasks} onSave={onSaveRoom} />
       )}
     </>
   );
@@ -1440,13 +1524,14 @@ function PlanManager({
   onCancel: () => void;
   onSave: (task: Task) => Promise<void>;
 }) {
-  const addTask = () =>
+  const addTask = (room?: PlanOptions["rooms"][number]) =>
     onEdit({
       id: "",
-      room: "Společný úkol",
-      floor: "Společné úkoly",
-      floorSort: -1,
-      building: "Škola",
+      roomId: room?.id,
+      room: room?.name ?? "Společný úkol",
+      floor: room?.floor ?? "Společné úkoly",
+      floorSort: room?.floorSort ?? -1,
+      building: room?.building ?? "Škola",
       title: "",
       activityType: "other",
       frequency: "denně",
@@ -1458,6 +1543,8 @@ function PlanManager({
       monthlyDay: null,
       active: true,
     });
+  const floors = [...options.floors].sort((a, b) => a.sortOrder - b.sortOrder);
+  const commonTasks = tasks.filter((task) => !task.roomId);
   return (
     <section className="plan-manager">
       <p className="hint">
@@ -1467,41 +1554,61 @@ function PlanManager({
       {editing ? (
         <TaskEditor
           task={editing}
+          tasks={tasks}
           options={options}
           onCancel={onCancel}
           onSave={onSave}
         />
       ) : (
         <>
-          <button className="add-task" onClick={addTask}>
-            + Nový úkol
-          </button>
-          <div className="plan-list">
-            {[...tasks]
-              .sort(
-                (a, b) =>
-                  a.floorSort - b.floorSort ||
-                  a.room.localeCompare(b.room, "cs") ||
-                  a.sortOrder - b.sortOrder,
-              )
-              .map((task) => (
-                <button
-                  key={task.id}
-                  className="plan-row"
-                  onClick={() => onEdit({ ...task })}
-                >
-                  <span>
-                    <b>
-                      {task.floor} · {task.room}
-                    </b>
-                    <small>
-                      {task.title} · {task.frequency}
-                      {task.active ? "" : " · neaktivní"}
-                    </small>
-                  </span>
-                  <i>Upravit</i>
-                </button>
-              ))}
+          <div className="admin-tree">
+            {floors.map((floor) => {
+              const rooms = options.rooms
+                .filter((room) => room.floorId === floor.id)
+                .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "cs"));
+              const floorTaskCount = rooms.reduce(
+                (sum, room) => sum + tasks.filter((task) => task.roomId === room.id && task.active).length,
+                0,
+              );
+              return (
+                <details key={floor.id} className="admin-floor">
+                  <summary><b>{floor.name}</b><span>{floorTaskCount} úkolů</span></summary>
+                  {rooms.map((room) => {
+                    const roomTasks = tasks
+                      .filter((task) => task.roomId === room.id)
+                      .sort((a, b) => a.sortOrder - b.sortOrder);
+                    return (
+                      <details key={room.id} className="admin-room">
+                        <summary>
+                          <span><b>{room.name}</b>{!room.active && <small>neaktivní</small>}</span>
+                          <span>{roomTasks.filter((task) => task.active).length}</span>
+                        </summary>
+                        <div className="admin-actions-list">
+                          {roomTasks.map((task) => (
+                            <button key={task.id} className={task.active ? "plan-row" : "plan-row inactive"} onClick={() => onEdit({ ...task })}>
+                              <span><b>{task.title}</b><small>{formatTaskSchedule(task)}{task.prerequisite ? " · po předchozí činnosti" : ""}</small></span>
+                              <i>Upravit</i>
+                            </button>
+                          ))}
+                          <button className="add-task compact" onClick={() => addTask(room)}>+ Přidat činnost</button>
+                        </div>
+                      </details>
+                    );
+                  })}
+                </details>
+              );
+            })}
+            <details className="admin-floor">
+              <summary><b>Společné úkoly</b><span>{commonTasks.filter((task) => task.active).length} úkolů</span></summary>
+              <div className="admin-actions-list">
+                {commonTasks.sort((a, b) => a.sortOrder - b.sortOrder).map((task) => (
+                  <button key={task.id} className={task.active ? "plan-row" : "plan-row inactive"} onClick={() => onEdit({ ...task })}>
+                    <span><b>{task.title}</b><small>{formatTaskSchedule(task)}</small></span><i>Upravit</i>
+                  </button>
+                ))}
+                <button className="add-task compact" onClick={() => addTask()}>+ Přidat společný úkol</button>
+              </div>
+            </details>
           </div>
         </>
       )}
@@ -1511,9 +1618,11 @@ function PlanManager({
 
 function RoomManager({
   options,
+  tasks,
   onSave,
 }: {
   options: PlanOptions;
+  tasks: Task[];
   onSave: (room: ManagedRoom) => Promise<void>;
 }) {
   const school =
@@ -1522,31 +1631,22 @@ function RoomManager({
   const schoolFloors = options.floors
     .filter((floor) => !school || floor.buildingId === school.id)
     .sort((a, b) => a.sortOrder - b.sortOrder);
-  const [selectedFloorId, setSelectedFloorId] = useState("");
   const [editingRoom, setEditingRoom] = useState<ManagedRoom | null>(null);
-  const activeFloorId = schoolFloors.some(
-    (floor) => floor.id === selectedFloorId,
-  )
-    ? selectedFloorId
-    : (schoolFloors[0]?.id ?? "");
-  const rooms = options.rooms
-    .filter((room) => room.floorId === activeFloorId)
-    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "cs"));
-  const addRoom = () => {
-    const floor = schoolFloors.find((item) => item.id === activeFloorId);
+  const addRoom = (floorId: string) => {
+    const floor = schoolFloors.find((item) => item.id === floorId);
     if (!floor || !school) return;
+    const floorRooms = options.rooms.filter((room) => room.floorId === floor.id);
     setEditingRoom({
       id: "",
       buildingId: school.id,
       floorId: floor.id,
       name: "",
       active: true,
-      sortOrder: (rooms[rooms.length - 1]?.sortOrder ?? 0) + 10,
+      sortOrder: Math.max(0, ...floorRooms.map((room) => room.sortOrder)) + 10,
     });
   };
   const save = async (room: ManagedRoom) => {
     await onSave(room);
-    setSelectedFloorId(room.floorId ?? "");
     setEditingRoom(null);
   };
   return (
@@ -1560,58 +1660,25 @@ function RoomManager({
         />
       ) : (
         <>
-          <label className="floor-picker">
-            Patro / sekce
-            <select
-              value={activeFloorId}
-              onChange={(event) => setSelectedFloorId(event.target.value)}
-            >
-              {schoolFloors.map((floor) => (
-                <option key={floor.id} value={floor.id}>
-                  {floor.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="room-manager-heading">
-            <div>
-              <h2>
-                {schoolFloors.find((floor) => floor.id === activeFloorId)
-                  ?.name ?? "Místnosti"}
-              </h2>
-              <small>{rooms.length} místností</small>
-            </div>
-            <button onClick={addRoom}>+ Místnost</button>
-          </div>
-          <div className="room-admin-list">
-            {rooms.map((room) => (
-              <button
-                key={room.id}
-                className={room.active ? "room-admin-row" : "room-admin-row inactive"}
-                onClick={() =>
-                  setEditingRoom({
-                    id: room.id,
-                    buildingId: room.buildingId,
-                    floorId: room.floorId,
-                    name: room.name,
-                    active: room.active,
-                    sortOrder: room.sortOrder,
-                  })
-                }
-              >
-                <span>
-                  <b>{room.name}</b>
-                  <small>
-                    Pořadí {room.sortOrder}
-                    {room.active ? "" : " · neaktivní"}
-                  </small>
-                </span>
-                <i>Upravit</i>
-              </button>
-            ))}
-            {rooms.length === 0 && (
-              <p className="hint">V této sekci zatím nejsou žádné místnosti.</p>
-            )}
+          <div className="admin-tree">
+            {schoolFloors.map((floor) => {
+              const rooms = options.rooms.filter((room) => room.floorId === floor.id)
+                .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "cs"));
+              return (
+                <details key={floor.id} className="admin-floor">
+                  <summary><b>{floor.name}</b><span>{rooms.length} místností</span></summary>
+                  <div className="room-admin-list">
+                    {rooms.map((room) => (
+                      <button key={room.id} className={room.active ? "room-admin-row" : "room-admin-row inactive"} onClick={() => setEditingRoom({ id: room.id, buildingId: room.buildingId, floorId: room.floorId, name: room.name, active: room.active, sortOrder: room.sortOrder })}>
+                        <span><b>{room.name}</b><small>{tasks.filter((task) => task.roomId === room.id && task.active).length} aktivních činností · pořadí {room.sortOrder}{room.active ? "" : " · neaktivní"}</small></span>
+                        <i>Upravit</i>
+                      </button>
+                    ))}
+                    <button className="add-task compact" onClick={() => addRoom(floor.id)}>+ Přidat místnost</button>
+                  </div>
+                </details>
+              );
+            })}
           </div>
         </>
       )}
@@ -1740,11 +1807,13 @@ function RoomEditor({
 
 function TaskEditor({
   task,
+  tasks,
   options,
   onCancel,
   onSave,
 }: {
   task: Task;
+  tasks: Task[];
   options: PlanOptions;
   onCancel: () => void;
   onSave: (task: Task) => Promise<void>;
@@ -1761,6 +1830,7 @@ function TaskEditor({
       floor: room?.floor ?? "Společné úkoly",
       floorSort: room?.floorSort ?? -1,
       building: room?.building ?? "Škola",
+      prerequisite: undefined,
     }));
   };
   const toggleDay = (day: number) =>
@@ -1869,6 +1939,22 @@ function TaskEditor({
         </label>
       )}
       <label>
+        Předchozí nutná činnost
+        <select
+          value={draft.prerequisite ?? ""}
+          onChange={(event) => update("prerequisite", event.target.value || undefined)}
+        >
+          <option value="">Bez závislosti</option>
+          {tasks
+            .filter((item) => item.id !== draft.id && item.roomId === draft.roomId && item.active)
+            .sort((a, b) => a.sortOrder - b.sortOrder)
+            .map((item) => (
+              <option key={item.id} value={item.id}>{item.title}</option>
+            ))}
+        </select>
+        <small>Například vytření až po zametení nebo vysátí.</small>
+      </label>
+      <label>
         Pořadí
         <input
           type="number"
@@ -1911,8 +1997,15 @@ function UserManagement({
   currentUserId: string;
   onSave: (id: string, role: AccessRole, active: boolean) => Promise<void>;
 }) {
+  const pendingCount = users.filter((user) => user.active && user.role === "pending").length;
   return (
     <section className="user-management">
+      {pendingCount > 0 && (
+        <div className="pending-summary">
+          <b>{pendingCount === 1 ? "1 uživatel čeká na schválení" : `${pendingCount} uživatelé čekají na schválení`}</b>
+          <span>Čekající účty jsou zobrazené jako první.</span>
+        </div>
+      )}
       <p className="hint">
         Nové účty čekají na schválení. Role ani hlavního správce nelze změnit
         samotným uživatelem.
@@ -1952,7 +2045,7 @@ function UserAccessCard({
   }, [user.role, user.active]);
   const locked = user.isOwner;
   return (
-    <article className={`user-card ${active ? "" : "inactive"}`}>
+    <article className={`user-card ${active ? "" : "inactive"} ${user.role === "pending" ? "pending" : ""}`}>
       <header>
         <span>
           <b>{user.fullName}</b>
@@ -2013,6 +2106,252 @@ function formatProfileDate(value?: string) {
     : new Intl.DateTimeFormat("cs-CZ", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
+function cleaningDayHeading(context: CleaningDayContext, visibleCount: number) {
+  if (context.kind === "preview") return "TESTOVACÍ NÁHLED";
+  if (context.kind === "extraordinary") return "MIMOŘÁDNÝ ÚKLID";
+  if (context.kind === "rescheduled") return "PŘESUNUTÝ ÚKLID";
+  if (context.kind === "moved_away") return "ÚKLID PŘESUNUT";
+  return visibleCount > 0 ? "STANDARDNÍ ÚKLID" : "ŽÁDNÝ ÚKLID DNES";
+}
+
+function cleaningDayDescription(context: CleaningDayContext) {
+  if (context.kind === "preview") return "Pouze náhled, dokončování je vypnuté.";
+  if (context.kind === "rescheduled") return `${context.title} · plán původně ${formatDate(context.scheduleDate)}`;
+  if (context.kind === "extraordinary") return context.title;
+  if (context.kind === "moved_away") return `Nový termín: ${formatDate(context.movedTo)}`;
+  return "";
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("cs-CZ").format(new Date(`${value}T12:00:00`));
+}
+
+function formatTaskSchedule(task: Task) {
+  if (task.frequency === "měsíčně") return `Měsíčně · ${task.monthlyDay ?? 1}. den`;
+  if (task.frequency === "mimořádně") return "Mimořádně";
+  const days = task.scheduleDays.map((day) => weekdays[day - 1]).filter(Boolean).join(" / ");
+  return `${task.frequency}${days ? ` · ${days}` : ""}${task.active ? "" : " · neaktivní"}`;
+}
+
+function MoreScreen({
+  profile,
+  pendingCount,
+  onOpenPlan,
+  onOpenRooms,
+  onOpenUsers,
+  onOpenCleaningDays,
+}: {
+  profile: Profile;
+  pendingCount: number;
+  onOpenPlan: () => void;
+  onOpenRooms: () => void;
+  onOpenUsers: () => Promise<void>;
+  onOpenCleaningDays: () => void;
+}) {
+  const admin = canManageOperations(profile);
+  return (
+    <div className="more-screen">
+      {profile.is_owner && pendingCount > 0 && (
+        <button className="pending-alert" onClick={() => void onOpenUsers()}>
+          <b>{pendingCount === 1 ? "1 uživatel čeká na schválení" : `${pendingCount} uživatelé čekají na schválení`}</b>
+          <span>Otevřít správu uživatelů</span>
+        </button>
+      )}
+      {admin && (
+        <section className="panel admin-menu">
+          <p className="eyebrow">SPRÁVA APLIKACE</p>
+          <button onClick={onOpenPlan}><span><b>Plán úklidu</b><small>Patra, místnosti a činnosti</small></span><i>›</i></button>
+          <button onClick={onOpenRooms}><span><b>Místnosti</b><small>Struktura školy a aktivní místnosti</small></span><i>›</i></button>
+          <button onClick={onOpenCleaningDays}><span><b>Úklidové dny</b><small>Mimořádné úklidy a přesuny</small></span><i>›</i></button>
+          {profile.is_owner && (
+            <button onClick={() => void onOpenUsers()}>
+              <span><b>Uživatelé</b><small>Role a čekající účty</small></span>
+              <i>{pendingCount > 0 ? pendingCount : "›"}</i>
+            </button>
+          )}
+        </section>
+      )}
+      <section className="panel">
+        <h2>Nastavení</h2>
+        <div className="building"><b>Škola</b><span>aktivní budova</span></div>
+        <div className="building muted"><b>Školka</b><span>připravena k přidání</span></div>
+        {defaultShifts.map((shift) => (
+          <div className="shift" key={shift.worker}><span>{shift.worker}</span><span>{shift.start}–{shift.end}</span></div>
+        ))}
+        <p className="hint">Přihlášen: {profile.full_name} · {roleLabel(accessRole(profile))}</p>
+      </section>
+    </div>
+  );
+}
+
+function OperationsScreen({ data }: { data: OperationsData }) {
+  const lowStock = data.stock.filter((item) => item.quantity <= item.minimumQuantity);
+  const openIncidents = data.incidents.filter((item) => item.status !== "resolved");
+  return (
+    <div className="operations-screen">
+      <section className="panel">
+        <p className="eyebrow">CO CHYBÍ / CO KOUPIT</p>
+        {lowStock.map((item) => (
+          <div className="operation-row" key={item.id}>
+            <b>{item.name}</b><span>{item.quantity} {item.unit} · minimum {item.minimumQuantity}</span>
+          </div>
+        ))}
+        {!lowStock.length && <p className="hint">Žádná zásoba není pod minimem.</p>}
+      </section>
+      <section className="panel">
+        <p className="eyebrow">CO JE ROZBITÉ / CO OPRAVIT</p>
+        {openIncidents.map((item) => (
+          <div className="operation-row" key={item.id}>
+            <b>{item.description}</b><span>{formatDate(item.date)} · {incidentStatus(item.status)}</span>
+          </div>
+        ))}
+        {!openIncidents.length && <p className="hint">Nejsou evidované žádné otevřené závady.</p>}
+      </section>
+    </div>
+  );
+}
+
+const incidentStatus = (status: string) => ({ reported: "nahlášeno", in_progress: "řeší se", resolved: "vyřešeno" })[status] ?? status;
+
+function CleaningCalendar({
+  records,
+  available,
+  canManage,
+  buildingId,
+  onSave,
+  onCancel,
+}: {
+  records: CleaningDayRecord[];
+  available: boolean;
+  canManage: boolean;
+  buildingId: string;
+  onSave: (draft: CleaningDayDraft) => Promise<void>;
+  onCancel: (id: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState<CleaningDayRecord | "new" | null>(null);
+  const today = localDateKey();
+  const future = records.filter((item) => item.executionDate >= today).sort((a, b) => a.executionDate.localeCompare(b.executionDate));
+  const upcoming = upcomingCleaningDays(records, 28).slice(0, 10);
+  return (
+    <div className="cleaning-calendar">
+      <section className="panel calendar-intro">
+        <p className="eyebrow">PRAVIDELNÝ PLÁN</p>
+        <b>Pondělí · středa · pátek</b>
+        <small>Výjimky níže jsou uložené samostatně. Google Calendar zatím není připojený.</small>
+      </section>
+      {!available && (
+        <div className="notice">Správa skutečných mimořádných a přesunutých dnů bude dostupná po zkontrolování a aplikaci migrace 01300.</div>
+      )}
+      {available && canManage && !editing && (
+        <button className="primary-action" onClick={() => setEditing("new")}>+ Přidat úklidový den</button>
+      )}
+      {available && editing && (
+        <CleaningDayEditor
+          record={editing === "new" ? undefined : editing}
+          buildingId={buildingId}
+          onCancel={() => setEditing(null)}
+          onSave={async (draft) => { await onSave(draft); setEditing(null); }}
+        />
+      )}
+      <section className="calendar-list">
+        <h2>Nadcházející úklidy</h2>
+        {upcoming.map((item) => (
+          <article key={`${item.date}-${item.label}`}>
+            <div><small>{item.label}</small><b>{formatDate(item.date)}</b>{item.detail && <span>{item.detail}</span>}</div>
+          </article>
+        ))}
+      </section>
+      <section className="calendar-list">
+        <h2>Plánované výjimky</h2>
+        {future.map((item) => (
+          <article key={item.id} className={item.status === "cancelled" ? "cancelled" : ""}>
+            <div>
+              <small>{item.kind === "extraordinary" ? "MIMOŘÁDNÝ ÚKLID" : "PŘESUNUTÝ ÚKLID"}</small>
+              <b>{item.title}</b>
+              <span>{formatDate(item.executionDate)}{item.sourceDate ? ` · původně ${formatDate(item.sourceDate)}` : ""}</span>
+              {item.note && <p>{item.note}</p>}
+            </div>
+            {canManage && item.status === "active" && (
+              <div className="calendar-actions">
+                <button onClick={() => setEditing(item)}>Upravit</button>
+                <button className="danger-link" onClick={() => { if (window.confirm("Opravdu chcete tento úklidový den zrušit?")) void onCancel(item.id); }}>Zrušit</button>
+              </div>
+            )}
+            {item.status === "cancelled" && <strong>Zrušeno</strong>}
+          </article>
+        ))}
+        {available && !future.length && <p className="hint">Nejsou naplánované žádné budoucí výjimky.</p>}
+      </section>
+    </div>
+  );
+}
+
+function upcomingCleaningDays(records: CleaningDayRecord[], days: number) {
+  const result: { date: string; label: string; detail?: string }[] = [];
+  const active = records.filter((item) => item.status === "active");
+  const start = new Date(`${localDateKey()}T12:00:00`);
+  for (let offset = 0; offset < days; offset += 1) {
+    const date = new Date(start);
+    date.setDate(start.getDate() + offset);
+    const key = localDateKey(date);
+    const executing = active.find((item) => item.executionDate === key);
+    if (executing) {
+      result.push({
+        date: key,
+        label: executing.kind === "extraordinary" ? "MIMOŘÁDNÝ ÚKLID" : "PŘESUNUTÝ ÚKLID",
+        detail: executing.kind === "rescheduled" ? `${executing.title} · původně ${formatDate(executing.sourceDate)}` : executing.title,
+      });
+      continue;
+    }
+    if (active.some((item) => item.kind === "rescheduled" && item.sourceDate === key)) continue;
+    if ([1, 3, 5].includes(date.getDay())) result.push({ date: key, label: "STANDARDNÍ ÚKLID" });
+  }
+  return result;
+}
+
+function CleaningDayEditor({
+  record,
+  buildingId,
+  onCancel,
+  onSave,
+}: {
+  record?: CleaningDayRecord;
+  buildingId: string;
+  onCancel: () => void;
+  onSave: (draft: CleaningDayDraft) => Promise<void>;
+}) {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const [kind, setKind] = useState<"extraordinary" | "rescheduled">(record?.kind ?? "extraordinary");
+  const [executionDate, setExecutionDate] = useState(record?.executionDate ?? localDateKey(tomorrow));
+  const [sourceDate, setSourceDate] = useState(record?.sourceDate ?? localDateKey());
+  const [title, setTitle] = useState(record?.title ?? "");
+  const [note, setNote] = useState(record?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  return (
+    <form className="task-editor cleaning-day-editor" onSubmit={async (event) => {
+      event.preventDefault();
+      setSaving(true);
+      try {
+        await onSave({ id: record?.id, buildingId, kind, executionDate, sourceDate: kind === "rescheduled" ? sourceDate : null, title, note });
+      } finally { setSaving(false); }
+    }}>
+      <h2>{record ? "Upravit úklidový den" : "Nový úklidový den"}</h2>
+      <fieldset><legend>Typ</legend>
+        <label className="radio"><input type="radio" checked={kind === "extraordinary"} onChange={() => setKind("extraordinary")} /> Mimořádný úklid</label>
+        <label className="radio"><input type="radio" checked={kind === "rescheduled"} onChange={() => setKind("rescheduled")} /> Přesun pravidelného úklidu</label>
+      </fieldset>
+      {kind === "rescheduled" && <label>Původní datum<input type="date" min={localDateKey()} value={sourceDate ?? ""} onChange={(event) => setSourceDate(event.target.value)} required /></label>}
+      <label>{kind === "rescheduled" ? "Nový termín" : "Datum"}<input type="date" value={executionDate} min={localDateKey()} onChange={(event) => setExecutionDate(event.target.value)} required /></label>
+      <label>Název<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={kind === "extraordinary" ? "Generální úklid" : "Přesun kvůli školní akci"} required /></label>
+      <label>Rozsah<input value="Celá škola · běžný kompletní úklid" readOnly /></label>
+      <label>Poznámka<textarea value={note ?? ""} onChange={(event) => setNote(event.target.value)} rows={3} /></label>
+      <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+    </form>
+  );
+}
+
 function AccessStateScreen({
   title,
   text,
@@ -2036,15 +2375,6 @@ function AccessStateScreen({
   );
 }
 
-function Placeholder({ title, text }: { title: string; text: string }) {
-  return (
-    <section className="empty">
-      <span>○</span>
-      <h2>{title}</h2>
-      <p>{text}</p>
-    </section>
-  );
-}
 function SetupScreen() {
   return (
     <main className="app">
