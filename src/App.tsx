@@ -483,7 +483,7 @@ export default function App() {
       ? tasks.filter((task) => task.active && task.dueToday)
       : tasks;
   const navigation = sections.filter((item) => {
-    if (item === "Správa") return canManageOperations(profile);
+    if (item === "Správa") return false;
     if (item === "Uživatelé") return Boolean(profile.is_owner);
     if (item === "Docházka") return canWork(profile);
     if (accessRole(profile) === "visitor") return ["Dnes", "Nastavení"].includes(item);
@@ -614,6 +614,18 @@ export default function App() {
             Přihlášen: {profile.full_name} ·{" "}
             {roleLabel(accessRole(profile))}
           </p>
+          {canManageOperations(profile) && (
+            <div className="settings-more">
+              <h2>Více</h2>
+              <button type="button" onClick={() => setSection("Správa")}>
+                <span>
+                  <b>Správa úklidu</b>
+                  <small>Plán úklidu a místnosti</small>
+                </span>
+                <i aria-hidden="true">›</i>
+              </button>
+            </div>
+          )}
         </section>
       )}
       <nav>

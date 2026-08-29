@@ -903,6 +903,33 @@ h2 {
   background: #165e56;
   color: #fff;
 }
+.settings-more {
+  margin-top: 22px;
+}
+.settings-more button {
+  width: 100%;
+  border: 1px solid #dbe8e4;
+  border-radius: 14px;
+  background: #fff;
+  color: #173d38;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  text-align: left;
+}
+.settings-more button span {
+  display: grid;
+  gap: 3px;
+}
+.settings-more button small {
+  color: #728782;
+}
+.settings-more button i {
+  font-size: 24px;
+  font-style: normal;
+}
 nav {
   position: fixed;
   bottom: 0;
