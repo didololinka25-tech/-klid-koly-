@@ -6,9 +6,11 @@ const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 const repository = readFileSync(new URL('./schoolRepository.ts', import.meta.url), 'utf8')
 const types = readFileSync(new URL('./types.ts', import.meta.url), 'utf8')
 const migration12 = readFileSync(new URL('../supabase/migrations/20260828001200_remove_disinfect_and_ab_windows.sql', import.meta.url), 'utf8')
+const migration11 = readFileSync(new URL('../supabase/migrations/20260828001100_team_cleaning_and_access_roles.sql', import.meta.url), 'utf8')
 const migration13 = readFileSync(new URL('../supabase/migrations/20260829001300_cleaning_day_exceptions.sql', import.meta.url), 'utf8')
 const migration14 = readFileSync(new URL('../supabase/migrations/20260829001400_extraordinary_cleaning_tasks.sql', import.meta.url), 'utf8')
 const migration15 = readFileSync(new URL('../supabase/migrations/20260829001500_simple_operations_lists.sql', import.meta.url), 'utf8')
+const migration16 = readFileSync(new URL('../supabase/migrations/20260829001600_profile_and_attendance_settings.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
   assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
@@ -91,4 +93,32 @@ test('kritické mobilní zápisy jsou chráněné proti opakovanému klepnutí',
   assert.match(app, /disabled=\{saving\}/)
   assert.match(app, /disabled=\{!task\.canComplete \|\| pendingTaskIds\.has\(task\.id\)\}/)
   assert.match(app, /mutationLock\.current/)
+})
+
+test('vlastní jméno se mění pouze podle auth.uid a nemění autorizaci', () => {
+  assert.match(migration16, /where id = auth\.uid\(\) and active/i)
+  assert.match(migration16, /update_own_profile_name/)
+  assert.doesNotMatch(migration16, /where\s+full_name\s*=/i)
+  assert.doesNotMatch(migration16, /set\s+access_role[\s\S]*update_own_profile_name/i)
+  assert.match(repository, /rpc\('update_own_profile_name'/)
+})
+
+test('globální DPP limit čtou schválení uživatelé a mění pouze admin', () => {
+  assert.match(migration16, /using \(public\.can_view_school_data\(\)\)/)
+  assert.match(migration16, /if not public\.is_admin\(\)/)
+  assert.match(migration16, /revoke all on public\.app_settings from anon, authenticated/)
+  assert.match(migration16, /grant select on public\.app_settings to authenticated/)
+})
+
+test('visitor ani pending nezískají cizí attendance data', () => {
+  assert.match(migration11, /team reads attendance[\s\S]*public\.can_work_in_app\(\)[\s\S]*worker_id = auth\.uid\(\) or public\.is_admin\(\)/i)
+  assert.match(app, /if \(canWork\(activeProfile\)\)/)
+  assert.doesNotMatch(repository, /full_name.*attendance|attendance.*full_name/i)
+})
+
+test('docházka a report používají building_id bez vytváření paralelní historie', () => {
+  assert.match(repository, /building_id,started_at,ended_at,attendance_date/)
+  assert.match(repository, /buildingName: building\?\.name \?\? 'Škola'/)
+  assert.doesNotMatch(migration16, /create table.*attendance/is)
+  assert.doesNotMatch(migration16, /delete\s+from/i)
 })

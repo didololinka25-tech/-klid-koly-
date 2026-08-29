@@ -9,4 +9,14 @@ export type Task = {
   roomActive?: boolean
 }
 export type Shift = { worker: Worker; start: string; end: string }
-export type Attendance = { id: string; workerId: string; start: string; end?: string; date: string; note?: string; editedAt?: string }
+export type Attendance = {
+  id: string
+  workerId: string
+  buildingId?: string
+  buildingName: string
+  start: string
+  end?: string
+  date: string
+  note?: string
+  editedAt?: string
+}

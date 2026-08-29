@@ -111,6 +111,23 @@ h1 {
   color: #165e56;
   font-weight: 900;
 }
+.attendance-workplace {
+  display: grid;
+  gap: 3px;
+  min-width: 110px;
+  color: #d9f1eb;
+  font-size: 11px;
+  font-weight: 800;
+}
+.attendance-workplace select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid #80b8ad;
+  border-radius: 9px;
+  background: #fff;
+  color: #173d38;
+  padding: 7px;
+}
 .today-attendance .attendance-alert {
   grid-column: 1 / -1;
 }
@@ -954,11 +971,28 @@ h2 {
 }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 10px; }
 .section-heading h2 { margin: 0; }
-.section-heading select { max-width: 48%; min-height: 40px; border: 1px solid #c7ddd6; border-radius: 9px; background: #fff; padding: 7px; }
+.section-heading select,
+.section-heading input { max-width: 48%; min-height: 40px; border: 1px solid #c7ddd6; border-radius: 9px; background: #fff; padding: 7px; }
 .monthly-report-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .monthly-report-summary span { padding: 10px; border-radius: 10px; background: #edf5f3; display: grid; gap: 3px; font-size: 12px; }
+.monthly-report-summary .report-dpp { grid-column: 1 / -1; }
 .monthly-shifts > div { display: grid; grid-template-columns: 1fr 1fr auto; gap: 7px; padding: 8px 0; border-bottom: 1px solid #e8f0ed; font-size: 12px; }
 .monthly-report > small { color: #6d827d; line-height: 1.4; }
+.report-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.report-actions button { min-height: 46px; border: 1px solid #bcd4ce; border-radius: 10px; background: #fff; color: #165e56; font-weight: 800; }
+.report-actions button.primary { border-color: #165e56; background: #165e56; color: #fff; }
+.report-preview { display: grid; gap: 14px; padding: 14px; border: 1px solid #c7ddd6; border-radius: 12px; background: #fff; min-width: 0; }
+.report-preview > header { display: grid; gap: 3px; }
+.report-preview > header h3 { margin: 0 0 6px; }
+.report-preview > header span { color: #526d67; font-size: 12px; overflow-wrap: anywhere; }
+.report-rows { display: grid; gap: 6px; }
+.report-rows article { display: grid; grid-template-columns: 1fr auto; gap: 3px 9px; padding: 9px; border-radius: 9px; background: #f2f7f5; min-width: 0; }
+.report-rows article b { grid-column: 1 / -1; }
+.report-rows article span { color: #637b75; font-size: 12px; overflow-wrap: anywhere; }
+.report-rows article strong { grid-column: 2; grid-row: 2 / span 2; align-self: center; white-space: nowrap; font-size: 12px; }
+.report-preview > footer { display: grid; gap: 5px; padding-top: 10px; border-top: 1px solid #dbe8e4; }
+.report-preview > footer span,
+.report-preview > footer small { color: #637b75; font-size: 12px; }
 .admin-tree { display: grid; gap: 8px; }
 .admin-floor,
 .admin-room { border: 1px solid #dbe8e4; border-radius: 13px; background: #fff; overflow: hidden; }
@@ -983,6 +1017,28 @@ h2 {
 .admin-menu > button small,
 .pending-alert span { color: #6d827d; }
 .admin-menu > button i { font-style: normal; color: #146057; }
+.profile-menu-wrap { position: relative; }
+.profile-menu { position: absolute; z-index: 12; top: 48px; right: 0; width: min(250px, calc(100vw - 34px)); padding: 10px; border: 1px solid #dbe8e4; border-radius: 12px; background: #fff; box-shadow: 0 12px 32px #12332d2b; display: grid; gap: 7px; }
+.profile-menu b { padding: 5px 7px; overflow-wrap: anywhere; }
+.profile-menu button { min-height: 43px; border: 0; border-radius: 8px; background: #edf5f3; color: #165e56; text-align: left; padding: 9px; font-weight: 800; }
+.profile-editor { display: grid; gap: 11px; }
+.profile-editor label { display: grid; gap: 5px; font-size: 12px; font-weight: 800; }
+.profile-editor input { width: 100%; min-width: 0; min-height: 44px; box-sizing: border-box; border: 1px solid #bcd4ce; border-radius: 9px; padding: 9px; font: inherit; }
+.profile-editor input[readonly] { background: #edf3f1; color: #617772; }
+.confirmation-actions button.primary { border-color: #165e56; background: #165e56; color: #fff; }
+.workplace-settings { display: grid; gap: 7px; }
+.workplace-settings > button { width: 100%; min-height: 52px; border: 1px solid #dbe8e4; border-radius: 10px; background: #fff; color: #173d38; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; text-align: left; }
+.workplace-settings > button span { display: grid; gap: 2px; }
+.workplace-settings > button small { color: #6d827d; }
+.workplace-settings > button i { color: #165e56; font-style: normal; font-weight: 800; }
+.workplace-settings > button:disabled { opacity: 1; cursor: default; }
+.workplace-settings > button.add-workplace { justify-content: center; border-style: dashed; color: #165e56; font-weight: 800; }
+.dpp-setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 6px 9px; }
+.dpp-setting label { display: grid; gap: 4px; font-size: 12px; font-weight: 800; }
+.dpp-setting input { width: 100%; min-height: 42px; box-sizing: border-box; border: 1px solid #bcd4ce; border-radius: 9px; padding: 8px; }
+.dpp-setting > span,
+.dpp-setting > small { grid-column: 1 / -1; color: #6d827d; font-size: 12px; line-height: 1.4; }
+.dpp-setting button { min-height: 42px; border: 0; border-radius: 9px; background: #165e56; color: #fff; padding: 8px 11px; font-weight: 800; }
 .pending-alert { border-color: #e4b860; background: #fff5dd; color: #704800; }
 .pending-summary { margin-bottom: 12px; padding: 12px; border-radius: 12px; background: #fff5dd; color: #704800; display: grid; gap: 3px; }
 .user-card.pending { border-color: #dfb45d; }

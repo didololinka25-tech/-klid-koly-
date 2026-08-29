@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { defaultShifts } from "./data";
 import {
   accessRole,
   canManageOperations,
@@ -11,6 +10,7 @@ import {
   type AccessRole,
   type AttendanceSettings,
   type AttendanceWorker,
+  type AppSettings,
   type CleaningDayDraft,
   type CleaningDayRecord,
   type ManagedRoom,
@@ -20,7 +20,13 @@ import {
   type Profile,
   type StockItem,
   type UserProfile,
+  type Workplace,
 } from "./schoolRepository";
+import {
+  buildAttendanceReport,
+  downloadAttendanceReportPdf,
+  reportDuration,
+} from "./attendanceReport";
 import { isSupabaseConfigured } from "./supabase";
 import type { CleaningDayContext } from "./scheduling";
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
@@ -95,6 +101,14 @@ export default function App() {
     plannedShiftsPerWeek: 3,
     configurable: false,
   });
+  const [appSettings, setAppSettings] = useState<AppSettings>({
+    dppAnnualLimitHours: 300,
+    available: false,
+  });
+  const [workplaces, setWorkplaces] = useState<Workplace[]>([]);
+  const [attendanceBuildingId, setAttendanceBuildingId] = useState("");
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [attendanceRefresh, setAttendanceRefresh] = useState(0);
   const [attendanceSaving, setAttendanceSaving] = useState(false);
   const attendanceWriteLock = useRef(false);
@@ -126,8 +140,23 @@ export default function App() {
         setAttendanceView([]);
         setAttendanceWorkers([]);
         setUsers([]);
+        setWorkplaces([]);
         return;
       }
+      const [workplacesResult, appSettingsResult] = await Promise.allSettled([
+        schoolRepository.workplaces(),
+        schoolRepository.appSettings(),
+      ]);
+      if (workplacesResult.status === "fulfilled") {
+        setWorkplaces(workplacesResult.value);
+      } else {
+        setWorkplaces([]);
+      }
+      setAppSettings(
+        appSettingsResult.status === "fulfilled"
+          ? appSettingsResult.value
+          : { dppAnnualLimitHours: 300, available: false },
+      );
       const taskResult = await Promise.resolve(
         schoolRepository.tasks(activeProfile, canManageOperations(activeProfile)),
       ).then(
@@ -215,6 +244,8 @@ export default function App() {
       setAttendanceView([]);
       setAttendanceWorkers([]);
       setSelectedAttendanceWorker("");
+      setWorkplaces([]);
+      setAttendanceBuildingId("");
       if (next) load(next).catch((error) => setNotice(error.message));
     });
     return () => data.subscription.unsubscribe();
@@ -256,6 +287,16 @@ export default function App() {
       })
       .catch((error) => setNotice(error.message));
   }, [profile, selectedAttendanceWorker, attendanceRefresh]);
+  useEffect(() => {
+    const activeWorkplaces = workplaces.filter((item) => item.active);
+    if (!activeWorkplaces.some((item) => item.id === attendanceBuildingId)) {
+      setAttendanceBuildingId(
+        activeWorkplaces.find((item) => item.name === "Škola")?.id ??
+          activeWorkplaces[0]?.id ??
+          "",
+      );
+    }
+  }, [workplaces, attendanceBuildingId]);
   if (!isSupabaseConfigured) return <SetupScreen />;
   if (!session || !profile)
     return (
@@ -402,6 +443,10 @@ export default function App() {
         const optimistic: Attendance = {
           id: `pending-${startedAt.getTime()}`,
           workerId: profile.id,
+          buildingId: attendanceBuildingId,
+          buildingName:
+            workplaces.find((item) => item.id === attendanceBuildingId)?.name ??
+            "Škola",
           start: startedAt.toISOString(),
           date: `${startedAt.getFullYear()}-${String(startedAt.getMonth() + 1).padStart(2, "0")}-${String(startedAt.getDate()).padStart(2, "0")}`,
         };
@@ -409,7 +454,10 @@ export default function App() {
         if ((selectedAttendanceWorker || profile.id) === profile.id) {
           setAttendanceView((records) => replaceRecord(records, optimistic));
         }
-        const saved = await schoolRepository.startAttendance(profile.id);
+        const saved = await schoolRepository.startAttendance(
+          profile.id,
+          attendanceBuildingId,
+        );
         setAttendance((records) => [
           saved,
           ...records.filter(
@@ -443,10 +491,11 @@ export default function App() {
     id: string,
     startedAt: string,
     endedAt?: string,
+    buildingId?: string,
   ) => {
     try {
       setNotice("");
-      await schoolRepository.updateAttendance(id, startedAt, endedAt);
+      await schoolRepository.updateAttendance(id, startedAt, endedAt, buildingId);
       await load(session, profile);
       setAttendanceRefresh((value) => value + 1);
     } catch (error) {
@@ -489,6 +538,60 @@ export default function App() {
           ? error.message
           : "Nastavení směn se nepodařilo uložit.",
       );
+    }
+  };
+  const saveOwnProfile = async (fullName: string) => {
+    try {
+      setNotice("");
+      const savedName = await schoolRepository.updateOwnProfileName(fullName);
+      setProfile((current) =>
+        current ? { ...current, full_name: savedName } : current,
+      );
+      setAttendanceWorkers((current) =>
+        current.map((worker) =>
+          worker.id === profile.id ? { ...worker, name: savedName } : worker,
+        ),
+      );
+      setProfileEditorOpen(false);
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "Profil se nepodařilo uložit.",
+      );
+      throw error;
+    }
+  };
+  const refreshWorkplaces = async () => {
+    setWorkplaces(await schoolRepository.workplaces());
+  };
+  const saveWorkplace = async (workplace: Workplace) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveWorkplace(workplace);
+      await refreshWorkplaces();
+      if (canManageOperations(profile)) {
+        setPlanOptions(await schoolRepository.planOptions());
+      }
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Pracoviště se nepodařilo uložit.",
+      );
+      throw error;
+    }
+  };
+  const saveDppLimit = async (value: number) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveDppAnnualLimit(value);
+      setAppSettings(await schoolRepository.appSettings());
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Roční limit DPP se nepodařilo uložit.",
+      );
+      throw error;
     }
   };
   const saveTask = async (task: Task) => {
@@ -586,14 +689,31 @@ export default function App() {
           <h1>{section}</h1>
           <p className="date">{todayLabel}</p>
         </div>
-        <button
-          className="avatar"
-          aria-label="Odhlásit"
-          title="Odhlásit"
-          onClick={() => schoolRepository.signOut()}
-        >
-          {profile.full_name[0]}
-        </button>
+        <div className="profile-menu-wrap">
+          <button
+            className="avatar"
+            aria-label="Otevřít profil"
+            title="Profil"
+            aria-expanded={profileMenuOpen}
+            onClick={() => setProfileMenuOpen((value) => !value)}
+          >
+            {profile.full_name[0]}
+          </button>
+          {profileMenuOpen && (
+            <div className="profile-menu">
+              <b>{profile.full_name}</b>
+              <button
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  setProfileEditorOpen(true);
+                }}
+              >
+                Upravit profil
+              </button>
+              <button onClick={() => schoolRepository.signOut()}>Odhlásit se</button>
+            </div>
+          )}
+        </div>
       </header>
       {notice && <div className="notice">{notice}</div>}
       {section === "Dnes" && (
@@ -603,6 +723,9 @@ export default function App() {
               records={attendance}
               onClock={clock}
               saving={attendanceSaving}
+              workplaces={workplaces.filter((item) => item.active)}
+              buildingId={attendanceBuildingId}
+              onBuildingChange={setAttendanceBuildingId}
             />
           )}
           <section className="hero">
@@ -653,10 +776,14 @@ export default function App() {
           selectedWorkerId={selectedAttendanceWorker || profile.id}
           onSelectWorker={setSelectedAttendanceWorker}
           settings={attendanceSettings}
+          dppAnnualLimitHours={appSettings.dppAnnualLimitHours}
           currentUserId={profile.id}
           isCaretaker={canManageOperations(profile)}
           onClock={clock}
           clockSaving={attendanceSaving}
+          workplaces={workplaces.filter((item) => item.active)}
+          attendanceBuildingId={attendanceBuildingId}
+          onAttendanceBuildingChange={setAttendanceBuildingId}
           ownRecords={attendance}
           onSaveAttendance={saveAttendance}
           onDeleteAttendance={deleteAttendance}
@@ -695,6 +822,18 @@ export default function App() {
             setSection("Uživatelé");
           }}
           onOpenCleaningDays={() => setSection("Kalendář")}
+          workplaces={workplaces}
+          appSettings={appSettings}
+          onSaveWorkplace={saveWorkplace}
+          onSaveDppLimit={saveDppLimit}
+        />
+      )}
+      {profileEditorOpen && (
+        <ProfileEditor
+          profile={profile}
+          editable={appSettings.available}
+          onCancel={() => setProfileEditorOpen(false)}
+          onSave={saveOwnProfile}
         />
       )}
       <nav>
@@ -718,7 +857,6 @@ export default function App() {
   );
 }
 
-const DPP_YEAR_LIMIT_HOURS = 300;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 
@@ -775,6 +913,7 @@ function attendanceMetrics(
   records: Attendance[],
   now: Date,
   plannedShiftsPerWeek: number,
+  annualLimitHours = 300,
 ) {
   const today = localDateKey(now);
   const year = now.getFullYear();
@@ -802,7 +941,7 @@ function attendanceMetrics(
     now,
   );
   const yearHours = yearMs / HOUR_MS;
-  const remainingHours = Math.max(0, DPP_YEAR_LIMIT_HOURS - yearHours);
+  const remainingHours = Math.max(0, annualLimitHours - yearHours);
   const endOfYear = new Date(year, 11, 31, 23, 59, 59, 999);
   const weeksRemaining = Math.max(
     1,
@@ -851,10 +990,16 @@ function TodayAttendance({
   records,
   onClock,
   saving,
+  workplaces,
+  buildingId,
+  onBuildingChange,
 }: {
   records: Attendance[];
   onClock: () => Promise<void>;
   saving: boolean;
+  workplaces: Workplace[];
+  buildingId: string;
+  onBuildingChange: (id: string) => void;
 }) {
   const now = useCurrentTime();
   const todayRecords = records.filter(
@@ -869,6 +1014,7 @@ function TodayAttendance({
         {!todayRecords.length && !open && <strong>Směna ještě nezačala</strong>}
         {open && (
           <>
+            <span>Pracoviště: {open.buildingName}</span>
             <span>Příchod: {formatTime(open.start)}</span>
             <strong>Pracuji: {formatDuration(shiftDuration(open, now))}</strong>
           </>
@@ -877,9 +1023,31 @@ function TodayAttendance({
           <strong>Dnes odpracováno: {formatDuration(todayMs)}</strong>
         )}
       </div>
-      {(!todayRecords.length || open) && (
+      {!open && workplaces.length > 1 && (
+        <label className="attendance-workplace">
+          Pracoviště
+          <select
+            value={buildingId}
+            onChange={(event) => onBuildingChange(event.target.value)}
+            disabled={saving}
+          >
+            {workplaces.map((workplace) => (
+              <option key={workplace.id} value={workplace.id}>
+                {workplace.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {(open || workplaces.length > 0) && (
         <button disabled={saving} onClick={() => void onClock()}>
-          {saving ? "Ukládám…" : open ? "Odchod" : "Příchod"}
+          {saving
+            ? "Ukládám…"
+            : open
+              ? "Odchod"
+              : todayRecords.length
+                ? "Další příchod"
+                : "Příchod"}
         </button>
       )}
       <ShiftWarnings records={todayRecords} now={now} />
@@ -893,10 +1061,14 @@ function AttendanceDashboard({
   selectedWorkerId,
   onSelectWorker,
   settings,
+  dppAnnualLimitHours,
   currentUserId,
   isCaretaker,
   onClock,
   clockSaving,
+  workplaces,
+  attendanceBuildingId,
+  onAttendanceBuildingChange,
   ownRecords,
   onSaveAttendance,
   onDeleteAttendance,
@@ -907,15 +1079,20 @@ function AttendanceDashboard({
   selectedWorkerId: string;
   onSelectWorker: (id: string) => void;
   settings: AttendanceSettings;
+  dppAnnualLimitHours: number;
   currentUserId: string;
   isCaretaker: boolean;
   onClock: () => Promise<void>;
   clockSaving: boolean;
+  workplaces: Workplace[];
+  attendanceBuildingId: string;
+  onAttendanceBuildingChange: (id: string) => void;
   ownRecords: Attendance[];
   onSaveAttendance: (
     id: string,
     startedAt: string,
     endedAt?: string,
+    buildingId?: string,
   ) => Promise<void>;
   onDeleteAttendance: (id: string, workerId: string) => Promise<void>;
   onSaveSettings: (value: number) => Promise<void>;
@@ -931,20 +1108,29 @@ function AttendanceDashboard({
     [settings.plannedShiftsPerWeek],
   );
   const metrics = useMemo(
-    () => attendanceMetrics(records, now, settings.plannedShiftsPerWeek),
-    [records, now, settings.plannedShiftsPerWeek],
+    () =>
+      attendanceMetrics(
+        records,
+        now,
+        settings.plannedShiftsPerWeek,
+        dppAnnualLimitHours,
+      ),
+    [records, now, settings.plannedShiftsPerWeek, dppAnnualLimitHours],
   );
   const isOwn = selectedWorkerId === currentUserId;
-  const progress = Math.min(100, (metrics.yearHours / 300) * 100);
+  const progress = Math.min(
+    100,
+    (metrics.yearHours / dppAnnualLimitHours) * 100,
+  );
   const selectedName =
     workers.find((worker) => worker.id === selectedWorkerId)?.name ?? "Pracovník";
   const yearWarning =
-    metrics.yearHours >= 300
+    metrics.yearHours >= dppAnnualLimitHours
       ? "Roční limit DPP vyčerpán. Evidence dále zaznamenává skutečnou práci."
-      : metrics.yearHours >= 280
+      : metrics.yearHours >= dppAnnualLimitHours * (280 / 300)
         ? "Pozor, roční fond DPP je téměř vyčerpán."
-        : metrics.yearHours >= 250
-          ? "Roční fond DPP se blíží limitu 300 hodin."
+        : metrics.yearHours >= dppAnnualLimitHours * (250 / 300)
+          ? `Roční fond DPP se blíží limitu ${dppAnnualLimitHours} hodin.`
           : "";
   const weeklyDifference =
     metrics.weekMs / HOUR_MS - metrics.recommendedWeeklyHours;
@@ -973,6 +1159,9 @@ function AttendanceDashboard({
           records={ownRecords}
           onClock={onClock}
           saving={clockSaving}
+          workplaces={workplaces}
+          buildingId={attendanceBuildingId}
+          onBuildingChange={onAttendanceBuildingChange}
         />
       )}
       <div className="attendance-summary-grid">
@@ -994,7 +1183,7 @@ function AttendanceDashboard({
         <article>
           <small>ROK – DPP</small>
           <strong>
-            {metrics.yearHours.toFixed(1)} / {DPP_YEAR_LIMIT_HOURS} h
+            {metrics.yearHours.toFixed(1)} / {dppAnnualLimitHours} h
           </strong>
           <span>Zbývá {metrics.remainingHours.toFixed(1)} h</span>
         </article>
@@ -1004,7 +1193,7 @@ function AttendanceDashboard({
       </div>
       {yearWarning && (
         <div
-          className={`attendance-alert ${metrics.yearHours >= 280 ? "danger" : ""}`}
+          className={`attendance-alert ${metrics.yearHours >= dppAnnualLimitHours * (280 / 300) ? "danger" : ""}`}
         >
           {yearWarning}
         </div>
@@ -1080,7 +1269,12 @@ function AttendanceDashboard({
           </p>
         </footer>
       </section>
-      <MonthlyAttendanceReport records={records} now={now} workerName={selectedName} />
+      <MonthlyAttendanceReport
+        records={records}
+        now={now}
+        workerName={selectedName}
+        dppAnnualLimitHours={dppAnnualLimitHours}
+      />
       <AttendanceHistory
         records={records}
         now={now}
@@ -1091,8 +1285,9 @@ function AttendanceDashboard({
         <AttendanceEditor
           record={editingRecord}
           onCancel={() => setEditingRecord(null)}
-          onSave={async (start, end) => {
-            await onSaveAttendance(editingRecord.id, start, end);
+          workplaces={workplaces}
+          onSave={async (start, end, buildingId) => {
+            await onSaveAttendance(editingRecord.id, start, end, buildingId);
             setEditingRecord(null);
           }}
         />
@@ -1118,56 +1313,91 @@ function MonthlyAttendanceReport({
   records,
   now,
   workerName,
+  dppAnnualLimitHours,
 }: {
   records: Attendance[];
   now: Date;
   workerName: string;
+  dppAnnualLimitHours: number;
 }) {
-  const availableMonths = [...new Set([
-    localDateKey(now).slice(0, 7),
-    ...records.map((record) => record.date.slice(0, 7)),
-  ])].sort().reverse();
-  const [month, setMonth] = useState(availableMonths[0]);
-  useEffect(() => {
-    if (!availableMonths.includes(month)) setMonth(availableMonths[0]);
-  }, [availableMonths, month]);
-  const monthRecords = records
-    .filter((record) => record.date.startsWith(month))
-    .sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
-  const monthMs = sumDuration(monthRecords, now);
-  const year = month.slice(0, 4);
-  const yearToMonthMs = sumDuration(
-    records.filter((record) => record.date.startsWith(year) && record.date.slice(0, 7) <= month),
-    now,
+  const [month, setMonth] = useState(localDateKey(now).slice(0, 7));
+  const [preview, setPreview] = useState(false);
+  const report = useMemo(
+    () =>
+      buildAttendanceReport(
+        records,
+        workerName,
+        month,
+        dppAnnualLimitHours,
+        now,
+      ),
+    [records, workerName, month, dppAnnualLimitHours, now],
   );
   return (
     <section className="monthly-report">
       <div className="section-heading">
         <div><p className="eyebrow">MĚSÍČNÍ VÝKAZ</p><h2>{workerName}</h2></div>
-        <select value={month} onChange={(event) => setMonth(event.target.value)} aria-label="Měsíc výkazu">
-          {availableMonths.map((value) => (
-            <option key={value} value={value}>
-              {new Intl.DateTimeFormat("cs-CZ", { month: "long", year: "numeric" }).format(new Date(`${value}-01T12:00:00`))}
-            </option>
-          ))}
-        </select>
+        <input
+          type="month"
+          value={month}
+          onChange={(event) => setMonth(event.target.value)}
+          aria-label="Měsíc výkazu"
+        />
       </div>
       <div className="monthly-report-summary">
-        <span>Měsíc <b>{formatClockDuration(monthMs)}</b></span>
-        <span>Rok průběžně <b>{formatClockDuration(yearToMonthMs)}</b></span>
+        <span>Celkem za měsíc <b>{reportDuration(report.monthMs)}</b></span>
+        <span>Celkem za rok <b>{reportDuration(report.yearMs)}</b></span>
+        <span className="report-dpp">DPP <b>{reportDuration(report.yearMs)} / {dppAnnualLimitHours} h</b></span>
       </div>
-      <div className="monthly-shifts">
-        {monthRecords.map((record) => (
-          <div key={record.id}>
-            <span>{new Intl.DateTimeFormat("cs-CZ").format(new Date(`${record.date}T12:00:00`))}</span>
-            <span>{formatTime(record.start)}–{record.end ? formatTime(record.end) : "probíhá"}</span>
-            <b>{formatClockDuration(shiftDuration(record, now))}</b>
-          </div>
-        ))}
-        {!monthRecords.length && <p className="hint">V tomto měsíci nejsou evidované směny.</p>}
+      <div className="report-actions">
+        <button onClick={() => setPreview((value) => !value)}>
+          {preview ? "Skrýt náhled" : "Náhled výkazu"}
+        </button>
+        <button className="primary" onClick={() => downloadAttendanceReportPdf(report)}>
+          Stáhnout PDF
+        </button>
       </div>
-      <small>Výkaz je aktuální přehled vypočtený z docházky. Schvalování a export zatím nejsou součástí této verze.</small>
+      {preview && <AttendanceReportPreview report={report} />}
     </section>
+  );
+}
+
+function AttendanceReportPreview({
+  report,
+}: {
+  report: ReturnType<typeof buildAttendanceReport>;
+}) {
+  return (
+    <div className="report-preview">
+      <header>
+        <small>KLID KOLY</small>
+        <h3>VÝKAZ DOCHÁZKY</h3>
+        <span>Měsíc: {report.monthLabel}</span>
+        <span>Pracovník: {report.workerName}</span>
+        <span>Pracoviště: {report.workplaces.join(", ") || "—"}</span>
+        <span>Typ: DPP</span>
+      </header>
+      <div className="report-rows">
+        {report.rows.map((row) => (
+          <article key={row.id}>
+            <b>{new Intl.DateTimeFormat("cs-CZ").format(new Date(`${row.date}T12:00:00`))} · {row.day}</b>
+            <span>{row.workplace}</span>
+            <span>{row.start}–{row.end}</span>
+            <strong>{reportDuration(row.durationMs)}</strong>
+          </article>
+        ))}
+        {!report.rows.length && <p className="hint">V tomto měsíci nejsou evidované směny.</p>}
+      </div>
+      <footer>
+        <b>Celkem za měsíc: {reportDuration(report.monthMs)}</b>
+        {report.workplaceTotals.map((total) => (
+          <span key={total.name}>{total.name}: {reportDuration(total.durationMs)}</span>
+        ))}
+        <b>Celkem za rok: {reportDuration(report.yearMs)}</b>
+        <b>DPP: {reportDuration(report.yearMs)} / {report.annualLimitHours} h</b>
+        <small>Vygenerováno z evidence docházky Klid Koly</small>
+      </footer>
+    </div>
   );
 }
 
@@ -1211,6 +1441,7 @@ function AttendanceHistory({
                 <span>
                   {formatTime(record.start)}–{record.end ? formatTime(record.end) : "probíhá"}
                 </span>
+                <span>{record.buildingName}</span>
                 <small>{formatDuration(shiftDuration(record, now))}</small>
               </div>
               <div className="attendance-history-actions">
@@ -1289,26 +1520,35 @@ function localDateTimeInput(value: string) {
 
 function AttendanceEditor({
   record,
+  workplaces,
   onCancel,
   onSave,
 }: {
   record: Attendance;
+  workplaces: Workplace[];
   onCancel: () => void;
-  onSave: (start: string, end?: string) => Promise<void>;
+  onSave: (start: string, end?: string, buildingId?: string) => Promise<void>;
 }) {
   const [start, setStart] = useState(localDateTimeInput(record.start));
   const [end, setEnd] = useState(
     record.end ? localDateTimeInput(record.end) : "",
   );
+  const [buildingId, setBuildingId] = useState(record.buildingId ?? workplaces[0]?.id ?? "");
   return (
     <form
       className="task-editor attendance-editor"
       onSubmit={(event) => {
         event.preventDefault();
-        void onSave(start, end || undefined);
+        void onSave(start, end || undefined, buildingId || undefined);
       }}
     >
       <h2>Opravit směnu</h2>
+      <label>
+        Pracoviště
+        <select value={buildingId} onChange={(event) => setBuildingId(event.target.value)} required>
+          {workplaces.map((workplace) => <option key={workplace.id} value={workplace.id}>{workplace.name}</option>)}
+        </select>
+      </label>
       <label>
         Příchod
         <input
@@ -2220,6 +2460,10 @@ function MoreScreen({
   onOpenRooms,
   onOpenUsers,
   onOpenCleaningDays,
+  workplaces,
+  appSettings,
+  onSaveWorkplace,
+  onSaveDppLimit,
 }: {
   profile: Profile;
   pendingCount: number;
@@ -2227,6 +2471,10 @@ function MoreScreen({
   onOpenRooms: () => void;
   onOpenUsers: () => Promise<void>;
   onOpenCleaningDays: () => void;
+  workplaces: Workplace[];
+  appSettings: AppSettings;
+  onSaveWorkplace: (workplace: Workplace) => Promise<void>;
+  onSaveDppLimit: (value: number) => Promise<void>;
 }) {
   const admin = canManageOperations(profile);
   return (
@@ -2252,14 +2500,146 @@ function MoreScreen({
         </section>
       )}
       <section className="panel">
-        <h2>Nastavení</h2>
-        <div className="building"><b>Škola</b><span>aktivní budova</span></div>
-        <div className="building muted"><b>Školka</b><span>připravena k přidání</span></div>
-        {defaultShifts.map((shift) => (
-          <div className="shift" key={shift.worker}><span>{shift.worker}</span><span>{shift.start}–{shift.end}</span></div>
-        ))}
+        <p className="eyebrow">NASTAVENÍ</p>
+        <h2>Pracoviště</h2>
+        <WorkplaceSettings
+          workplaces={admin ? workplaces : workplaces.filter((item) => item.active)}
+          canManage={admin}
+          onSave={onSaveWorkplace}
+        />
+        <h2>Docházka</h2>
+        <DppLimitSetting
+          value={appSettings.dppAnnualLimitHours}
+          editable={admin && appSettings.available}
+          available={appSettings.available}
+          onSave={onSaveDppLimit}
+        />
         <p className="hint">Přihlášen: {profile.full_name} · {roleLabel(accessRole(profile))}</p>
       </section>
+    </div>
+  );
+}
+
+function WorkplaceSettings({
+  workplaces,
+  canManage,
+  onSave,
+}: {
+  workplaces: Workplace[];
+  canManage: boolean;
+  onSave: (workplace: Workplace) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState<Workplace | "new" | null>(null);
+  return (
+    <div className="workplace-settings">
+      {workplaces.map((workplace) => (
+        <button
+          key={workplace.id}
+          disabled={!canManage}
+          onClick={() => setEditing(workplace)}
+        >
+          <span><b>{workplace.name}</b><small>{workplace.active ? "Aktivní" : "Neaktivní"}</small></span>
+          {canManage && <i>Upravit</i>}
+        </button>
+      ))}
+      {canManage && (
+        <button className="add-workplace" onClick={() => setEditing("new")}>
+          + Přidat pracoviště
+        </button>
+      )}
+      {editing && (
+        <WorkplaceEditor
+          workplace={editing === "new" ? undefined : editing}
+          onCancel={() => setEditing(null)}
+          onSave={async (value) => {
+            await onSave(value);
+            setEditing(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function WorkplaceEditor({
+  workplace,
+  onCancel,
+  onSave,
+}: {
+  workplace?: Workplace;
+  onCancel: () => void;
+  onSave: (workplace: Workplace) => Promise<void>;
+}) {
+  const [name, setName] = useState(workplace?.name ?? "");
+  const [active, setActive] = useState(workplace?.active ?? true);
+  const [saving, setSaving] = useState(false);
+  return (
+    <form
+      className="operation-editor"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        try {
+          await onSave({ id: workplace?.id ?? "", name, active });
+        } finally {
+          setSaving(false);
+        }
+      }}
+    >
+      <label>Název<input required minLength={2} value={name} onChange={(event) => setName(event.target.value)} /></label>
+      <label className="switch"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} /> Aktivní pracoviště</label>
+      <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+    </form>
+  );
+}
+
+function DppLimitSetting({
+  value,
+  editable,
+  available,
+  onSave,
+}: {
+  value: number;
+  editable: boolean;
+  available: boolean;
+  onSave: (value: number) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setDraft(value), [value]);
+  return (
+    <div className="dpp-setting">
+      <label>Roční limit DPP<input type="number" min="1" max="10000" step="0.5" value={draft} disabled={!editable} onChange={(event) => setDraft(Number(event.target.value))} /></label>
+      <span>hodin za kalendářní rok napříč všemi pracovišti</span>
+      {editable && <button disabled={saving || draft === value} onClick={async () => { setSaving(true); try { await onSave(draft); } finally { setSaving(false); } }}>{saving ? "Ukládám…" : "Uložit limit"}</button>}
+      {!available && <small>Nastavení bude editovatelné po aplikaci migrace 01600. Do té doby aplikace bezpečně používá 300 hodin.</small>}
+    </div>
+  );
+}
+
+function ProfileEditor({
+  profile,
+  editable,
+  onCancel,
+  onSave,
+}: {
+  profile: Profile;
+  editable: boolean;
+  onCancel: () => void;
+  onSave: (fullName: string) => Promise<void>;
+}) {
+  const [fullName, setFullName] = useState(profile.full_name);
+  const [saving, setSaving] = useState(false);
+  return (
+    <div className="confirmation-backdrop" role="dialog" aria-modal="true" aria-label="Upravit profil">
+      <form className="confirmation-dialog profile-editor" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave(fullName); } finally { setSaving(false); } }}>
+        <h2>Upravit profil</h2>
+        <label>Zobrazované jméno<input value={fullName} minLength={2} maxLength={100} required disabled={!editable} onChange={(event) => setFullName(event.target.value)} /></label>
+        <label>E-mail<input value={profile.email ?? ""} readOnly /></label>
+        <label>Role<input value={roleLabel(accessRole(profile))} readOnly /></label>
+        {!editable && <p className="hint">Uložení profilu bude dostupné po aplikaci migrace 01600.</p>}
+        <div className="confirmation-actions"><button type="button" onClick={onCancel}>Zrušit</button><button className="primary" disabled={!editable || saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+      </form>
     </div>
   );
 }

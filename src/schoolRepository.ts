@@ -55,6 +55,8 @@ export type OperationsData = { stock: StockItem[]; incidents: Incident[]; rooms:
 export type ManagedRoom = { id: string; buildingId: string; floorId: string | null; name: string; active: boolean; sortOrder: number }
 export type AttendanceWorker = { id: string; name: string; role: AccessRole }
 export type AttendanceSettings = { plannedShiftsPerWeek: number; configurable: boolean }
+export type AppSettings = { dppAnnualLimitHours: number; available: boolean }
+export type Workplace = { id: string; name: string; active: boolean }
 export type PlanOptions = {
   buildings: { id: string; name: string }[]
   floors: { id: string; buildingId: string; name: string; sortOrder: number }[]
@@ -107,6 +109,11 @@ export const schoolRepository = {
     if (error) throw error
   },
   signOut: async () => { const { error } = await client().auth.signOut(); if (error) throw error },
+  updateOwnProfileName: async (fullName: string) => {
+    const { data, error } = await client().rpc('update_own_profile_name', { new_full_name: fullName.trim() })
+    if (error) throw error
+    return String(data)
+  },
   profile: async (id: string): Promise<Profile | null> => {
     const extended = await client().from('profiles').select('id,full_name,role,access_role,active,is_owner,email,created_at,first_signed_in_at,last_signed_in_at').eq('id', id).maybeSingle()
     if (!extended.error) return extended.data as Profile | null
@@ -192,6 +199,37 @@ export const schoolRepository = {
       floors: (floors ?? []).map((floor: any) => ({ id: floor.id, buildingId: floor.building_id, name: floor.name, sortOrder: floor.sort_order })),
       rooms: (rooms ?? []).map((room: any) => { const floor: any = floorById.get(room.floor_id); const building: any = buildingById.get(room.building_id); return { id: room.id, buildingId: room.building_id, floorId: room.floor_id, name: room.name, floor: floor?.name ?? 'Bez patra', floorSort: floor?.sort_order ?? 0, building: building?.name ?? 'Škola', active: room.active, sortOrder: room.sort_order } }),
     }
+  },
+  workplaces: async (): Promise<Workplace[]> => {
+    const { data, error } = await client().from('buildings').select('id,name,active').order('name')
+    if (error) throw error
+    return (data ?? []).map((row: any) => ({ id: row.id, name: row.name, active: row.active }))
+  },
+  saveWorkplace: async (workplace: Workplace) => {
+    const name = workplace.name.trim()
+    if (name.length < 2) throw new Error('Název pracoviště musí mít alespoň 2 znaky.')
+    const db = client()
+    if (!workplace.active) {
+      let countQuery = db.from('buildings').select('id', { count: 'exact', head: true }).eq('active', true)
+      if (workplace.id) countQuery = countQuery.neq('id', workplace.id)
+      const { count, error: countError } = await countQuery
+      if (countError) throw countError
+      if (!count) throw new Error('Alespoň jedno pracoviště musí zůstat aktivní.')
+    }
+    const result = workplace.id
+      ? await db.from('buildings').update({ name, active: workplace.active }).eq('id', workplace.id)
+      : await db.from('buildings').insert({ name, active: workplace.active })
+    if (result.error) throw result.error
+  },
+  appSettings: async (): Promise<AppSettings> => {
+    const { data, error } = await client().from('app_settings').select('dpp_annual_limit_hours').eq('id', true).maybeSingle()
+    if (error && missingRelation(error)) return { dppAnnualLimitHours: 300, available: false }
+    if (error) throw error
+    return { dppAnnualLimitHours: Number(data?.dpp_annual_limit_hours ?? 300), available: true }
+  },
+  saveDppAnnualLimit: async (value: number) => {
+    const { error } = await client().rpc('set_dpp_annual_limit', { value })
+    if (error) throw error
   },
   saveRoom: async (room: ManagedRoom) => {
     const values = { building_id: room.buildingId, floor_id: room.floorId, name: room.name.trim(), active: room.active, sort_order: room.sortOrder }
@@ -331,9 +369,9 @@ export const schoolRepository = {
     if (error) throw error
   },
   attendance: async (workerId: string): Promise<Attendance[]> => {
-    const { data, error } = await client().from('attendance').select('id,worker_id,started_at,ended_at,attendance_date,note').eq('worker_id', workerId).order('started_at', { ascending: false })
+    const { data, error } = await client().from('attendance').select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').eq('worker_id', workerId).order('started_at', { ascending: false })
     if (error) throw error
-    return (data ?? []).map((row: any) => ({ id: row.id, workerId: row.worker_id, start: row.started_at, end: row.ended_at ?? undefined, date: row.attendance_date, note: row.note ?? undefined }))
+    return (data ?? []).map(mapAttendance)
   },
   attendanceWorkers: async (): Promise<AttendanceWorker[]> => {
     const { data, error } = await client().from('profiles').select('id,full_name,role,access_role').eq('active', true).in('access_role', ['cleaning_team', 'admin']).order('full_name')
@@ -349,11 +387,12 @@ export const schoolRepository = {
     const { error } = workerId === ownUserId ? await client().rpc('set_own_planned_shifts_per_week', { value }) : await client().rpc('admin_set_planned_shifts_per_week', { target_user_id: workerId, value })
     if (error) throw error
   },
-  updateAttendance: async (id: string, startedAt: string, endedAt?: string) => {
+  updateAttendance: async (id: string, startedAt: string, endedAt?: string, buildingId?: string) => {
     const start = new Date(startedAt); const end = endedAt ? new Date(endedAt) : null
     if (Number.isNaN(start.getTime()) || (end && (Number.isNaN(end.getTime()) || end < start))) throw new Error('Zkontrolujte začátek a konec směny.')
     const localDate = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
-    const { error } = await client().from('attendance').update({ started_at: start.toISOString(), ended_at: end?.toISOString() ?? null, attendance_date: localDate }).eq('id', id)
+    const values = { started_at: start.toISOString(), ended_at: end?.toISOString() ?? null, attendance_date: localDate, ...(buildingId ? { building_id: buildingId } : {}) }
+    const { error } = await client().from('attendance').update(values).eq('id', id)
     if (error) throw error
   },
   deleteAttendance: async (id: string, workerId: string) => {
@@ -361,17 +400,17 @@ export const schoolRepository = {
     if (error) throw error
     if (!data) throw new Error('Směnu se nepodařilo smazat nebo k ní nemáte oprávnění.')
   },
-  startAttendance: async (workerId: string): Promise<Attendance> => {
-    const db = client(); const { data: building, error: buildingError } = await db.from('buildings').select('id').eq('name', 'Škola').single()
-    if (buildingError) throw buildingError
-    const { data, error } = await db.from('attendance').insert({ worker_id: workerId, building_id: building.id, attendance_date: localToday() }).select('id,worker_id,started_at,ended_at,attendance_date,note').single()
+  startAttendance: async (workerId: string, buildingId: string): Promise<Attendance> => {
+    if (!buildingId) throw new Error('Vyberte pracoviště směny.')
+    const db = client()
+    const { data, error } = await db.from('attendance').insert({ worker_id: workerId, building_id: buildingId, attendance_date: localToday() }).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').single()
     if (error) throw error
-    return { id: data.id, workerId: data.worker_id, start: data.started_at, end: data.ended_at ?? undefined, date: data.attendance_date, note: data.note ?? undefined }
+    return mapAttendance(data)
   },
   finishAttendance: async (id: string): Promise<Attendance> => {
-    const { data, error } = await client().from('attendance').update({ ended_at: new Date().toISOString() }).eq('id', id).select('id,worker_id,started_at,ended_at,attendance_date,note').single()
+    const { data, error } = await client().from('attendance').update({ ended_at: new Date().toISOString() }).eq('id', id).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').single()
     if (error) throw error
-    return { id: data.id, workerId: data.worker_id, start: data.started_at, end: data.ended_at ?? undefined, date: data.attendance_date, note: data.note ?? undefined }
+    return mapAttendance(data)
   },
   subscribe: (onChange: () => void): RealtimeChannel => client().channel('school-changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_completions' }, onChange)
@@ -380,6 +419,20 @@ export const schoolRepository = {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_items' }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents' }, onChange)
     .subscribe(),
+}
+
+function mapAttendance(row: any): Attendance {
+  const building = Array.isArray(row.buildings) ? row.buildings[0] : row.buildings
+  return {
+    id: row.id,
+    workerId: row.worker_id,
+    buildingId: row.building_id,
+    buildingName: building?.name ?? 'Škola',
+    start: row.started_at,
+    end: row.ended_at ?? undefined,
+    date: row.attendance_date,
+    note: row.note ?? undefined,
+  }
 }
 
 function mapCleaningDayOverrides(rows: any[]) {
