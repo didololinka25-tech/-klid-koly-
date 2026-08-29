@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { defaultShifts } from "./data";
 import {
@@ -96,6 +96,12 @@ export default function App() {
     configurable: false,
   });
   const [attendanceRefresh, setAttendanceRefresh] = useState(0);
+  const [attendanceSaving, setAttendanceSaving] = useState(false);
+  const attendanceWriteLock = useRef(false);
+  const taskWriteLocks = useRef(new Set<string>());
+  const [pendingTaskIds, setPendingTaskIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [section, setSection] = useState<Section>("Dnes");
   const [notice, setNotice] = useState("");
   const [planOptions, setPlanOptions] = useState<PlanOptions>({
@@ -287,7 +293,7 @@ export default function App() {
     );
   const complete = async (id: string) => {
     const target = tasks.find((task) => task.id === id);
-    if (!target || !target.canComplete) return;
+    if (!target || !target.canComplete || taskWriteLocks.current.has(id)) return;
     if (
       target.prerequisite &&
       !tasks.find((task) => task.id === target.prerequisite)?.done
@@ -295,6 +301,8 @@ export default function App() {
       setNotice("Nejdříve je potřeba zamést nebo vysát.");
       return;
     }
+    taskWriteLocks.current.add(id);
+    setPendingTaskIds(new Set(taskWriteLocks.current));
     try {
       setNotice("");
       await schoolRepository.setCompletion(id, !target.done);
@@ -303,10 +311,20 @@ export default function App() {
       setNotice(
         error instanceof Error ? error.message : "Úkol se nepodařilo uložit.",
       );
+    } finally {
+      taskWriteLocks.current.delete(id);
+      setPendingTaskIds(new Set(taskWriteLocks.current));
     }
   };
   const completeMany = async (selectedTasks: Task[]) => {
-    if (selectedTasks.some((task) => !task.canComplete)) return;
+    const selectedIds = selectedTasks.map((task) => task.id);
+    if (
+      selectedTasks.some((task) => !task.canComplete) ||
+      selectedIds.some((id) => taskWriteLocks.current.has(id))
+    )
+      return;
+    selectedIds.forEach((id) => taskWriteLocks.current.add(id));
+    setPendingTaskIds(new Set(taskWriteLocks.current));
     const remaining = new Map(
       selectedTasks.filter((task) => !task.done).map((task) => [task.id, task]),
     );
@@ -350,9 +368,15 @@ export default function App() {
           : "Úkoly místnosti se nepodařilo uložit.",
       );
       throw error;
+    } finally {
+      selectedIds.forEach((id) => taskWriteLocks.current.delete(id));
+      setPendingTaskIds(new Set(taskWriteLocks.current));
     }
   };
   const clock = async () => {
+    if (attendanceWriteLock.current) return;
+    attendanceWriteLock.current = true;
+    setAttendanceSaving(true);
     const open = attendance.find((item) => !item.end);
     const previousAttendance = attendance;
     const previousAttendanceView = attendanceView;
@@ -410,6 +434,9 @@ export default function App() {
           ? error.message
           : "Docházku se nepodařilo uložit.",
       );
+    } finally {
+      attendanceWriteLock.current = false;
+      setAttendanceSaving(false);
     }
   };
   const saveAttendance = async (
@@ -571,7 +598,13 @@ export default function App() {
       {notice && <div className="notice">{notice}</div>}
       {section === "Dnes" && (
         <>
-          {canWork(profile) && <TodayAttendance records={attendance} onClock={clock} />}
+          {canWork(profile) && (
+            <TodayAttendance
+              records={attendance}
+              onClock={clock}
+              saving={attendanceSaving}
+            />
+          )}
           <section className="hero">
             <span>
               <b>{cleaningDayHeading(cleaningDay, visible.length)}</b>
@@ -589,6 +622,7 @@ export default function App() {
             tasks={visible}
             onComplete={complete}
             onCompleteAll={completeMany}
+            pendingTaskIds={pendingTaskIds}
           />
         </>
       )}
@@ -622,6 +656,7 @@ export default function App() {
           currentUserId={profile.id}
           isCaretaker={canManageOperations(profile)}
           onClock={clock}
+          clockSaving={attendanceSaving}
           ownRecords={attendance}
           onSaveAttendance={saveAttendance}
           onDeleteAttendance={deleteAttendance}
@@ -815,9 +850,11 @@ function ShiftWarnings({ records, now }: { records: Attendance[]; now: Date }) {
 function TodayAttendance({
   records,
   onClock,
+  saving,
 }: {
   records: Attendance[];
   onClock: () => Promise<void>;
+  saving: boolean;
 }) {
   const now = useCurrentTime();
   const todayRecords = records.filter(
@@ -841,8 +878,8 @@ function TodayAttendance({
         )}
       </div>
       {(!todayRecords.length || open) && (
-        <button onClick={() => void onClock()}>
-          {open ? "Odchod" : "Příchod"}
+        <button disabled={saving} onClick={() => void onClock()}>
+          {saving ? "Ukládám…" : open ? "Odchod" : "Příchod"}
         </button>
       )}
       <ShiftWarnings records={todayRecords} now={now} />
@@ -859,6 +896,7 @@ function AttendanceDashboard({
   currentUserId,
   isCaretaker,
   onClock,
+  clockSaving,
   ownRecords,
   onSaveAttendance,
   onDeleteAttendance,
@@ -872,6 +910,7 @@ function AttendanceDashboard({
   currentUserId: string;
   isCaretaker: boolean;
   onClock: () => Promise<void>;
+  clockSaving: boolean;
   ownRecords: Attendance[];
   onSaveAttendance: (
     id: string,
@@ -929,7 +968,13 @@ function AttendanceDashboard({
       <p className="attendance-owner">
         Zobrazená evidence: <b>{selectedName}</b>
       </p>
-      {isOwn && <TodayAttendance records={ownRecords} onClock={onClock} />}
+      {isOwn && (
+        <TodayAttendance
+          records={ownRecords}
+          onClock={onClock}
+          saving={clockSaving}
+        />
+      )}
       <div className="attendance-summary-grid">
         <article>
           <small>DNES</small>
@@ -1298,10 +1343,12 @@ function TaskHierarchy({
   tasks,
   onComplete,
   onCompleteAll,
+  pendingTaskIds,
 }: {
   tasks: Task[];
   onComplete: (id: string) => Promise<void>;
   onCompleteAll: (tasks: Task[]) => Promise<void>;
+  pendingTaskIds: Set<string>;
 }) {
   const common = tasks.filter((task) => !task.roomId);
   const floorGroups = new Map<string, Task[]>();
@@ -1318,7 +1365,11 @@ function TaskHierarchy({
       {common.length > 0 && (
         <section className="shared-tasks">
           <h2>Společné úkoly</h2>
-          <TaskRows tasks={common} onComplete={onComplete} />
+          <TaskRows
+            tasks={common}
+            onComplete={onComplete}
+            pendingTaskIds={pendingTaskIds}
+          />
         </section>
       )}
       {[...floorGroups.entries()]
@@ -1330,6 +1381,7 @@ function TaskHierarchy({
             tasks={floorTasks}
             onComplete={onComplete}
             onCompleteAll={onCompleteAll}
+            pendingTaskIds={pendingTaskIds}
           />
         ))}
       {tasks.length === 0 && (
@@ -1346,11 +1398,13 @@ function FloorGroup({
   tasks,
   onComplete,
   onCompleteAll,
+  pendingTaskIds,
 }: {
   label: string;
   tasks: Task[];
   onComplete: (id: string) => Promise<void>;
   onCompleteAll: (tasks: Task[]) => Promise<void>;
+  pendingTaskIds: Set<string>;
 }) {
   const [open, setOpen] = useState(true);
   const rooms = new Map<string, Task[]>();
@@ -1382,6 +1436,7 @@ function FloorGroup({
               tasks={roomTasks}
               onComplete={onComplete}
               onCompleteAll={onCompleteAll}
+              pendingTaskIds={pendingTaskIds}
             />
           ))}
         </div>
@@ -1395,11 +1450,13 @@ function RoomActivityGroup({
   tasks,
   onComplete,
   onCompleteAll,
+  pendingTaskIds,
 }: {
   room: string;
   tasks: Task[];
   onComplete: (id: string) => Promise<void>;
   onCompleteAll: (tasks: Task[]) => Promise<void>;
+  pendingTaskIds: Set<string>;
 }) {
   const [saving, setSaving] = useState(false);
   const completed = tasks.filter((task) => task.done).length;
@@ -1431,7 +1488,11 @@ function RoomActivityGroup({
           {saving ? "Ukládám…" : "Hotovo vše"}
         </button>
       </header>
-      <TaskRows tasks={tasks} onComplete={onComplete} />
+      <TaskRows
+        tasks={tasks}
+        onComplete={onComplete}
+        pendingTaskIds={pendingTaskIds}
+      />
     </section>
   );
 }
@@ -1439,9 +1500,11 @@ function RoomActivityGroup({
 function TaskRows({
   tasks,
   onComplete,
+  pendingTaskIds,
 }: {
   tasks: Task[];
   onComplete: (id: string) => Promise<void>;
+  pendingTaskIds: Set<string>;
 }) {
   return (
     <div className="activity-grid">
@@ -1452,7 +1515,7 @@ function TaskRows({
           return (
             <button
               className={task.done ? "activity-check done" : "activity-check"}
-              disabled={!task.canComplete}
+              disabled={!task.canComplete || pendingTaskIds.has(task.id)}
               onClick={() => void onComplete(task.id)}
               aria-pressed={task.done}
               aria-label={`${task.done ? "Zrušit dokončení" : "Dokončit"}: ${task.title}`}
@@ -2217,11 +2280,16 @@ function OperationsScreen({
   const [purchaseEditor, setPurchaseEditor] = useState<StockItem | "new" | null>(null);
   const [incidentEditor, setIncidentEditor] = useState<Incident | "new" | null>(null);
   const [message, setMessage] = useState("");
+  const [mutating, setMutating] = useState(false);
+  const mutationLock = useRef(false);
   const needed = data.stock.filter((item) => item.status === "needed");
   const bought = data.stock.filter((item) => item.status === "resolved");
   const openIncidents = data.incidents.filter((item) => item.status !== "resolved");
   const resolvedIncidents = data.incidents.filter((item) => item.status === "resolved");
   const mutate = async (action: () => Promise<void>) => {
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    setMutating(true);
     try {
       setMessage("");
       await action();
@@ -2229,6 +2297,9 @@ function OperationsScreen({
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Změnu se nepodařilo uložit.");
       throw error;
+    } finally {
+      mutationLock.current = false;
+      setMutating(false);
     }
   };
   return (
@@ -2257,9 +2328,9 @@ function OperationsScreen({
             <div><b>{item.name}</b>{item.note && <span>{item.note}</span>}</div>
             {(canManage || item.createdBy === userId) && data.editable && (
               <div className="operation-actions">
-                <button onClick={() => setPurchaseEditor(item)}>Upravit</button>
-                <button className="success" onClick={() => void mutate(() => schoolRepository.setPurchaseItemStatus(item.id, "resolved")).catch(() => undefined)}>Koupeno</button>
-                <button onClick={() => void mutate(() => schoolRepository.archivePurchaseItem(item.id)).catch(() => undefined)}>Skrýt</button>
+                <button disabled={mutating} onClick={() => setPurchaseEditor(item)}>Upravit</button>
+                <button disabled={mutating} className="success" onClick={() => void mutate(() => schoolRepository.setPurchaseItemStatus(item.id, "resolved")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Koupeno"}</button>
+                <button disabled={mutating} onClick={() => void mutate(() => schoolRepository.archivePurchaseItem(item.id)).catch(() => undefined)}>Skrýt</button>
               </div>
             )}
           </article>
@@ -2271,7 +2342,7 @@ function OperationsScreen({
             {bought.map((item) => (
               <article className="operation-card resolved" key={item.id}>
                 <div><b>{item.name}</b>{item.note && <span>{item.note}</span>}</div>
-                {(canManage || item.createdBy === userId) && data.editable && <button onClick={() => void mutate(() => schoolRepository.setPurchaseItemStatus(item.id, "needed")).catch(() => undefined)}>Znovu otevřít</button>}
+                {(canManage || item.createdBy === userId) && data.editable && <button disabled={mutating} onClick={() => void mutate(() => schoolRepository.setPurchaseItemStatus(item.id, "needed")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Znovu otevřít"}</button>}
               </article>
             ))}
           </details>
@@ -2298,8 +2369,8 @@ function OperationsScreen({
             <div><b>⚠ {item.title}</b><span>{[item.room, item.floor].filter(Boolean).join(" · ") || "Místo neuvedeno"}</span>{item.note && <small>{item.note}</small>}</div>
             {(canManage || item.createdBy === userId) && data.editable && (
               <div className="operation-actions">
-                <button onClick={() => setIncidentEditor(item)}>Upravit</button>
-                <button className="success" onClick={() => void mutate(() => schoolRepository.setIncidentStatus(item.id, "resolved")).catch(() => undefined)}>Opraveno</button>
+                <button disabled={mutating} onClick={() => setIncidentEditor(item)}>Upravit</button>
+                <button disabled={mutating} className="success" onClick={() => void mutate(() => schoolRepository.setIncidentStatus(item.id, "resolved")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Opraveno"}</button>
               </div>
             )}
           </article>
@@ -2311,7 +2382,7 @@ function OperationsScreen({
             {resolvedIncidents.map((item) => (
               <article className="operation-card resolved" key={item.id}>
                 <div><b>{item.title}</b><span>{[item.room, item.floor].filter(Boolean).join(" · ")}</span></div>
-                {(canManage || item.createdBy === userId) && data.editable && <button onClick={() => void mutate(() => schoolRepository.setIncidentStatus(item.id, "reported")).catch(() => undefined)}>Znovu otevřít</button>}
+                {(canManage || item.createdBy === userId) && data.editable && <button disabled={mutating} onClick={() => void mutate(() => schoolRepository.setIncidentStatus(item.id, "reported")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Znovu otevřít"}</button>}
               </article>
             ))}
           </details>

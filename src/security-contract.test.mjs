@@ -84,3 +84,11 @@ test('migrace Provozu skryje legacy katalog a dovolí opakovaný nákup stejnéh
   assert.match(migration15, /drop constraint if exists stock_items_name_key/i)
   assert.doesNotMatch(migration15, /delete from public\.stock_items/i)
 })
+
+test('kritické mobilní zápisy jsou chráněné proti opakovanému klepnutí', () => {
+  assert.match(app, /taskWriteLocks\.current\.has\(id\)/)
+  assert.match(app, /attendanceWriteLock\.current/)
+  assert.match(app, /disabled=\{saving\}/)
+  assert.match(app, /disabled=\{!task\.canComplete \|\| pendingTaskIds\.has\(task\.id\)\}/)
+  assert.match(app, /mutationLock\.current/)
+})
