@@ -23,9 +23,11 @@ test('editor nenabízí dezinfekci a repository ji obranně skryje', () => {
   assert.match(migration12, /where activity_type = 'disinfect'/)
 })
 
-test('shared měsíční Mytí oken zůstává právě jedna aktivní položka', () => {
+test('historický shared úkol oken zůstává zachovaný, ale neomezuje úkoly místností', () => {
   assert.match(migration12, /Společný měsíční úkol Mytí oken není právě jeden/)
   assert.match(migration12, /work_part_id = null/)
+  assert.doesNotMatch(repository, /activity_type === 'windows'/)
+  assert.doesNotMatch(repository, /name !== 'Mytí oken'/)
 })
 
 test('completion používá secure RPC a preview vypíná zápis', () => {
@@ -156,4 +158,26 @@ test('admin UI odděluje neaktivní položky a používá potvrzení', () => {
   assert.match(app, /Smazat místnost/)
   assert.match(app, /window\.confirm/)
   assert.match(app, /Obnoví se pouze místnost/)
+})
+
+test('uložení plánu čeká na potvrzený INSERT a refetch před zavřením editoru', () => {
+  const saveFlow = app.match(/const saveTask = async[\s\S]*?const setTaskActive/)?.[0] ?? ''
+  assert.match(saveFlow, /const savedId = await schoolRepository\.saveTask/)
+  assert.match(saveFlow, /await schoolRepository\.tasks\(profile, true\)/)
+  assert.ok(saveFlow.indexOf('setTasks(refreshed.tasks)') < saveFlow.indexOf('setEditing(null)'))
+  assert.match(repository, /if \(!result\.data\?\.id\)/)
+})
+
+test('chyba INSERTu ponechá editor otevřený, ukáže hlášku a dvojklik je uzamčený', () => {
+  assert.match(app, /saveLock\.current/)
+  assert.match(app, /setSaveError/)
+  assert.match(app, /role="alert"/)
+  assert.match(app, /disabled=\{saving\}/)
+  assert.match(app, /setNotice\(message\);\s*throw error;/)
+})
+
+test('zápis úkolů zůstává pod admin RLS a dependency pole se ukládá', () => {
+  assert.match(migration11, /admins manage tasks[\s\S]*public\.is_admin\(\)/i)
+  assert.match(repository, /requires_task_id: task\.prerequisite \?\? null/)
+  assert.match(repository, /schedule_days: task\.scheduleDays/)
 })

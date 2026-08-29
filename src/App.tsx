@@ -597,13 +597,19 @@ export default function App() {
   const saveTask = async (task: Task) => {
     try {
       setNotice("");
-      await schoolRepository.saveTask(task);
+      const savedId = await schoolRepository.saveTask(task);
+      const refreshed = await schoolRepository.tasks(profile, true);
+      if (!refreshed.tasks.some((item) => item.id === savedId)) {
+        throw new Error("Databáze úkol uložila, ale nový plán se nepodařilo ověřit. Obnovte stránku; formulář ponecháváme otevřený, aby se údaje neztratily.");
+      }
+      setTasks(refreshed.tasks);
+      setCleaningDay(refreshed.cleaningDay);
+      setCleaningDaysAvailable(refreshed.cleaningDaysAvailable);
       setEditing(null);
-      await load(session, profile);
     } catch (error) {
-      setNotice(
-        error instanceof Error ? error.message : "Plán se nepodařilo uložit.",
-      );
+      const message = error instanceof Error ? error.message : "Plán se nepodařilo uložit.";
+      setNotice(message);
+      throw error;
     }
   };
   const setTaskActive = async (taskId: string, active: boolean) => {
@@ -2223,6 +2229,9 @@ function TaskEditor({
   onSetActive: (taskId: string, active: boolean) => Promise<void>;
 }) {
   const [draft, setDraft] = useState(task);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const saveLock = useRef(false);
   const update = <K extends keyof Task>(key: K, value: Task[K]) =>
     setDraft((current) => ({ ...current, [key]: value }));
   const setRoom = (id: string) => {
@@ -2249,10 +2258,20 @@ function TaskEditor({
       className="task-editor"
       onSubmit={(event) => {
         event.preventDefault();
-        void onSave(draft);
+        if (saveLock.current) return;
+        saveLock.current = true;
+        setSaving(true);
+        setSaveError("");
+        void onSave(draft)
+          .catch((error) => setSaveError(error instanceof Error ? error.message : "Plán se nepodařilo uložit."))
+          .finally(() => {
+            saveLock.current = false;
+            setSaving(false);
+          });
       }}
     >
       <h2>{task.id ? "Upravit úkol" : "Nový úkol"}</h2>
+      {saveError && <div className="notice" role="alert">{saveError}</div>}
       <label>
         Činnost
         <input
@@ -2371,7 +2390,7 @@ function TaskEditor({
         <button type="button" onClick={onCancel}>
           Zrušit
         </button>
-        <button type="submit">Uložit plán</button>
+        <button type="submit" disabled={saving}>{saving ? "Ukládám…" : "Uložit plán"}</button>
       </div>
       {task.id && task.active && (
         <div className="danger-zone">

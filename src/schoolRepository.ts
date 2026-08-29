@@ -7,6 +7,7 @@ import {
   type CleaningDayContext,
   type CleaningDayException,
 } from './scheduling'
+import { isSameTaskDefinition } from './taskValidation'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -166,7 +167,6 @@ export const schoolRepository = {
     const done = new Map((completions ?? []).map((completion: { task_id: string; completed: boolean }) => [completion.task_id, completion.completed]))
     const tasks = (rows ?? []).filter((row: any) => {
       if (row.activity_type === 'disinfect') return false
-      if (row.activity_type === 'windows' && row.name !== 'Mytí oken') return false
       const room: any = row.room_id ? roomById.get(row.room_id) : null
       return includeAll || (row.active && (!room || room.active))
     }).map((row: any): Task => {
@@ -243,9 +243,30 @@ export const schoolRepository = {
     if (error) throw error
   },
   saveTask: async (task: Task) => {
-    const values = { room_id: task.roomId ?? null, name: task.title, activity_type: task.activityType, frequency: Object.entries(frequency).find(([, label]) => label === task.frequency)?.[0], active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.monthlyDay ?? null, requires_task_id: task.prerequisite ?? null }
-    const result = task.id ? await client().from('cleaning_tasks').update(values).eq('id', task.id).select('id').single() : await client().from('cleaning_tasks').insert(values).select('id').single()
+    const db = client()
+    const name = task.title.trim()
+    const frequencyKey = Object.entries(frequency).find(([, label]) => label === task.frequency)?.[0]
+    if (!name) throw new Error('Název úkolu nesmí být prázdný.')
+    if (!frequencyKey) throw new Error('Vyberte platnou frekvenci úkolu.')
+
+    let duplicateQuery = db.from('cleaning_tasks')
+      .select('id,room_id,name,frequency,schedule_days,monthly_day')
+      .eq('active', true)
+      .ilike('name', name)
+    duplicateQuery = task.roomId ? duplicateQuery.eq('room_id', task.roomId) : duplicateQuery.is('room_id', null)
+    const { data: candidates, error: duplicateError } = await duplicateQuery
+    if (duplicateError) throw duplicateError
+    const duplicate = (candidates ?? []).some((candidate: any) => candidate.id !== task.id && isSameTaskDefinition(
+      { id: candidate.id, roomId: candidate.room_id ?? undefined, title: candidate.name, frequency: frequency[candidate.frequency] ?? candidate.frequency, scheduleDays: candidate.schedule_days ?? [], monthlyDay: candidate.monthly_day },
+      task,
+    ))
+    if (duplicate) throw new Error('Stejný aktivní úkol se stejným harmonogramem už v této místnosti existuje.')
+
+    const values = { room_id: task.roomId ?? null, name, activity_type: task.activityType, frequency: frequencyKey, active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.monthlyDay ?? null, requires_task_id: task.prerequisite ?? null }
+    const result = task.id ? await db.from('cleaning_tasks').update(values).eq('id', task.id).select('id').single() : await db.from('cleaning_tasks').insert(values).select('id').single()
     if (result.error) throw result.error
+    if (!result.data?.id) throw new Error('Databáze nepotvrdila uložení úkolu.')
+    return String(result.data.id)
   },
   setTaskActive: async (taskId: string, active: boolean) => {
     const { error } = await client().rpc('set_cleaning_task_active', {
