@@ -27,9 +27,11 @@ alter table public.cleaning_tasks add constraint cleaning_tasks_period_valid che
 
 alter table public.cleaning_tasks drop constraint if exists cleaning_tasks_activity_type_valid;
 alter table public.cleaning_tasks add constraint cleaning_tasks_activity_type_valid check (
+  -- Legacy hodnoty včetně disinfect zůstávají schema-validní kvůli historii.
+  -- Produkt je nezobrazuje a aktivní disinfect řádky se níže deaktivují.
   activity_type in (
     'trash','toilet','sink','mirror','vacuum','mop','tables','windows',
-    'doors','tiles','surfaces','deep_clean','laundry','other'
+    'disinfect','doors','tiles','surfaces','deep_clean','laundry','other'
   )
 );
 

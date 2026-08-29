@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 const repository = readFileSync(new URL('./schoolRepository.ts', import.meta.url), 'utf8')
 const types = readFileSync(new URL('./types.ts', import.meta.url), 'utf8')
+const migration8 = readFileSync(new URL('../supabase/migrations/20260828000800_cleaning_activity_types.sql', import.meta.url), 'utf8')
 const migration12 = readFileSync(new URL('../supabase/migrations/20260828001200_remove_disinfect_and_ab_windows.sql', import.meta.url), 'utf8')
 const migration11 = readFileSync(new URL('../supabase/migrations/20260828001100_team_cleaning_and_access_roles.sql', import.meta.url), 'utf8')
 const migration13 = readFileSync(new URL('../supabase/migrations/20260829001300_cleaning_day_exceptions.sql', import.meta.url), 'utf8')
@@ -190,6 +191,19 @@ test('nový plán je nedestruktivní, idempotentní a bez A/B či dezinfekce', (
   assert.match(migration18, /on conflict \(plan_key\)/i)
   assert.match(migration18, /activity_type = 'disinfect'/i)
   assert.match(migration18, /set active = false[\s\S]*task_assignments/i)
+})
+
+test('nový activity constraint přijímá všechny legitimní historické hodnoty', () => {
+  const legacyConstraint = migration8.match(/check \(activity_type in \([\s\S]*?\)\)/i)?.[0] ?? ''
+  const newConstraint = migration18.match(/add constraint cleaning_tasks_activity_type_valid check \([\s\S]*?\n\s*\);/i)?.[0] ?? ''
+  const legacyValues = [...legacyConstraint.matchAll(/'([a-z_]+)'/g)].map((match) => match[1])
+  assert.deepEqual(legacyValues.sort(), [
+    'disinfect', 'laundry', 'mirror', 'mop', 'other', 'sink', 'tables',
+    'toilet', 'trash', 'vacuum', 'windows',
+  ])
+  for (const value of legacyValues) assert.match(newConstraint, new RegExp(`'${value}'`))
+  assert.match(migration18, /where activity_type = 'disinfect' and active/i)
+  assert.match(migration18, /where active and activity_type='disinfect'/i)
 })
 
 test('nový plán zakládá skutečné místnosti a chrání jejich historii', () => {
