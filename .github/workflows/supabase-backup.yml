@@ -1,6 +1,10 @@
 name: Encrypted Supabase backup
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/supabase-backup.yml
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -44,9 +48,38 @@ jobs:
           mkdir -p "$PLAIN_DIR" "$ENCRYPTED_DIR"
           trap 'rm -rf "$PLAIN_DIR"' EXIT
 
-          npx --yes supabase@2.116.0 db dump --db-url "$SUPABASE_DB_URL" -f "$PLAIN_DIR/roles.sql" --role-only
-          npx --yes supabase@2.116.0 db dump --db-url "$SUPABASE_DB_URL" -f "$PLAIN_DIR/schema.sql"
-          npx --yes supabase@2.116.0 db dump --db-url "$SUPABASE_DB_URL" -f "$PLAIN_DIR/data.sql" --use-copy --data-only -x "storage.buckets_vectors" -x "storage.vector_indexes"
+          # Connect dialog může dodat samotné URI nebo příkaz `psql 'URI'`.
+          # Heslo může obsahovat znaky, které musí být v URI percent-encoded.
+          NORMALIZED_DB_URL="$(node <<'NODE'
+          let value = (process.env.SUPABASE_DB_URL || '').trim()
+          if (/^psql\s+/i.test(value)) value = value.replace(/^psql\s+/i, '').trim()
+          if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
+            value = value.slice(1, -1).trim()
+          }
+          if (!/^postgres(?:ql)?:\/\//i.test(value)) {
+            throw new Error('SUPABASE_DB_URL musí být PostgreSQL URI ze Supabase Connect → Session pooler.')
+          }
+          const schemeEnd = value.indexOf('://') + 3
+          const passwordSeparator = value.indexOf(':', schemeEnd)
+          const hostSeparator = value.lastIndexOf('@')
+          if (passwordSeparator < schemeEnd || hostSeparator <= passwordSeparator) {
+            throw new Error('SUPABASE_DB_URL neobsahuje očekávané uživatelské jméno, heslo a hostitele.')
+          }
+          let password = value.slice(passwordSeparator + 1, hostSeparator)
+          if (password.includes('[YOUR-PASSWORD]')) {
+            throw new Error('V SUPABASE_DB_URL zůstal zástupný text [YOUR-PASSWORD].')
+          }
+          try { password = decodeURIComponent(password) } catch { /* raw password */ }
+          process.stdout.write(
+            value.slice(0, passwordSeparator + 1) + encodeURIComponent(password) + value.slice(hostSeparator),
+          )
+          NODE
+          )"
+          echo "::add-mask::$NORMALIZED_DB_URL"
+
+          npx --yes supabase@2.116.0 db dump --db-url "$NORMALIZED_DB_URL" -f "$PLAIN_DIR/roles.sql" --role-only
+          npx --yes supabase@2.116.0 db dump --db-url "$NORMALIZED_DB_URL" -f "$PLAIN_DIR/schema.sql"
+          npx --yes supabase@2.116.0 db dump --db-url "$NORMALIZED_DB_URL" -f "$PLAIN_DIR/data.sql" --use-copy --data-only -x "storage.buckets_vectors" -x "storage.vector_indexes"
 
           test -s "$PLAIN_DIR/roles.sql"
           test -s "$PLAIN_DIR/schema.sql"

@@ -24,8 +24,10 @@ Záloha **neobsahuje samotné soubory uložené přes Storage API**; v databázi
 1. Otevřete produkční projekt v Supabase Dashboardu.
 2. Klikněte nahoře na **Connect**.
 3. Vyberte **Session pooler** (port 5432); funguje z IPv4 sítě GitHub runneru.
-4. Zkopírujte celý connection string.
+4. Zkopírujte PostgreSQL URI. Workflow toleruje také celý zkopírovaný příkaz ve tvaru `psql 'URI'`, ale samotné URI je přehlednější.
 5. Zástupný text `[YOUR-PASSWORD]` nahraďte skutečným databázovým heslem. Pokud jej neznáte, lze jej vědomě změnit v **Project Settings → Database**; změna může ovlivnit jiné databázové klienty.
+
+Workflow před použitím odstraní okolní uvozovky a bezpečně percent-encoduje speciální znaky v hesle. Secret však stále musí obsahovat Session pooler URI, nikoliv URL webového Supabase projektu, anon key ani service-role key.
 
 Nepoužívejte Supabase URL, anon key ani service-role key. Workflow potřebuje PostgreSQL connection string.
 
