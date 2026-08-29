@@ -78,3 +78,9 @@ test('Provoz zachovává RLS: tým vytváří a opravuje vlastní záznamy, admi
   assert.match(migration15, /revoke delete on public\.stock_items, public\.incidents from authenticated/)
   assert.doesNotMatch(migration15, /^delete\s+from/im)
 })
+
+test('migrace Provozu skryje legacy katalog a dovolí opakovaný nákup stejného názvu', () => {
+  assert.match(migration15, /set active = false\s+where created_by is null/i)
+  assert.match(migration15, /drop constraint if exists stock_items_name_key/i)
+  assert.doesNotMatch(migration15, /delete from public\.stock_items/i)
+})

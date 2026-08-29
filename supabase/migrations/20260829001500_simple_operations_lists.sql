@@ -11,6 +11,16 @@ alter table public.stock_items
   add column if not exists resolved_at timestamptz,
   add column if not exists resolved_by uuid references public.profiles(id);
 
+-- Předmigrační řádky jsou skladový katalog, nikoli skutečné požadavky k nákupu.
+-- Historie zůstává zachovaná, ale katalog se v novém aktivním seznamu nezobrazí.
+update public.stock_items
+set active = false
+where created_by is null;
+
+-- Stejnou věc lze v budoucnu nahlásit znovu jako nový samostatný požadavek.
+alter table public.stock_items
+  drop constraint if exists stock_items_name_key;
+
 do $$
 begin
   if not exists (
