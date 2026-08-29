@@ -46,6 +46,7 @@ export type CleaningDayDraft = {
   sourceDate?: string | null
   title: string
   note?: string | null
+  selectedTaskIds?: string[]
 }
 export type StockItem = { id: string; name: string; quantity: number; minimumQuantity: number; unit: string }
 export type Incident = { id: string; date: string; description: string; status: string; roomId?: string | null }
@@ -140,7 +141,16 @@ export const schoolRepository = {
       .select('id,building_id,kind,execution_date,source_date,title,note,scope_type,status,created_by')
       .or(`execution_date.eq.${date},source_date.eq.${date}`)
     if (exceptionResult.error && !missingRelation(exceptionResult.error)) throw exceptionResult.error
-    const exceptions = (exceptionResult.data ?? []).map(mapCleaningDay)
+    const exceptionIds = (exceptionResult.data ?? []).map((row: any) => row.id)
+    const overrideResult = exceptionIds.length
+      ? await db.from('cleaning_day_exception_tasks')
+        .select('cleaning_day_exception_id,task_id,included,active')
+        .in('cleaning_day_exception_id', exceptionIds)
+        .eq('active', true)
+      : { data: [], error: null }
+    if (overrideResult.error && !missingRelation(overrideResult.error)) throw overrideResult.error
+    const overrides = mapCleaningDayOverrides(overrideResult.data ?? [])
+    const exceptions = (exceptionResult.data ?? []).map((row: any) => mapCleaningDay(row, overrides.get(row.id)))
     const cleaningDay = resolveCleaningDay(date, exceptions, isTestCleaningDay)
     const roomById = new Map((rooms ?? []).map((room: any) => [room.id, room]))
     const floorById = new Map((floors ?? []).map((floor: any) => [floor.id, floor]))
@@ -161,7 +171,7 @@ export const schoolRepository = {
         building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
         assignedTo: 'Úklidový tým', done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile) && !isTestCleaningDay,
         dueToday: room?.active !== false && isTaskDueForCleaningDay(row, cleaningDay), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
-        active: row.active,
+        active: row.active, roomActive: room?.active ?? true,
       }
     })
     return { tasks, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
@@ -203,15 +213,38 @@ export const schoolRepository = {
       if (error) throw error
     }
   },
-  cleaningDays: async (): Promise<{ records: CleaningDayRecord[]; available: boolean }> => {
+  cleaningDays: async (): Promise<{ records: CleaningDayRecord[]; available: boolean; taskSelectionAvailable: boolean }> => {
     const { data, error } = await client().from('cleaning_day_exceptions')
       .select('id,building_id,kind,execution_date,source_date,title,note,scope_type,status,created_by')
       .order('execution_date')
-    if (missingRelation(error)) return { records: [], available: false }
+    if (missingRelation(error)) return { records: [], available: false, taskSelectionAvailable: false }
     if (error) throw error
-    return { records: (data ?? []).map(mapCleaningDay), available: true }
+    const ids = (data ?? []).map((row: any) => row.id)
+    const overrideQuery = client().from('cleaning_day_exception_tasks')
+      .select('cleaning_day_exception_id,task_id,included,active')
+      .eq('active', true)
+    const overrideResult = ids.length ? await overrideQuery.in('cleaning_day_exception_id', ids) : await overrideQuery.limit(1)
+    if (overrideResult.error && !missingRelation(overrideResult.error)) throw overrideResult.error
+    const overrides = mapCleaningDayOverrides(overrideResult.data ?? [])
+    return {
+      records: (data ?? []).map((row: any) => mapCleaningDay(row, overrides.get(row.id))),
+      available: true,
+      taskSelectionAvailable: !overrideResult.error,
+    }
   },
   saveCleaningDay: async (draft: CleaningDayDraft) => {
+    if (draft.kind === 'extraordinary' && draft.selectedTaskIds) {
+      const { error } = await client().rpc('save_extraordinary_cleaning_day', {
+        target_exception_id: draft.id ?? null,
+        target_building_id: draft.buildingId,
+        target_execution_date: draft.executionDate,
+        target_title: draft.title.trim(),
+        target_note: draft.note?.trim() || '',
+        selected_task_ids: draft.selectedTaskIds,
+      })
+      if (error) throw error
+      return
+    }
     const values = {
       building_id: draft.buildingId,
       kind: draft.kind,
@@ -223,8 +256,8 @@ export const schoolRepository = {
       status: 'active',
     }
     const result = draft.id
-      ? await client().from('cleaning_day_exceptions').update(values).eq('id', draft.id)
-      : await client().from('cleaning_day_exceptions').insert(values)
+      ? await client().from('cleaning_day_exceptions').update(values).eq('id', draft.id).select('id').single()
+      : await client().from('cleaning_day_exceptions').insert(values).select('id').single()
     if (result.error) throw result.error
   },
   cancelCleaningDay: async (id: string) => {
@@ -288,10 +321,21 @@ export const schoolRepository = {
   subscribe: (onChange: () => void): RealtimeChannel => client().channel('school-changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_completions' }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_day_exceptions' }, onChange)
     .subscribe(),
 }
 
-function mapCleaningDay(row: any): CleaningDayRecord {
+function mapCleaningDayOverrides(rows: any[]) {
+  const byException = new Map<string, Record<string, boolean>>()
+  for (const row of rows) {
+    const current = byException.get(row.cleaning_day_exception_id) ?? {}
+    current[row.task_id] = row.included
+    byException.set(row.cleaning_day_exception_id, current)
+  }
+  return byException
+}
+
+function mapCleaningDay(row: any, taskOverrides: Record<string, boolean> = {}): CleaningDayRecord {
   return {
     id: row.id,
     buildingId: row.building_id,
@@ -303,5 +347,6 @@ function mapCleaningDay(row: any): CleaningDayRecord {
     scopeType: row.scope_type,
     status: row.status,
     createdBy: row.created_by,
+    taskOverrides,
   }
 }

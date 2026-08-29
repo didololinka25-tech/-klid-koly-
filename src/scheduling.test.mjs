@@ -32,6 +32,29 @@ test('mimořádný úklid celé školy zahrne standardní cleaning_day úkoly', 
   assert.equal(isTaskDueForCleaningDay(fridayOnly, context), false)
 })
 
+test('mimořádný úklid může přidat kanonický task mimo jeho pravidelný den', () => {
+  const stairMop = {
+    id: 'stairs-mop', frequency: 'once_or_twice_weekly', schedule_days: [1, 5],
+  }
+  const context = resolveCleaningDay('2026-08-29', [{
+    id: 'extra-stairs', kind: 'extraordinary', executionDate: '2026-08-29',
+    title: 'Před školním rokem', status: 'active',
+    taskOverrides: { 'stairs-mop': true },
+  }])
+  assert.equal(isTaskDueForCleaningDay(stairMop, context), true)
+})
+
+test('mimořádný úklid může odebrat task bez změny jeho pravidelného plánu', () => {
+  const task = { id: 'optional-room', ...everyCleaningDay }
+  const context = resolveCleaningDay('2026-08-29', [{
+    id: 'extra-selection', kind: 'extraordinary', executionDate: '2026-08-29',
+    title: 'Výběrový úklid', status: 'active',
+    taskOverrides: { 'optional-room': false },
+  }])
+  assert.equal(isTaskDueForCleaningDay(task, context), false)
+  assert.equal(isTaskDueOnDate(task, '2026-08-28'), true)
+})
+
 test('mimořádný úklid ve standardní den zachová i speciální úkoly toho dne', () => {
   const exceptions = [{
     id: 'extra-friday', kind: 'extraordinary', executionDate: '2026-08-28',

@@ -7,6 +7,7 @@ const repository = readFileSync(new URL('./schoolRepository.ts', import.meta.url
 const types = readFileSync(new URL('./types.ts', import.meta.url), 'utf8')
 const migration12 = readFileSync(new URL('../supabase/migrations/20260828001200_remove_disinfect_and_ab_windows.sql', import.meta.url), 'utf8')
 const migration13 = readFileSync(new URL('../supabase/migrations/20260829001300_cleaning_day_exceptions.sql', import.meta.url), 'utf8')
+const migration14 = readFileSync(new URL('../supabase/migrations/20260829001400_extraordinary_cleaning_tasks.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
   assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
@@ -46,4 +47,24 @@ test('serverová completion validace rozlišuje source a execution date', () => 
 test('pending badge je omezený na ownera', () => {
   assert.match(app, /const pendingCount = profile\.is_owner/)
   assert.match(app, /profile\.is_owner && pendingCount > 0/)
+})
+
+test('výběr mimořádných tasků zapisuje pouze adminské RPC a RLS zůstává aktivní', () => {
+  assert.match(migration14, /alter table public\.cleaning_day_exception_tasks enable row level security/)
+  assert.match(migration14, /not public\.is_admin\(\)/)
+  assert.match(migration14, /revoke insert, update, delete on public\.cleaning_day_exception_tasks from authenticated/)
+  assert.match(repository, /rpc\('save_extraordinary_cleaning_day'/)
+})
+
+test('server ověřuje explicitní členství tasku a chrání completion i dependency', () => {
+  assert.match(migration14, /is_task_in_extraordinary_cleaning_day\(exception\.id, target_task_id\)/)
+  assert.match(migration14, /Již dokončený úkol nelze z mimořádného úklidu odebrat/)
+  assert.match(migration14, /Vybraný úkol postrádá povinnou předchozí činnost/)
+  assert.match(migration14, /prerequisite_completion\.completion_date = target_date/)
+  assert.doesNotMatch(migration14, /insert into public\.cleaning_tasks/i)
+})
+
+test('cleaning team nemá zapisovací policy pro výběr mimořádných tasků', () => {
+  assert.doesNotMatch(migration14, /for (insert|update|delete) to authenticated[\s\S]*can_work_in_app/i)
+  assert.match(migration14, /grant execute on function public\.set_extraordinary_cleaning_tasks\(uuid, uuid\[\]\)[\s\S]*to authenticated/)
 })

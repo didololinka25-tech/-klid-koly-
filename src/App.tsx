@@ -77,6 +77,7 @@ export default function App() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [cleaningDays, setCleaningDays] = useState<CleaningDayRecord[]>([]);
   const [cleaningDaysAvailable, setCleaningDaysAvailable] = useState(false);
+  const [cleaningTaskSelectionAvailable, setCleaningTaskSelectionAvailable] = useState(false);
   const [cleaningDay, setCleaningDay] = useState<CleaningDayContext>({
     kind: isTestCleaningDay ? "preview" : "standard",
     executionDate: localDateKey(),
@@ -183,6 +184,7 @@ export default function App() {
       if (daysResult.status === "fulfilled") {
         setCleaningDays(daysResult.value.records);
         setCleaningDaysAvailable(daysResult.value.available);
+        setCleaningTaskSelectionAvailable(daysResult.value.taskSelectionAvailable);
       }
       if (operationsResult.status === "fulfilled") setOperations(operationsResult.value);
     },
@@ -200,6 +202,7 @@ export default function App() {
       setTasks([]);
       setUsers([]);
       setCleaningDays([]);
+      setCleaningTaskSelectionAvailable(false);
       setAttendance([]);
       setAttendanceView([]);
       setAttendanceWorkers([]);
@@ -507,6 +510,7 @@ export default function App() {
     const result = await schoolRepository.cleaningDays();
     setCleaningDays(result.records);
     setCleaningDaysAvailable(result.available);
+    setCleaningTaskSelectionAvailable(result.taskSelectionAvailable);
     await load(session, profile);
   };
   const saveCleaningDay = async (draft: CleaningDayDraft) => {
@@ -626,8 +630,10 @@ export default function App() {
         <CleaningCalendar
           records={cleaningDays}
           available={cleaningDaysAvailable}
+          taskSelectionAvailable={cleaningTaskSelectionAvailable}
           canManage={canManageOperations(profile)}
           buildingId={planOptions.buildings.find((item) => item.name === "Škola")?.id ?? ""}
+          tasks={tasks}
           onSave={saveCleaningDay}
           onCancel={cancelCleaningDay}
         />
@@ -2217,15 +2223,19 @@ const incidentStatus = (status: string) => ({ reported: "nahlášeno", in_progre
 function CleaningCalendar({
   records,
   available,
+  taskSelectionAvailable,
   canManage,
   buildingId,
+  tasks,
   onSave,
   onCancel,
 }: {
   records: CleaningDayRecord[];
   available: boolean;
+  taskSelectionAvailable: boolean;
   canManage: boolean;
   buildingId: string;
+  tasks: Task[];
   onSave: (draft: CleaningDayDraft) => Promise<void>;
   onCancel: (id: string) => Promise<void>;
 }) {
@@ -2250,6 +2260,8 @@ function CleaningCalendar({
         <CleaningDayEditor
           record={editing === "new" ? undefined : editing}
           buildingId={buildingId}
+          tasks={tasks}
+          taskSelectionAvailable={taskSelectionAvailable}
           onCancel={() => setEditing(null)}
           onSave={async (draft) => { await onSave(draft); setEditing(null); }}
         />
@@ -2274,7 +2286,9 @@ function CleaningCalendar({
             </div>
             {canManage && item.status === "active" && (
               <div className="calendar-actions">
-                <button onClick={() => setEditing(item)}>Upravit</button>
+                <button onClick={() => setEditing(item)}>
+                  {item.kind === "extraordinary" ? "Upravit úklid" : "Upravit přesun"}
+                </button>
                 <button className="danger-link" onClick={() => { if (window.confirm("Opravdu chcete tento úklidový den zrušit?")) void onCancel(item.id); }}>Zrušit</button>
               </div>
             )}
@@ -2310,14 +2324,145 @@ function upcomingCleaningDays(records: CleaningDayRecord[], days: number) {
   return result;
 }
 
+function isExtraordinaryBaselineTask(task: Task, date: string) {
+  if (!task.active || task.activityType === "other" && task.frequency === "mimořádně") return false;
+  if (task.frequency === "denně") return true;
+  if (task.frequency === "měsíčně") return task.monthlyDay === Number(date.slice(8, 10));
+  if (task.frequency === "mimořádně") return false;
+  const day = new Date(`${date}T12:00:00`).getDay() || 7;
+  return task.scheduleDays.includes(day);
+}
+
+function selectedTasksForExtraordinaryDay(
+  tasks: Task[],
+  date: string,
+  overrides: Record<string, boolean> = {},
+) {
+  return new Set(
+    tasks
+      .filter((task) => task.active && task.roomActive !== false)
+      .filter((task) => overrides[task.id] ?? isExtraordinaryBaselineTask(task, date))
+      .map((task) => task.id),
+  );
+}
+
+function ExtraordinaryTaskSelector({
+  tasks,
+  executionDate,
+  selected,
+  onChange,
+}: {
+  tasks: Task[];
+  executionDate: string;
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+}) {
+  const eligible = tasks.filter((task) => task.active && task.roomActive !== false);
+  const common = eligible.filter((task) => !task.roomId);
+  const floors = new Map<string, Task[]>();
+  eligible.filter((task) => task.roomId).forEach((task) => {
+    floors.set(task.floor, [...(floors.get(task.floor) ?? []), task]);
+  });
+  const toggle = (task: Task, checked: boolean) => {
+    const next = new Set(selected);
+    if (checked) {
+      let current: Task | undefined = task;
+      const visited = new Set<string>();
+      while (current && !visited.has(current.id)) {
+        visited.add(current.id);
+        next.add(current.id);
+        current = current.prerequisite
+          ? eligible.find((item) => item.id === current?.prerequisite)
+          : undefined;
+      }
+    } else {
+      next.delete(task.id);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const dependent of eligible) {
+          if (dependent.prerequisite && !next.has(dependent.prerequisite) && next.delete(dependent.id)) {
+            changed = true;
+          }
+        }
+      }
+    }
+    onChange(next);
+  };
+  const renderTasks = (roomTasks: Task[]) => (
+    <div className="exception-task-list">
+      {[...roomTasks].sort((a, b) => a.sortOrder - b.sortOrder).map((task) => {
+        const checked = selected.has(task.id);
+        const baseline = isExtraordinaryBaselineTask(task, executionDate);
+        return (
+          <label className="exception-task" key={task.id}>
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={task.done && checked}
+              onChange={(event) => toggle(task, event.target.checked)}
+            />
+            <span aria-hidden="true">{activityTypes[task.activityType]?.icon ?? "✓"}</span>
+            <span>
+              <b>{task.title}</b>
+              <small>
+                {baseline ? "Běžný kompletní plán" : formatTaskSchedule(task)}
+                {task.prerequisite ? " · vyžaduje předchozí činnost" : ""}
+                {task.done ? " · již hotovo" : ""}
+              </small>
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
+  return (
+    <fieldset className="exception-task-picker">
+      <legend>Činnosti tohoto mimořádného úklidu</legend>
+      <p className="hint">
+        Běžný kompletní plán je předvybraný. Další činnost lze přidat jen pro
+        tento den; její pravidelná frekvence se nezmění.
+      </p>
+      <strong>{selected.size} vybraných činností</strong>
+      {[...floors.entries()]
+        .sort(([, a], [, b]) => a[0].floorSort - b[0].floorSort)
+        .map(([floor, floorTasks]) => {
+          const rooms = new Map<string, Task[]>();
+          floorTasks.forEach((task) => rooms.set(task.room, [...(rooms.get(task.room) ?? []), task]));
+          return (
+            <details className="exception-floor" key={floor}>
+              <summary><b>{floor}</b><span>{floorTasks.filter((task) => selected.has(task.id)).length}/{floorTasks.length}</span></summary>
+              {[...rooms.entries()].map(([room, roomTasks]) => (
+                <details className="exception-room" key={room}>
+                  <summary><b>{room}</b><span>{roomTasks.filter((task) => selected.has(task.id)).length}/{roomTasks.length}</span></summary>
+                  {renderTasks(roomTasks)}
+                </details>
+              ))}
+            </details>
+          );
+        })}
+      {common.length > 0 && (
+        <details className="exception-floor">
+          <summary><b>Společné úkoly</b><span>{common.filter((task) => selected.has(task.id)).length}/{common.length}</span></summary>
+          {renderTasks(common)}
+        </details>
+      )}
+    </fieldset>
+  );
+}
+
 function CleaningDayEditor({
   record,
   buildingId,
+  tasks,
+  taskSelectionAvailable,
   onCancel,
   onSave,
 }: {
   record?: CleaningDayRecord;
   buildingId: string;
+  tasks: Task[];
+  taskSelectionAvailable: boolean;
   onCancel: () => void;
   onSave: (draft: CleaningDayDraft) => Promise<void>;
 }) {
@@ -2328,13 +2473,31 @@ function CleaningDayEditor({
   const [sourceDate, setSourceDate] = useState(record?.sourceDate ?? localDateKey());
   const [title, setTitle] = useState(record?.title ?? "");
   const [note, setNote] = useState(record?.note ?? "");
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
+    () => selectedTasksForExtraordinaryDay(tasks, record?.executionDate ?? localDateKey(tomorrow), record?.taskOverrides),
+  );
   const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (kind !== "extraordinary") return;
+    setSelectedTaskIds(selectedTasksForExtraordinaryDay(tasks, executionDate, record?.taskOverrides));
+  }, [kind, executionDate, record?.id, record?.taskOverrides, tasks]);
   return (
     <form className="task-editor cleaning-day-editor" onSubmit={async (event) => {
       event.preventDefault();
       setSaving(true);
       try {
-        await onSave({ id: record?.id, buildingId, kind, executionDate, sourceDate: kind === "rescheduled" ? sourceDate : null, title, note });
+        await onSave({
+          id: record?.id,
+          buildingId,
+          kind,
+          executionDate,
+          sourceDate: kind === "rescheduled" ? sourceDate : null,
+          title,
+          note,
+          selectedTaskIds: kind === "extraordinary" && taskSelectionAvailable
+            ? [...selectedTaskIds]
+            : undefined,
+        });
       } finally { setSaving(false); }
     }}>
       <h2>{record ? "Upravit úklidový den" : "Nový úklidový den"}</h2>
@@ -2346,6 +2509,19 @@ function CleaningDayEditor({
       <label>{kind === "rescheduled" ? "Nový termín" : "Datum"}<input type="date" value={executionDate} min={localDateKey()} onChange={(event) => setExecutionDate(event.target.value)} required /></label>
       <label>Název<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={kind === "extraordinary" ? "Generální úklid" : "Přesun kvůli školní akci"} required /></label>
       <label>Rozsah<input value="Celá škola · běžný kompletní úklid" readOnly /></label>
+      {kind === "extraordinary" && taskSelectionAvailable && (
+        <ExtraordinaryTaskSelector
+          tasks={tasks}
+          executionDate={executionDate}
+          selected={selectedTaskIds}
+          onChange={setSelectedTaskIds}
+        />
+      )}
+      {kind === "extraordinary" && !taskSelectionAvailable && (
+        <div className="notice">
+          Konkrétní činnosti bude možné upravit po zkontrolování a aplikaci migrace 01400.
+        </div>
+      )}
       <label>Poznámka<textarea value={note ?? ""} onChange={(event) => setNote(event.target.value)} rows={3} /></label>
       <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
     </form>

@@ -1,4 +1,5 @@
 export type SchedulableTask = {
+  id?: string
   frequency: string
   schedule_days?: number[] | string | null
   monthly_day?: number | null
@@ -12,6 +13,7 @@ export type CleaningDayException = {
   title: string
   note?: string | null
   status: 'active' | 'cancelled'
+  taskOverrides?: Record<string, boolean>
 }
 
 export type CleaningDayContext = {
@@ -21,6 +23,8 @@ export type CleaningDayContext = {
   title: string
   note?: string | null
   movedTo?: string
+  exceptionId?: string
+  taskOverrides?: Record<string, boolean>
 }
 
 function dateParts(date: string) {
@@ -73,6 +77,8 @@ export function resolveCleaningDay(
       scheduleDate: executing.sourceDate,
       title: executing.title,
       note: executing.note,
+      exceptionId: executing.id,
+      taskOverrides: executing.taskOverrides,
     }
   }
   if (executing?.kind === 'extraordinary') {
@@ -82,6 +88,8 @@ export function resolveCleaningDay(
       scheduleDate: executionDate,
       title: executing.title,
       note: executing.note,
+      exceptionId: executing.id,
+      taskOverrides: executing.taskOverrides,
     }
   }
 
@@ -114,7 +122,13 @@ export function isTaskDueForCleaningDay(
   if (context.kind === 'moved_away') return false
   if (context.kind === 'preview') return isTaskDueOnDate(task, context.scheduleDate, true)
   if (context.kind === 'extraordinary') {
-    return task.frequency === 'cleaning_day' || isTaskDueOnDate(task, context.executionDate)
+    const baseline = task.frequency === 'cleaning_day'
+      || isTaskDueOnDate(task, context.executionDate)
+    if (task.id && context.taskOverrides
+      && Object.prototype.hasOwnProperty.call(context.taskOverrides, task.id)) {
+      return context.taskOverrides[task.id]
+    }
+    return baseline
   }
   if (context.kind === 'rescheduled') {
     return isTaskDueOnDate(task, context.scheduleDate)

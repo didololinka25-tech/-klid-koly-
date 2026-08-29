@@ -1001,6 +1001,22 @@ h2 {
 .calendar-actions { display: flex; gap: 7px; }
 .calendar-actions button { min-height: 38px; border: 1px solid #bcd4ce; border-radius: 8px; background: #fff; color: #165e56; font-weight: 800; }
 .calendar-actions button.danger-link { color: #a3342b; border-color: #e8b4ae; }
+.exception-task-picker { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid #dbe8e4; border-radius: 14px; }
+.exception-task-picker > strong { color: #165e56; font-size: 13px; }
+.exception-floor,
+.exception-room { min-width: 0; border: 1px solid #dbe8e4; border-radius: 12px; background: #fff; overflow: hidden; }
+.exception-room { margin: 0 8px 8px; background: #f8fbfa; }
+.exception-floor summary,
+.exception-room summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 46px; padding: 10px 12px; cursor: pointer; }
+.exception-floor summary span,
+.exception-room summary span { color: #607a74; font-size: 12px; }
+.exception-task-list { display: grid; gap: 6px; padding: 0 8px 8px; }
+.exception-task { display: grid; grid-template-columns: 24px 30px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 50px; padding: 8px; border-radius: 10px; background: #fff; }
+.exception-task input { width: 22px; height: 22px; margin: 0; }
+.exception-task > span:last-child { display: grid; min-width: 0; gap: 2px; }
+.exception-task b,
+.exception-task small { overflow-wrap: anywhere; }
+.exception-task small { color: #6c837e; line-height: 1.25; }
 .nav-badge { position: absolute; top: 1px; right: calc(50% - 25px); min-width: 17px; height: 17px; border-radius: 999px; padding: 0 4px; background: #c43d31; color: #fff; font-size: 10px; font-style: normal; line-height: 17px; }
 nav {
   position: fixed;

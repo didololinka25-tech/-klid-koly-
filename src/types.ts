@@ -6,6 +6,7 @@ export type Task = {
   activityType: ActivityType
   frequency: Frequency; assignedTo: string; done: boolean; prerequisite?: string; canComplete?: boolean; dueToday: boolean
   sortOrder: number; scheduleDays: number[]; monthlyDay?: number | null; active: boolean
+  roomActive?: boolean
 }
 export type Shift = { worker: Worker; start: string; end: string }
 export type Attendance = { id: string; workerId: string; start: string; end?: string; date: string; note?: string; editedAt?: string }
