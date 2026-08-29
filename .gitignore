@@ -7,3 +7,6 @@ vite.config.d.ts
 .env
 .env.local
 .env.*.local
+*.sql.enc
+*.tar.gz.enc
+supabase-backup-*/

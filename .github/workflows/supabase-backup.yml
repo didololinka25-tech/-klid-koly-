@@ -1,0 +1,86 @@
+name: Encrypted Supabase backup
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-supabase-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Create encrypted logical backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check required secrets
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$SUPABASE_DB_URL"
+          echo "::add-mask::$BACKUP_ENCRYPTION_PASSPHRASE"
+          test -n "$SUPABASE_DB_URL" || { echo "Chybí secret SUPABASE_DB_URL." >&2; exit 1; }
+          test "${#BACKUP_ENCRYPTION_PASSPHRASE}" -ge 24 || { echo "BACKUP_ENCRYPTION_PASSPHRASE musí mít alespoň 24 znaků." >&2; exit 1; }
+
+      - name: Dump, validate and encrypt database
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          PLAIN_DIR="$RUNNER_TEMP/supabase-backup-plain"
+          ENCRYPTED_DIR="$RUNNER_TEMP/supabase-backup-encrypted"
+          BACKUP_STAMP="$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
+          BACKUP_BASENAME="klid-koly-supabase-$BACKUP_STAMP"
+          mkdir -p "$PLAIN_DIR" "$ENCRYPTED_DIR"
+          trap 'rm -rf "$PLAIN_DIR"' EXIT
+
+          npx --yes supabase@2.116.0 db dump --db-url "$SUPABASE_DB_URL" -f "$PLAIN_DIR/roles.sql" --role-only
+          npx --yes supabase@2.116.0 db dump --db-url "$SUPABASE_DB_URL" -f "$PLAIN_DIR/schema.sql"
+          npx --yes supabase@2.116.0 db dump --db-url "$SUPABASE_DB_URL" -f "$PLAIN_DIR/data.sql" --use-copy --data-only -x "storage.buckets_vectors" -x "storage.vector_indexes"
+
+          test -s "$PLAIN_DIR/roles.sql"
+          test -s "$PLAIN_DIR/schema.sql"
+          test -s "$PLAIN_DIR/data.sql"
+          grep -q "cleaning_tasks" "$PLAIN_DIR/schema.sql"
+          grep -q "attendance" "$PLAIN_DIR/schema.sql"
+          grep -q "cleaning_completions" "$PLAIN_DIR/schema.sql"
+          grep -Eq 'auth[".]+' "$PLAIN_DIR/data.sql"
+
+          tar -C "$PLAIN_DIR" -czf "$RUNNER_TEMP/$BACKUP_BASENAME.tar.gz" roles.sql schema.sql data.sql
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
+            -pass env:BACKUP_ENCRYPTION_PASSPHRASE \
+            -in "$RUNNER_TEMP/$BACKUP_BASENAME.tar.gz" \
+            -out "$ENCRYPTED_DIR/$BACKUP_BASENAME.tar.gz.enc"
+          rm -f "$RUNNER_TEMP/$BACKUP_BASENAME.tar.gz"
+
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -pass env:BACKUP_ENCRYPTION_PASSPHRASE \
+            -in "$ENCRYPTED_DIR/$BACKUP_BASENAME.tar.gz.enc" | tar -tzf - >/dev/null
+          (cd "$ENCRYPTED_DIR" && sha256sum "$BACKUP_BASENAME.tar.gz.enc" > "$BACKUP_BASENAME.sha256")
+          printf '%s\n' \
+            "Šifrovaná logická záloha Supabase pro Klid Koly." \
+            "Obnova: docs/SUPABASE_BACKUP_RESTORE.md v repozitáři." \
+            "Bez BACKUP_ENCRYPTION_PASSPHRASE nelze soubor dešifrovat." \
+            > "$ENCRYPTED_DIR/README.txt"
+
+          echo "BACKUP_BASENAME=$BACKUP_BASENAME" >> "$GITHUB_ENV"
+          echo "ENCRYPTED_DIR=$ENCRYPTED_DIR" >> "$GITHUB_ENV"
+
+      - name: Upload encrypted backup artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.BACKUP_BASENAME }}
+          path: ${{ env.ENCRYPTED_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
