@@ -986,8 +986,30 @@ h2 {
 .pending-alert { border-color: #e4b860; background: #fff5dd; color: #704800; }
 .pending-summary { margin-bottom: 12px; padding: 12px; border-radius: 12px; background: #fff5dd; color: #704800; display: grid; gap: 3px; }
 .user-card.pending { border-color: #dfb45d; }
-.operation-row { display: grid; gap: 3px; padding: 11px 0; border-bottom: 1px solid #e5eeeb; }
-.operation-row span { color: #6d827d; font-size: 12px; }
+.operation-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.operation-heading .eyebrow { margin: 0; }
+.operation-heading button,
+.operation-actions button,
+.resolved-items > article > button { min-height: 42px; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; color: #165e56; font-weight: 800; padding: 8px 10px; }
+.operation-card { display: grid; gap: 9px; padding: 13px 0; border-bottom: 1px solid #e5eeeb; min-width: 0; }
+.operation-card > div:first-child { display: grid; gap: 3px; min-width: 0; }
+.operation-card b,
+.operation-card span,
+.operation-card small { overflow-wrap: anywhere; }
+.operation-card span,
+.operation-card small { color: #6d827d; font-size: 12px; line-height: 1.35; }
+.operation-card.resolved { opacity: .68; }
+.operation-card.resolved b { text-decoration: line-through; }
+.operation-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.operation-actions button.success { background: #e3f4e9; border-color: #aad5b7; color: #216638; }
+.operation-editor { display: grid; gap: 11px; margin: 12px 0; padding: 12px; border: 1px solid #c7ddd6; border-radius: 12px; background: #f6faf8; }
+.operation-editor label { display: grid; gap: 5px; font-weight: 800; font-size: 12px; }
+.operation-editor input,
+.operation-editor select,
+.operation-editor textarea { width: 100%; min-width: 0; min-height: 44px; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; padding: 10px; color: #173d38; font: inherit; box-sizing: border-box; }
+.operation-editor textarea { resize: vertical; }
+.resolved-items { margin-top: 12px; }
+.resolved-items > summary { min-height: 44px; display: flex; align-items: center; color: #607a74; cursor: pointer; font-weight: 800; }
 .calendar-intro { display: grid; gap: 5px; }
 .calendar-intro small { color: #6d827d; line-height: 1.4; }
 .primary-action { min-height: 46px; border: 0; border-radius: 11px; background: #165e56; color: #fff; font-weight: 800; }

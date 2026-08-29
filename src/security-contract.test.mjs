@@ -8,6 +8,7 @@ const types = readFileSync(new URL('./types.ts', import.meta.url), 'utf8')
 const migration12 = readFileSync(new URL('../supabase/migrations/20260828001200_remove_disinfect_and_ab_windows.sql', import.meta.url), 'utf8')
 const migration13 = readFileSync(new URL('../supabase/migrations/20260829001300_cleaning_day_exceptions.sql', import.meta.url), 'utf8')
 const migration14 = readFileSync(new URL('../supabase/migrations/20260829001400_extraordinary_cleaning_tasks.sql', import.meta.url), 'utf8')
+const migration15 = readFileSync(new URL('../supabase/migrations/20260829001500_simple_operations_lists.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
   assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
@@ -67,4 +68,13 @@ test('server ověřuje explicitní členství tasku a chrání completion i depe
 test('cleaning team nemá zapisovací policy pro výběr mimořádných tasků', () => {
   assert.doesNotMatch(migration14, /for (insert|update|delete) to authenticated[\s\S]*can_work_in_app/i)
   assert.match(migration14, /grant execute on function public\.set_extraordinary_cleaning_tasks\(uuid, uuid\[\]\)[\s\S]*to authenticated/)
+})
+
+test('Provoz zachovává RLS: tým vytváří a opravuje vlastní záznamy, admin všechny', () => {
+  assert.match(migration15, /created_by = auth\.uid\(\)/)
+  assert.match(migration15, /worker_id = auth\.uid\(\)/)
+  assert.match(migration15, /using \(public\.is_admin\(\)\)/)
+  assert.match(migration15, /using \(public\.can_view_school_data\(\)\)/)
+  assert.match(migration15, /revoke delete on public\.stock_items, public\.incidents from authenticated/)
+  assert.doesNotMatch(migration15, /^delete\s+from/im)
 })

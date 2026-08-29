@@ -48,9 +48,10 @@ export type CleaningDayDraft = {
   note?: string | null
   selectedTaskIds?: string[]
 }
-export type StockItem = { id: string; name: string; quantity: number; minimumQuantity: number; unit: string }
-export type Incident = { id: string; date: string; description: string; status: string; roomId?: string | null }
-export type OperationsData = { stock: StockItem[]; incidents: Incident[] }
+export type StockItem = { id: string; name: string; note: string; status: 'needed' | 'resolved'; createdBy?: string | null }
+export type Incident = { id: string; date: string; title: string; note: string; status: string; roomId?: string | null; room: string; floor: string; createdBy?: string | null }
+export type OperationRoom = { id: string; name: string; floor: string }
+export type OperationsData = { stock: StockItem[]; incidents: Incident[]; rooms: OperationRoom[]; editable: boolean }
 export type ManagedRoom = { id: string; buildingId: string; floorId: string | null; name: string; active: boolean; sortOrder: number }
 export type AttendanceWorker = { id: string; name: string; role: AccessRole }
 export type AttendanceSettings = { plannedShiftsPerWeek: number; configurable: boolean }
@@ -265,15 +266,69 @@ export const schoolRepository = {
     if (error) throw error
   },
   operations: async (): Promise<OperationsData> => {
-    const [{ data: stock, error: stockError }, { data: incidents, error: incidentError }] = await Promise.all([
-      client().from('stock_items').select('id,name,quantity,minimum_quantity,unit').eq('active', true).order('name'),
-      client().from('incidents').select('id,incident_date,description,status,room_id').order('incident_date', { ascending: false }).limit(30),
+    const db = client()
+    const [stockResult, incidentResult, roomResult, floorResult] = await Promise.all([
+      db.from('stock_items').select('id,name,note,status,created_by').eq('active', true).order('created_at', { ascending: false }),
+      db.from('incidents').select('id,incident_date,title,note,status,room_id,worker_id').eq('active', true).order('incident_date', { ascending: false }).limit(100),
+      db.from('rooms').select('id,name,floor_id').eq('active', true).order('sort_order'),
+      db.from('floors').select('id,name,sort_order').order('sort_order'),
     ])
-    if (stockError || incidentError) throw stockError ?? incidentError
-    return {
-      stock: (stock ?? []).map((item: any) => ({ id: item.id, name: item.name, quantity: Number(item.quantity), minimumQuantity: Number(item.minimum_quantity), unit: item.unit })),
-      incidents: (incidents ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, description: item.description, status: item.status, roomId: item.room_id })),
+    const schemaMissing = [stockResult.error, incidentResult.error].some((error) => error?.code === '42703' || error?.message.includes('column'))
+    if (schemaMissing) {
+      const [legacyStock, legacyIncidents] = await Promise.all([
+        db.from('stock_items').select('id,name').eq('active', true).order('name'),
+        db.from('incidents').select('id,incident_date,description,status,room_id,worker_id').order('incident_date', { ascending: false }).limit(30),
+      ])
+      if (legacyStock.error || legacyIncidents.error) throw legacyStock.error ?? legacyIncidents.error
+      return {
+        stock: (legacyStock.data ?? []).map((item: any) => ({ id: item.id, name: item.name, note: '', status: 'needed', createdBy: null })),
+        incidents: (legacyIncidents.data ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, title: item.description, note: '', status: item.status, roomId: item.room_id, room: '', floor: '', createdBy: item.worker_id })),
+        rooms: [],
+        editable: false,
+      }
     }
+    const error = stockResult.error ?? incidentResult.error ?? roomResult.error ?? floorResult.error
+    if (error) throw error
+    const floors = new Map((floorResult.data ?? []).map((floor: any) => [floor.id, floor.name]))
+    const rooms = (roomResult.data ?? []).map((room: any) => ({ id: room.id, name: room.name, floor: floors.get(room.floor_id) ?? 'Společné' }))
+    const roomMap = new Map(rooms.map((room) => [room.id, room]))
+    return {
+      stock: (stockResult.data ?? []).map((item: any) => ({ id: item.id, name: item.name, note: item.note ?? '', status: item.status, createdBy: item.created_by })),
+      incidents: (incidentResult.data ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, title: item.title, note: item.note ?? '', status: item.status, roomId: item.room_id, room: roomMap.get(item.room_id)?.name ?? '', floor: roomMap.get(item.room_id)?.floor ?? '', createdBy: item.worker_id })),
+      rooms,
+      editable: true,
+    }
+  },
+  savePurchaseItem: async (item: { id?: string; name: string; note: string }, userId: string) => {
+    const values = { name: item.name.trim(), note: item.note.trim() || null }
+    const result = item.id
+      ? await client().from('stock_items').update(values).eq('id', item.id)
+      : await client().from('stock_items').insert({ ...values, active: true, status: 'needed', created_by: userId })
+    if (result.error) throw result.error
+  },
+  setPurchaseItemStatus: async (id: string, status: 'needed' | 'resolved') => {
+    const { error } = await client().from('stock_items').update({ status, resolved_at: status === 'resolved' ? new Date().toISOString() : null, resolved_by: status === 'resolved' ? (await client().auth.getUser()).data.user?.id : null }).eq('id', id)
+    if (error) throw error
+  },
+  archivePurchaseItem: async (id: string) => {
+    const { error } = await client().from('stock_items').update({ active: false }).eq('id', id)
+    if (error) throw error
+  },
+  saveIncident: async (item: { id?: string; title: string; note: string; roomId?: string | null }, userId: string) => {
+    if (item.id) {
+      const { error } = await client().from('incidents').update({ title: item.title.trim(), description: item.title.trim(), note: item.note.trim() || null, room_id: item.roomId || null }).eq('id', item.id)
+      if (error) throw error
+      return
+    }
+    const { data: building, error: buildingError } = await client().from('buildings').select('id').eq('name', 'Škola').single()
+    if (buildingError) throw buildingError
+    const { error } = await client().from('incidents').insert({ worker_id: userId, building_id: building.id, title: item.title.trim(), description: item.title.trim(), note: item.note.trim() || null, room_id: item.roomId || null, status: 'reported', active: true })
+    if (error) throw error
+  },
+  setIncidentStatus: async (id: string, status: 'reported' | 'resolved') => {
+    const { data: current } = await client().auth.getUser()
+    const { error } = await client().from('incidents').update({ status, resolved_at: status === 'resolved' ? new Date().toISOString() : null, resolved_by: status === 'resolved' ? current.user?.id : null }).eq('id', id)
+    if (error) throw error
   },
   attendance: async (workerId: string): Promise<Attendance[]> => {
     const { data, error } = await client().from('attendance').select('id,worker_id,started_at,ended_at,attendance_date,note').eq('worker_id', workerId).order('started_at', { ascending: false })
@@ -322,6 +377,8 @@ export const schoolRepository = {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_completions' }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_day_exceptions' }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_items' }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents' }, onChange)
     .subscribe(),
 }
 

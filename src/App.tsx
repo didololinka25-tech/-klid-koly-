@@ -14,9 +14,11 @@ import {
   type CleaningDayDraft,
   type CleaningDayRecord,
   type ManagedRoom,
+  type Incident,
   type OperationsData,
   type PlanOptions,
   type Profile,
+  type StockItem,
   type UserProfile,
 } from "./schoolRepository";
 import { isSupabaseConfigured } from "./supabase";
@@ -84,7 +86,7 @@ export default function App() {
     scheduleDate: localDateKey(),
     title: isTestCleaningDay ? "Testovací standardní úklid" : "Standardní úklid",
   });
-  const [operations, setOperations] = useState<OperationsData>({ stock: [], incidents: [] });
+  const [operations, setOperations] = useState<OperationsData>({ stock: [], incidents: [], rooms: [], editable: false });
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [attendanceView, setAttendanceView] = useState<Attendance[]>([]);
   const [attendanceWorkers, setAttendanceWorkers] = useState<AttendanceWorker[]>([]);
@@ -638,7 +640,15 @@ export default function App() {
           onCancel={cancelCleaningDay}
         />
       )}
-      {section === "Provoz" && <OperationsScreen data={operations} />}
+      {section === "Provoz" && (
+        <OperationsScreen
+          data={operations}
+          userId={profile.id}
+          canCreate={canWork(profile)}
+          canManage={canManageOperations(profile)}
+          onChanged={async () => setOperations(await schoolRepository.operations())}
+        />
+      )}
       {section === "Více" && (
         <MoreScreen
           profile={profile}
@@ -2191,34 +2201,153 @@ function MoreScreen({
   );
 }
 
-function OperationsScreen({ data }: { data: OperationsData }) {
-  const lowStock = data.stock.filter((item) => item.quantity <= item.minimumQuantity);
+function OperationsScreen({
+  data,
+  userId,
+  canCreate,
+  canManage,
+  onChanged,
+}: {
+  data: OperationsData;
+  userId: string;
+  canCreate: boolean;
+  canManage: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const [purchaseEditor, setPurchaseEditor] = useState<StockItem | "new" | null>(null);
+  const [incidentEditor, setIncidentEditor] = useState<Incident | "new" | null>(null);
+  const [message, setMessage] = useState("");
+  const needed = data.stock.filter((item) => item.status === "needed");
+  const bought = data.stock.filter((item) => item.status === "resolved");
   const openIncidents = data.incidents.filter((item) => item.status !== "resolved");
+  const resolvedIncidents = data.incidents.filter((item) => item.status === "resolved");
+  const mutate = async (action: () => Promise<void>) => {
+    try {
+      setMessage("");
+      await action();
+      await onChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Změnu se nepodařilo uložit.");
+      throw error;
+    }
+  };
   return (
     <div className="operations-screen">
+      {message && <div className="notice">{message}</div>}
+      {!data.editable && canCreate && (
+        <div className="notice">Editace Provozu bude dostupná po aplikaci migrace 01500.</div>
+      )}
       <section className="panel">
-        <p className="eyebrow">CO CHYBÍ / CO KOUPIT</p>
-        {lowStock.map((item) => (
-          <div className="operation-row" key={item.id}>
-            <b>{item.name}</b><span>{item.quantity} {item.unit} · minimum {item.minimumQuantity}</span>
-          </div>
+        <div className="operation-heading">
+          <p className="eyebrow">CO CHYBÍ / CO KOUPIT</p>
+          {canCreate && data.editable && <button onClick={() => setPurchaseEditor("new")}>+ Přidat</button>}
+        </div>
+        {purchaseEditor && (
+          <PurchaseEditor
+            item={purchaseEditor === "new" ? undefined : purchaseEditor}
+            onCancel={() => setPurchaseEditor(null)}
+            onSave={async (draft) => {
+              await mutate(() => schoolRepository.savePurchaseItem(draft, userId));
+              setPurchaseEditor(null);
+            }}
+          />
+        )}
+        {needed.map((item) => (
+          <article className="operation-card" key={item.id}>
+            <div><b>{item.name}</b>{item.note && <span>{item.note}</span>}</div>
+            {(canManage || item.createdBy === userId) && data.editable && (
+              <div className="operation-actions">
+                <button onClick={() => setPurchaseEditor(item)}>Upravit</button>
+                <button className="success" onClick={() => void mutate(() => schoolRepository.setPurchaseItemStatus(item.id, "resolved")).catch(() => undefined)}>Koupeno</button>
+                <button onClick={() => void mutate(() => schoolRepository.archivePurchaseItem(item.id)).catch(() => undefined)}>Skrýt</button>
+              </div>
+            )}
+          </article>
         ))}
-        {!lowStock.length && <p className="hint">Žádná zásoba není pod minimem.</p>}
+        {!needed.length && <p className="hint">Momentálně není potřeba nic koupit.</p>}
+        {!!bought.length && (
+          <details className="resolved-items">
+            <summary>Vyřešené ({bought.length})</summary>
+            {bought.map((item) => (
+              <article className="operation-card resolved" key={item.id}>
+                <div><b>{item.name}</b>{item.note && <span>{item.note}</span>}</div>
+                {(canManage || item.createdBy === userId) && data.editable && <button onClick={() => void mutate(() => schoolRepository.setPurchaseItemStatus(item.id, "needed")).catch(() => undefined)}>Znovu otevřít</button>}
+              </article>
+            ))}
+          </details>
+        )}
       </section>
       <section className="panel">
-        <p className="eyebrow">CO JE ROZBITÉ / CO OPRAVIT</p>
+        <div className="operation-heading">
+          <p className="eyebrow">CO JE ROZBITÉ / CO OPRAVIT</p>
+          {canCreate && data.editable && <button onClick={() => setIncidentEditor("new")}>+ Nahlásit závadu</button>}
+        </div>
+        {incidentEditor && (
+          <IncidentEditor
+            item={incidentEditor === "new" ? undefined : incidentEditor}
+            rooms={data.rooms}
+            onCancel={() => setIncidentEditor(null)}
+            onSave={async (draft) => {
+              await mutate(() => schoolRepository.saveIncident(draft, userId));
+              setIncidentEditor(null);
+            }}
+          />
+        )}
         {openIncidents.map((item) => (
-          <div className="operation-row" key={item.id}>
-            <b>{item.description}</b><span>{formatDate(item.date)} · {incidentStatus(item.status)}</span>
-          </div>
+          <article className="operation-card incident" key={item.id}>
+            <div><b>⚠ {item.title}</b><span>{[item.room, item.floor].filter(Boolean).join(" · ") || "Místo neuvedeno"}</span>{item.note && <small>{item.note}</small>}</div>
+            {(canManage || item.createdBy === userId) && data.editable && (
+              <div className="operation-actions">
+                <button onClick={() => setIncidentEditor(item)}>Upravit</button>
+                <button className="success" onClick={() => void mutate(() => schoolRepository.setIncidentStatus(item.id, "resolved")).catch(() => undefined)}>Opraveno</button>
+              </div>
+            )}
+          </article>
         ))}
         {!openIncidents.length && <p className="hint">Nejsou evidované žádné otevřené závady.</p>}
+        {!!resolvedIncidents.length && (
+          <details className="resolved-items">
+            <summary>Vyřešené ({resolvedIncidents.length})</summary>
+            {resolvedIncidents.map((item) => (
+              <article className="operation-card resolved" key={item.id}>
+                <div><b>{item.title}</b><span>{[item.room, item.floor].filter(Boolean).join(" · ")}</span></div>
+                {(canManage || item.createdBy === userId) && data.editable && <button onClick={() => void mutate(() => schoolRepository.setIncidentStatus(item.id, "reported")).catch(() => undefined)}>Znovu otevřít</button>}
+              </article>
+            ))}
+          </details>
+        )}
       </section>
     </div>
   );
 }
 
-const incidentStatus = (status: string) => ({ reported: "nahlášeno", in_progress: "řeší se", resolved: "vyřešeno" })[status] ?? status;
+function PurchaseEditor({ item, onSave, onCancel }: { item?: StockItem; onSave: (item: { id?: string; name: string; note: string }) => Promise<void>; onCancel: () => void }) {
+  const [name, setName] = useState(item?.name ?? "");
+  const [note, setNote] = useState(item?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  return (
+    <form className="operation-editor" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave({ id: item?.id, name, note }); } finally { setSaving(false); } }}>
+      <label>Název<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Např. Gumové rukavice" required /></label>
+      <label>Poznámka<textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="Volitelná upřesňující poznámka" /></label>
+      <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+    </form>
+  );
+}
+
+function IncidentEditor({ item, rooms, onSave, onCancel }: { item?: Incident; rooms: OperationsData["rooms"]; onSave: (item: { id?: string; title: string; note: string; roomId?: string | null }) => Promise<void>; onCancel: () => void }) {
+  const [title, setTitle] = useState(item?.title ?? "");
+  const [note, setNote] = useState(item?.note ?? "");
+  const [roomId, setRoomId] = useState(item?.roomId ?? "");
+  const [saving, setSaving] = useState(false);
+  return (
+    <form className="operation-editor" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave({ id: item?.id, title, note, roomId: roomId || null }); } finally { setSaving(false); } }}>
+      <label>Co je rozbité<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Např. Nefunguje světlo" required /></label>
+      <label>Místnost<select value={roomId} onChange={(event) => setRoomId(event.target.value)}><option value="">Místo neuvedeno</option>{rooms.map((room) => <option key={room.id} value={room.id}>{room.floor} · {room.name}</option>)}</select></label>
+      <label>Poznámka<textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="Volitelné upřesnění" /></label>
+      <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+    </form>
+  );
+}
 
 function CleaningCalendar({
   records,
