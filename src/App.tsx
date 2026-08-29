@@ -28,7 +28,7 @@ import {
   reportDuration,
 } from "./attendanceReport";
 import { isSupabaseConfigured } from "./supabase";
-import type { CleaningDayContext } from "./scheduling";
+import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay, type CleaningDayContext } from "./scheduling";
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
 
 type Section =
@@ -68,6 +68,10 @@ const activityTypes: Record<
   mop: { icon: "🧽", label: "Vytřít" },
   tables: { icon: "▤", label: "Stoly" },
   windows: { icon: "▦", label: "Okna" },
+  doors: { icon: "▯", label: "Dveře" },
+  tiles: { icon: "▦", label: "Obklady" },
+  surfaces: { icon: "▤", label: "Povrchy" },
+  deep_clean: { icon: "💦", label: "Hloubkově" },
   laundry: { icon: "♨", label: "Praní" },
   other: { icon: "✓", label: "Ostatní" },
 };
@@ -1898,6 +1902,9 @@ function PlanManager({
       sortOrder: 10,
       scheduleDays: [1, 3, 5],
       monthlyDay: null,
+      periodMonths: undefined,
+      periodWeek: undefined,
+      periodAnchorMonth: undefined,
       active: true,
     });
   const floors = [...options.floors].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -2348,18 +2355,48 @@ function TaskEditor({
         </fieldset>
       )}
       {draft.frequency === "měsíčně" && (
-        <label>
-          Den v měsíci
-          <input
-            type="number"
-            min="1"
-            max="31"
-            value={draft.monthlyDay ?? 1}
-            onChange={(event) =>
-              update("monthlyDay", Number(event.target.value))
-            }
-          />
-        </label>
+        <>
+          <label>
+            Způsob rozložení
+            <select
+              value={draft.periodMonths ? "period" : "day"}
+              onChange={(event) => {
+                if (event.target.value === "period") {
+                  update("periodMonths", 1);
+                  update("periodWeek", 2);
+                  update("periodAnchorMonth", `${localDateKey().slice(0, 7)}-01`);
+                  update("monthlyDay", null);
+                } else {
+                  update("periodMonths", null);
+                  update("periodWeek", null);
+                  update("periodAnchorMonth", null);
+                  update("monthlyDay", 1);
+                }
+              }}
+            >
+              <option value="period">V určeném týdnu období</option>
+              <option value="day">Pevný den v měsíci (legacy)</option>
+            </select>
+          </label>
+          {draft.periodMonths ? (
+            <div className="period-fields">
+              <label>Opakovat každých
+                <select value={draft.periodMonths} onChange={(event) => update("periodMonths", Number(event.target.value))}>
+                  <option value={1}>1 měsíc</option><option value={2}>2 měsíce</option><option value={3}>3 měsíce</option>
+                </select>
+              </label>
+              <label>Týden období
+                <select value={draft.periodWeek ?? 2} onChange={(event) => update("periodWeek", Number(event.target.value))}>
+                  <option value={1}>1. týden</option><option value={2}>2. týden</option><option value={3}>3. týden</option><option value={4}>4. týden</option>
+                </select>
+              </label>
+            </div>
+          ) : (
+            <label>Den v měsíci
+              <input type="number" min="1" max="31" value={draft.monthlyDay ?? 1} onChange={(event) => update("monthlyDay", Number(event.target.value))} />
+            </label>
+          )}
+        </>
       )}
       <label>
         Předchozí nutná činnost
@@ -2565,6 +2602,10 @@ function formatDate(value?: string | null) {
 }
 
 function formatTaskSchedule(task: Task) {
+  if (task.frequency === "měsíčně" && task.periodMonths) {
+    const interval = task.periodMonths === 1 ? "Měsíčně" : task.periodMonths === 2 ? "Každé 2 měsíce" : "Čtvrtletně";
+    return `${interval} · ${task.periodWeek ?? 1}. týden období`;
+  }
   if (task.frequency === "měsíčně") return `Měsíčně · ${task.monthlyDay ?? 1}. den`;
   if (task.frequency === "mimořádně") return "Mimořádně";
   const days = task.scheduleDays.map((day) => weekdays[day - 1]).filter(Boolean).join(" / ");
@@ -2918,6 +2959,55 @@ function IncidentEditor({ item, rooms, onSave, onCancel }: { item?: Incident; ro
   );
 }
 
+function taskScheduleInput(task: Task) {
+  return {
+    id: task.id,
+    frequency: task.frequency,
+    schedule_days: task.scheduleDays,
+    monthly_day: task.monthlyDay,
+    cleaning_cycle_length: task.cleaningCycleLength,
+    cleaning_cycle_offset: task.cleaningCycleOffset,
+    period_months: task.periodMonths,
+    period_week: task.periodWeek,
+    period_anchor_month: task.periodAnchorMonth,
+  };
+}
+
+function dueTasksForDate(tasks: Task[], records: CleaningDayRecord[], date: string) {
+  const context = resolveCleaningDay(date, records);
+  return tasks.filter((task) => task.active && task.roomActive !== false)
+    .filter((task) => isTaskDueForCleaningDay(taskScheduleInput(task), context));
+}
+
+function floorPictogram(floor: string) {
+  const number = floor.match(/^[1-4]/)?.[0];
+  return number ?? (floor === "Schodiště" ? "↕" : "•");
+}
+
+function CalendarDayDetail({ date, tasks, context }: { date: string; tasks: Task[]; context: CleaningDayContext }) {
+  const floors = new Map<string, Map<string, Task[]>>();
+  tasks.forEach((task) => {
+    const rooms = floors.get(task.floor) ?? new Map<string, Task[]>();
+    rooms.set(task.room, [...(rooms.get(task.room) ?? []), task]);
+    floors.set(task.floor, rooms);
+  });
+  return (
+    <section className="calendar-day-detail">
+      <header><span><small>{context.kind === "extraordinary" ? "MIMOŘÁDNÝ ÚKLID" : context.kind === "rescheduled" ? "PŘESUNUTÝ ÚKLID" : "PLÁN DNE"}</small><b>{formatDate(date)}</b></span><strong>{tasks.length} úkolů</strong></header>
+      {context.note && <p>{context.note}</p>}
+      {[...floors.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([floor, rooms]) => (
+        <details key={floor} open className="calendar-detail-floor">
+          <summary><b>{floor}</b><span>{[...rooms.values()].reduce((sum, items) => sum + items.length, 0)}</span></summary>
+          {[...rooms.entries()].map(([room, roomTasks]) => (
+            <article key={room} className="calendar-detail-room"><b>{room}</b><div>{roomTasks.sort((a, b) => a.sortOrder - b.sortOrder).map((task) => <span key={task.id}><i>{activityTypes[task.activityType]?.icon ?? "✓"}</i>{task.title}</span>)}</div></article>
+          ))}
+        </details>
+      ))}
+      {!tasks.length && <p className="hint">V tento den není naplánovaný úklid.</p>}
+    </section>
+  );
+}
+
 function CleaningCalendar({
   records,
   available,
@@ -2939,8 +3029,24 @@ function CleaningCalendar({
 }) {
   const [editing, setEditing] = useState<CleaningDayRecord | "new" | null>(null);
   const today = localDateKey();
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const [selectedDate, setSelectedDate] = useState(today);
   const future = records.filter((item) => item.executionDate >= today).sort((a, b) => a.executionDate.localeCompare(b.executionDate));
-  const upcoming = upcomingCleaningDays(records, 28).slice(0, 10);
+  const calendarDays = useMemo(() => monthGridDates(month).map((date) => ({
+    date,
+    tasks: dueTasksForDate(tasks, records, date),
+    context: resolveCleaningDay(date, records),
+  })), [month, records, tasks]);
+  const selected = calendarDays.find((item) => item.date === selectedDate)
+    ?? { date: selectedDate, tasks: dueTasksForDate(tasks, records, selectedDate), context: resolveCleaningDay(selectedDate, records) };
+  const moveMonth = (amount: number) => {
+    const [year, monthNumber] = month.split("-").map(Number);
+    const next = new Date(Date.UTC(year, monthNumber - 1 + amount, 1));
+    const key = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
+    setMonth(key);
+    setSelectedDate(`${key}-01`);
+  };
+  const monthLabel = new Intl.DateTimeFormat("cs-CZ", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`));
   return (
     <div className="cleaning-calendar">
       <section className="panel calendar-intro">
@@ -2964,14 +3070,32 @@ function CleaningCalendar({
           onSave={async (draft) => { await onSave(draft); setEditing(null); }}
         />
       )}
-      <section className="calendar-list">
-        <h2>Nadcházející úklidy</h2>
-        {upcoming.map((item) => (
-          <article key={`${item.date}-${item.label}`}>
-            <div><small>{item.label}</small><b>{formatDate(item.date)}</b>{item.detail && <span>{item.detail}</span>}</div>
-          </article>
-        ))}
+      <section className="month-calendar" aria-label="Měsíční plán úklidu">
+        <header><button onClick={() => moveMonth(-1)} aria-label="Předchozí měsíc">‹</button><h2>{monthLabel}</h2><button onClick={() => moveMonth(1)} aria-label="Další měsíc">›</button></header>
+        <div className="calendar-weekdays">{weekdays.map((day) => <b key={day}>{day}</b>)}</div>
+        <div className="calendar-grid">
+          {calendarDays.map((item) => {
+            const floors = [...new Set(item.tasks.map((task) => task.floor).filter((floor) => floor !== "Společné úkoly"))];
+            const activities = [...new Set(item.tasks.map((task) => task.activityType))];
+            return (
+              <button
+                key={item.date}
+                className={`calendar-day ${item.date.slice(0, 7) === month ? "" : "outside"} ${item.date === today ? "today" : ""} ${item.date === selectedDate ? "selected" : ""} ${item.tasks.length ? "has-work" : ""}`}
+                onClick={() => setSelectedDate(item.date)}
+                aria-label={`${formatDate(item.date)}, ${item.tasks.length} úkolů`}
+              >
+                <strong>{Number(item.date.slice(8, 10))}</strong>
+                <span className="floor-pictograms">{floors.slice(0, 4).map((floor) => <i key={floor}>{floorPictogram(floor)}</i>)}</span>
+                <span className="activity-pictograms">{activities.slice(0, 4).map((activity) => <i key={activity}>{activityTypes[activity]?.icon ?? "✓"}</i>)}</span>
+                {item.context.kind === "extraordinary" && <em>M</em>}
+                {item.context.kind === "rescheduled" && <em>P</em>}
+              </button>
+            );
+          })}
+        </div>
+        <div className="calendar-legend"><span><i>1–4</i> patro</span><span><i>↕</i> schodiště</span>{(["vacuum","mop","toilet","trash","tables","windows","doors","tiles","surfaces","laundry","deep_clean"] as ActivityType[]).map((type) => <span key={type}><i>{activityTypes[type].icon}</i>{activityTypes[type].label}</span>)}</div>
       </section>
+      <CalendarDayDetail date={selected.date} tasks={selected.tasks} context={selected.context} />
       <section className="calendar-list">
         <h2>Plánované výjimky</h2>
         {future.map((item) => (
@@ -2997,29 +3121,6 @@ function CleaningCalendar({
       </section>
     </div>
   );
-}
-
-function upcomingCleaningDays(records: CleaningDayRecord[], days: number) {
-  const result: { date: string; label: string; detail?: string }[] = [];
-  const active = records.filter((item) => item.status === "active");
-  const start = new Date(`${localDateKey()}T12:00:00`);
-  for (let offset = 0; offset < days; offset += 1) {
-    const date = new Date(start);
-    date.setDate(start.getDate() + offset);
-    const key = localDateKey(date);
-    const executing = active.find((item) => item.executionDate === key);
-    if (executing) {
-      result.push({
-        date: key,
-        label: executing.kind === "extraordinary" ? "MIMOŘÁDNÝ ÚKLID" : "PŘESUNUTÝ ÚKLID",
-        detail: executing.kind === "rescheduled" ? `${executing.title} · původně ${formatDate(executing.sourceDate)}` : executing.title,
-      });
-      continue;
-    }
-    if (active.some((item) => item.kind === "rescheduled" && item.sourceDate === key)) continue;
-    if ([1, 3, 5].includes(date.getDay())) result.push({ date: key, label: "STANDARDNÍ ÚKLID" });
-  }
-  return result;
 }
 
 function isExtraordinaryBaselineTask(task: Task, date: string) {

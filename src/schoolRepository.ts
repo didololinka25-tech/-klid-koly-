@@ -70,6 +70,8 @@ const localToday = () => {
 }
 const missingRelation = (error: { code?: string; message?: string } | null) =>
   Boolean(error && ['42P01', 'PGRST205'].includes(error.code ?? ''))
+const missingColumn = (error: { code?: string; message?: string } | null) =>
+  Boolean(error && ['42703', 'PGRST204'].includes(error.code ?? ''))
 const frequency: Record<string, Task['frequency']> = { cleaning_day: 'denně', weekly: 'týdně', once_or_twice_weekly: '1–2× týdně', monthly: 'měsíčně', extraordinary: 'mimořádně' }
 export const isTestCleaningDay = new URLSearchParams(window.location.search).get('testCleaningDay') === '1'
 
@@ -138,14 +140,18 @@ export const schoolRepository = {
   tasks: async (profile: Profile, includeAll = false): Promise<TaskLoad> => {
     const db = client()
     const date = localToday()
-    const [{ data: rows, error }, { data: rooms, error: roomsError }, { data: floors, error: floorsError }, { data: buildings, error: buildingsError }, { data: completions, error: completionError }] = await Promise.all([
-      db.from('cleaning_tasks').select('id,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id').order('sort_order'),
+    let taskResult: any = await db.from('cleaning_tasks').select('id,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id,cleaning_cycle_length,cleaning_cycle_offset,period_months,period_week,period_anchor_month').order('sort_order')
+    if (missingColumn(taskResult.error)) {
+      taskResult = await db.from('cleaning_tasks').select('id,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id').order('sort_order')
+    }
+    const [{ data: rooms, error: roomsError }, { data: floors, error: floorsError }, { data: buildings, error: buildingsError }, { data: completions, error: completionError }] = await Promise.all([
       db.from('rooms').select('id,name,active,floor_id,building_id'),
       db.from('floors').select('id,name,sort_order,building_id'),
       db.from('buildings').select('id,name'),
       db.from('cleaning_completions').select('task_id,completed').eq('completion_date', date),
     ])
-    if (error || roomsError || floorsError || buildingsError || completionError) throw error ?? roomsError ?? floorsError ?? buildingsError ?? completionError
+    const rows = taskResult.data
+    if (taskResult.error || roomsError || floorsError || buildingsError || completionError) throw taskResult.error ?? roomsError ?? floorsError ?? buildingsError ?? completionError
     const exceptionResult = await db.from('cleaning_day_exceptions')
       .select('id,building_id,kind,execution_date,source_date,title,note,scope_type,status,created_by')
       .or(`execution_date.eq.${date},source_date.eq.${date}`)
@@ -180,6 +186,8 @@ export const schoolRepository = {
         assignedTo: 'Úklidový tým', done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile) && !isTestCleaningDay,
         dueToday: room?.active !== false && isTaskDueForCleaningDay(row, cleaningDay), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
         active: row.active, roomActive: room?.active ?? true,
+        cleaningCycleLength: row.cleaning_cycle_length, cleaningCycleOffset: row.cleaning_cycle_offset,
+        periodMonths: row.period_months, periodWeek: row.period_week, periodAnchorMonth: row.period_anchor_month,
       }
     })
     return { tasks, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
@@ -262,7 +270,12 @@ export const schoolRepository = {
     ))
     if (duplicate) throw new Error('Stejný aktivní úkol se stejným harmonogramem už v této místnosti existuje.')
 
-    const values = { room_id: task.roomId ?? null, name, activity_type: task.activityType, frequency: frequencyKey, active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.monthlyDay ?? null, requires_task_id: task.prerequisite ?? null }
+    const values: Record<string, unknown> = { room_id: task.roomId ?? null, name, activity_type: task.activityType, frequency: frequencyKey, active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.periodMonths ? null : task.monthlyDay ?? null, requires_task_id: task.prerequisite ?? null }
+    if (task.periodMonths !== undefined) {
+      values.period_months = task.periodMonths
+      values.period_week = task.periodWeek ?? null
+      values.period_anchor_month = task.periodAnchorMonth ?? null
+    }
     const result = task.id ? await db.from('cleaning_tasks').update(values).eq('id', task.id).select('id').single() : await db.from('cleaning_tasks').insert(values).select('id').single()
     if (result.error) throw result.error
     if (!result.data?.id) throw new Error('Databáze nepotvrdila uložení úkolu.')

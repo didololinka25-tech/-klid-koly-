@@ -3,6 +3,11 @@ export type SchedulableTask = {
   frequency: string
   schedule_days?: number[] | string | null
   monthly_day?: number | null
+  cleaning_cycle_length?: number | null
+  cleaning_cycle_offset?: number | null
+  period_months?: number | null
+  period_week?: number | null
+  period_anchor_month?: string | null
 }
 
 export type CleaningDayException = {
@@ -32,6 +37,92 @@ function dateParts(date: string) {
   return { year, month, day }
 }
 
+const normalizeFrequency = (frequency: string) => ({
+  denně: 'cleaning_day', týdně: 'weekly', '1–2× týdně': 'once_or_twice_weekly',
+  měsíčně: 'monthly', mimořádně: 'extraordinary',
+})[frequency] ?? frequency
+
+function dateKey(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
+}
+
+function addDays(date: string, amount: number) {
+  const { year, month, day } = dateParts(date)
+  return dateKey(new Date(Date.UTC(year, month - 1, day + amount)))
+}
+
+export function monthGridDates(month: string) {
+  const [year, monthNumber] = month.split('-').map(Number)
+  const first = new Date(Date.UTC(year, monthNumber - 1, 1))
+  const offset = (first.getUTCDay() || 7) - 1
+  const start = new Date(Date.UTC(year, monthNumber - 1, 1 - offset))
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start)
+    date.setUTCDate(start.getUTCDate() + index)
+    return dateKey(date)
+  })
+}
+
+function daysBetween(start: string, end: string) {
+  const a = dateParts(start); const b = dateParts(end)
+  return Math.round((Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day)) / 86400000)
+}
+
+function countCleaningDays(start: string, end: string) {
+  const length = daysBetween(start, end)
+  if (length <= 0) return 0
+  const fullWeeks = Math.floor(length / 7)
+  let count = fullWeeks * 3
+  for (let offset = fullWeeks * 7; offset < length; offset += 1) {
+    if ([1, 3, 5].includes(isoDay(addDays(start, offset)))) count += 1
+  }
+  return count
+}
+
+export function cleaningDaySequenceIndex(date: string) {
+  const anchor = '2026-08-31'
+  return date >= anchor ? countCleaningDays(anchor, date) : -countCleaningDays(date, anchor)
+}
+
+function taskDays(task: SchedulableTask) {
+  const rawDays = task.schedule_days
+  return Array.isArray(rawDays)
+    ? rawDays.map(Number)
+    : typeof rawDays === 'string'
+      ? rawDays.replace(/[{}]/g, '').split(',').filter(Boolean).map(Number)
+      : []
+}
+
+function monthDifference(anchor: string, date: string) {
+  const a = dateParts(anchor); const b = dateParts(date)
+  return (b.year - a.year) * 12 + b.month - a.month
+}
+
+function isTaskCandidateOnDate(task: SchedulableTask, date: string) {
+  const frequency = normalizeFrequency(task.frequency)
+  if (frequency === 'extraordinary') return false
+  const cycleLength = task.cleaning_cycle_length ?? null
+  const cycleOffset = task.cleaning_cycle_offset ?? null
+  if (cycleLength && cycleOffset !== null) {
+    const remainder = ((cleaningDaySequenceIndex(date) - cycleOffset) % cycleLength + cycleLength) % cycleLength
+    if (remainder !== 0) return false
+  }
+  const periodMonths = task.period_months ?? null
+  if (periodMonths) {
+    const anchor = task.period_anchor_month
+    const periodWeek = task.period_week
+    if (!anchor || !periodWeek) return false
+    const monthRemainder = ((monthDifference(anchor, date) % periodMonths) + periodMonths) % periodMonths
+    if (monthRemainder !== 0) return false
+    const day = dateParts(date).day
+    if (periodWeek < 4 && (day < (periodWeek - 1) * 7 + 1 || day > periodWeek * 7)) return false
+    if (periodWeek === 4 && day < 22) return false
+    return taskDays(task).includes(isoDay(date))
+  }
+  if (frequency === 'monthly') return task.monthly_day === dateParts(date).day
+  return taskDays(task).includes(isoDay(date))
+}
+
 export function isoDay(date: string) {
   const { year, month, day } = dateParts(date)
   const dayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay()
@@ -39,19 +130,19 @@ export function isoDay(date: string) {
 }
 
 export function isTaskDueOnDate(task: SchedulableTask, date: string, previewStandardCleaningDay = false) {
-  const { day } = dateParts(date)
-  if (task.frequency === 'monthly') return task.monthly_day === day
-  if (task.frequency === 'extraordinary') return false
+  const frequency = normalizeFrequency(task.frequency)
   // Náhled simuluje obecný standardní úklidový den. Nepředstírá konkrétní
   // pondělí, takže nepřidává středeční ani Po/Pá úkoly.
-  if (previewStandardCleaningDay) return task.frequency === 'cleaning_day'
-  const rawDays = task.schedule_days
-  const scheduleDays = Array.isArray(rawDays)
-    ? rawDays.map(Number)
-    : typeof rawDays === 'string'
-      ? rawDays.replace(/[{}]/g, '').split(',').filter(Boolean).map(Number)
-      : []
-  return scheduleDays.includes(isoDay(date))
+  if (previewStandardCleaningDay) return frequency === 'cleaning_day'
+  if (!isTaskCandidateOnDate(task, date)) return false
+  if (!task.period_months || !task.period_week) return true
+  const startDay = task.period_week === 4 ? 22 : (task.period_week - 1) * 7 + 1
+  const { year, month, day } = dateParts(date)
+  for (let earlier = startDay; earlier < day; earlier += 1) {
+    const candidate = `${year}-${String(month).padStart(2, '0')}-${String(earlier).padStart(2, '0')}`
+    if (isTaskCandidateOnDate(task, candidate)) return false
+  }
+  return true
 }
 
 export function resolveCleaningDay(
@@ -122,7 +213,7 @@ export function isTaskDueForCleaningDay(
   if (context.kind === 'moved_away') return false
   if (context.kind === 'preview') return isTaskDueOnDate(task, context.scheduleDate, true)
   if (context.kind === 'extraordinary') {
-    const baseline = task.frequency === 'cleaning_day'
+    const baseline = normalizeFrequency(task.frequency) === 'cleaning_day'
       || isTaskDueOnDate(task, context.executionDate)
     if (task.id && context.taskOverrides
       && Object.prototype.hasOwnProperty.call(context.taskOverrides, task.id)) {

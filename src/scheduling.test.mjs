@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   isTaskDueForCleaningDay,
   isTaskDueOnDate,
+  monthGridDates,
   resolveCleaningDay,
 } from './scheduling.ts'
 
@@ -108,4 +109,84 @@ test('preview ukazuje standardní cleaning_day, ale je samostatný kontext', () 
 test('měsíční úkol zůstává vázaný na monthly_day', () => {
   assert.equal(isTaskDueOnDate(monthly, '2026-09-01'), true)
   assert.equal(isTaskDueOnDate(monthly, '2026-09-02'), false)
+})
+
+const floorOne = { ...everyCleaningDay }
+const floorTwo = { ...everyCleaningDay, cleaning_cycle_length: 2, cleaning_cycle_offset: 0 }
+const floorThree = { ...everyCleaningDay, cleaning_cycle_length: 2, cleaning_cycle_offset: 1 }
+
+test('1. patro je splatné při každém úklidu Po/St/Pá', () => {
+  for (const date of ['2026-08-31', '2026-09-02', '2026-09-04']) {
+    assert.equal(isTaskDueOnDate(floorOne, date), true)
+  }
+})
+
+test('2. a 3. patro se střídají po jednotlivých úklidových dnech', () => {
+  assert.equal(isTaskDueOnDate(floorTwo, '2026-08-31'), true)
+  assert.equal(isTaskDueOnDate(floorThree, '2026-08-31'), false)
+  assert.equal(isTaskDueOnDate(floorTwo, '2026-09-02'), false)
+  assert.equal(isTaskDueOnDate(floorThree, '2026-09-02'), true)
+  assert.equal(isTaskDueOnDate(floorTwo, '2026-09-04'), true)
+})
+
+test('rotace pater pokračuje přes hranici týdne i měsíce', () => {
+  assert.equal(isTaskDueOnDate(floorThree, '2026-09-07'), true)
+  assert.equal(isTaskDueOnDate(floorTwo, '2026-09-30'), false)
+  assert.equal(isTaskDueOnDate(floorThree, '2026-09-30'), true)
+  assert.equal(isTaskDueOnDate(floorTwo, '2026-10-02'), true)
+})
+
+test('4. patro a schodiště jsou jednou týdně v pátek', () => {
+  const friday = { frequency: 'weekly', schedule_days: [5] }
+  assert.equal(isTaskDueOnDate(friday, '2026-09-04'), true)
+  assert.equal(isTaskDueOnDate(friday, '2026-09-02'), false)
+})
+
+test('měsíční práce jsou rozložené do určených týdnů', () => {
+  const periodic = (week) => ({
+    frequency: 'monthly', schedule_days: [1, 3, 5], period_months: 1,
+    period_week: week, period_anchor_month: '2026-09-01',
+  })
+  assert.equal(isTaskDueOnDate(periodic(1), '2026-09-02'), true) // dveře
+  assert.equal(isTaskDueOnDate(periodic(2), '2026-09-09'), true) // okna
+  assert.equal(isTaskDueOnDate(periodic(3), '2026-09-16'), true) // obklady
+  assert.equal(isTaskDueOnDate(periodic(4), '2026-09-23'), true) // povrchy
+  assert.equal(isTaskDueOnDate(periodic(2), '2026-09-11'), false)
+})
+
+test('periodická práce počká na první návštěvu rotujícího patra', () => {
+  const floorTwoWindows = {
+    ...floorTwo, frequency: 'monthly', period_months: 1, period_week: 2,
+    period_anchor_month: '2026-09-01',
+  }
+  assert.equal(isTaskDueOnDate(floorTwoWindows, '2026-09-07'), false)
+  assert.equal(isTaskDueOnDate(floorTwoWindows, '2026-09-09'), true)
+})
+
+test('čtvrtletní a dvouměsíční práce respektují kotvu období', () => {
+  const quarterly = {
+    frequency: 'monthly', schedule_days: [1, 3, 5], period_months: 3,
+    period_week: 4, period_anchor_month: '2026-09-01',
+  }
+  const bimonthly = { ...quarterly, period_months: 2 }
+  assert.equal(isTaskDueOnDate(quarterly, '2026-09-23'), true)
+  assert.equal(isTaskDueOnDate(quarterly, '2026-10-23'), false)
+  assert.equal(isTaskDueOnDate(quarterly, '2026-12-23'), true)
+  assert.equal(isTaskDueOnDate(bimonthly, '2026-11-23'), true)
+})
+
+test('kalendář i Dnes používají stejný kontext splatnosti', () => {
+  const records = [{
+    id: 'move-month', kind: 'rescheduled', executionDate: '2026-10-03',
+    sourceDate: '2026-10-02', title: 'Přesun', status: 'active',
+  }]
+  const context = resolveCleaningDay('2026-10-03', records)
+  assert.equal(isTaskDueForCleaningDay(floorTwo, context), isTaskDueOnDate(floorTwo, '2026-10-02'))
+})
+
+test('mobilní měsíční mřížka má šest týdnů Po–Ne i přes hranici měsíce', () => {
+  const dates = monthGridDates('2026-08')
+  assert.equal(dates.length, 42)
+  assert.equal(dates[0], '2026-07-27')
+  assert.equal(dates.at(-1), '2026-09-06')
 })

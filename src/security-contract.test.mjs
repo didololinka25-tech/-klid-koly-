@@ -12,6 +12,7 @@ const migration14 = readFileSync(new URL('../supabase/migrations/20260829001400_
 const migration15 = readFileSync(new URL('../supabase/migrations/20260829001500_simple_operations_lists.sql', import.meta.url), 'utf8')
 const migration16 = readFileSync(new URL('../supabase/migrations/20260829001600_profile_and_attendance_settings.sql', import.meta.url), 'utf8')
 const migration17 = readFileSync(new URL('../supabase/migrations/20260829001700_soft_delete_cleaning_plan.sql', import.meta.url), 'utf8')
+const migration18 = readFileSync(new URL('../supabase/migrations/20260829001800_real_school_plan_and_rotation.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
   assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
@@ -180,4 +181,38 @@ test('zápis úkolů zůstává pod admin RLS a dependency pole se ukládá', ()
   assert.match(migration11, /admins manage tasks[\s\S]*public\.is_admin\(\)/i)
   assert.match(repository, /requires_task_id: task\.prerequisite \?\? null/)
   assert.match(repository, /schedule_days: task\.scheduleDays/)
+})
+
+test('nový plán je nedestruktivní, idempotentní a bez A/B či dezinfekce', () => {
+  assert.doesNotMatch(migration18, /delete\s+from|truncate\s+|drop\s+table/i)
+  assert.match(migration18, /set active = false/i)
+  assert.match(migration18, /plan_key text/i)
+  assert.match(migration18, /on conflict \(plan_key\)/i)
+  assert.match(migration18, /activity_type = 'disinfect'/i)
+  assert.match(migration18, /set active = false[\s\S]*task_assignments/i)
+})
+
+test('nový plán zakládá skutečné místnosti a chrání jejich historii', () => {
+  for (const room of ['Učebna 1', 'Učebna 2', 'Učebna 3', 'Učebna 4', 'Učebna 5', 'WC / sprcha']) {
+    assert.match(migration18, new RegExp(room.replace('/', '\\/'), 'i'))
+  }
+  assert.match(migration18, /přesně 32 aktivních místností/i)
+  assert.match(migration18, /očekávaných 217 úkolů/i)
+})
+
+test('serverový scheduler ověřuje rotaci pater i periodické práce', () => {
+  assert.match(migration18, /cleaning_cycle_length/i)
+  assert.match(migration18, /cleaning_cycle_offset/i)
+  assert.match(migration18, /period_months/i)
+  assert.match(migration18, /period_week/i)
+  assert.match(migration18, /create or replace function public\.is_cleaning_task_scheduled_on/i)
+  assert.match(migration14, /is_cleaning_task_scheduled_on\(target_task_id, target_date\)/i)
+})
+
+test('frontend načte rozšířený plán jedním dotazem a umí bezpečný fallback před migrací', () => {
+  assert.match(repository, /cleaning_cycle_length,cleaning_cycle_offset,period_months,period_week,period_anchor_month/)
+  assert.match(repository, /missingColumn/)
+  assert.match(app, /dueTasksForDate/)
+  assert.match(app, /isTaskDueForCleaningDay\(taskScheduleInput\(task\), context\)/)
+  assert.match(app, /monthGridDates\(month\)/)
 })
