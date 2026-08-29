@@ -11,6 +11,7 @@ const migration13 = readFileSync(new URL('../supabase/migrations/20260829001300_
 const migration14 = readFileSync(new URL('../supabase/migrations/20260829001400_extraordinary_cleaning_tasks.sql', import.meta.url), 'utf8')
 const migration15 = readFileSync(new URL('../supabase/migrations/20260829001500_simple_operations_lists.sql', import.meta.url), 'utf8')
 const migration16 = readFileSync(new URL('../supabase/migrations/20260829001600_profile_and_attendance_settings.sql', import.meta.url), 'utf8')
+const migration17 = readFileSync(new URL('../supabase/migrations/20260829001700_soft_delete_cleaning_plan.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
   assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
@@ -121,4 +122,38 @@ test('docházka a report používají building_id bez vytváření paralelní hi
   assert.match(repository, /buildingName: building\?\.name \?\? 'Škola'/)
   assert.doesNotMatch(migration16, /create table.*attendance/is)
   assert.doesNotMatch(migration16, /delete\s+from/i)
+})
+
+test('soft delete úkolu zachovává historii a chrání aktivní dependency', () => {
+  assert.match(migration17, /update public\.cleaning_tasks\s+set active = target_active/i)
+  assert.match(migration17, /dependent\.requires_task_id = target_task_id[\s\S]*dependent\.active/i)
+  assert.match(migration17, /Nejprve deaktivujte navazující úkoly/i)
+  assert.doesNotMatch(migration17, /delete\s+from\s+public\.(cleaning_tasks|cleaning_completions)/i)
+  assert.match(repository, /rpc\('set_cleaning_task_active'/)
+})
+
+test('soft delete místnosti atomicky vypne úkoly a obnova je nezapne', () => {
+  const deleteRoom = migration17.match(/create or replace function public\.soft_delete_cleaning_room[\s\S]*?\$\$;/i)?.[0] ?? ''
+  const restoreRoom = migration17.match(/create or replace function public\.restore_cleaning_room[\s\S]*?\$\$;/i)?.[0] ?? ''
+  assert.match(deleteRoom, /update public\.cleaning_tasks[\s\S]*set active = false[\s\S]*room_id = target_room_id/i)
+  assert.match(deleteRoom, /update public\.rooms[\s\S]*set active = false/i)
+  assert.match(restoreRoom, /update public\.rooms[\s\S]*set active = true/i)
+  assert.doesNotMatch(restoreRoom, /update public\.cleaning_tasks/i)
+  assert.doesNotMatch(migration17, /delete\s+from/i)
+})
+
+test('mazání plánu je jen pro admina podle serverové role a RLS zůstává', () => {
+  assert.match(migration17, /if not public\.is_admin\(\)/i)
+  assert.match(migration17, /security definer[\s\S]*set search_path = public/i)
+  assert.match(migration17, /revoke all on function public\.soft_delete_cleaning_room\(uuid\) from public, anon, authenticated/i)
+  assert.match(migration11, /admins manage rooms[\s\S]*public\.is_admin\(\)/i)
+  assert.match(migration11, /admins manage tasks[\s\S]*public\.is_admin\(\)/i)
+})
+
+test('admin UI odděluje neaktivní položky a používá potvrzení', () => {
+  assert.match(app, /Neaktivní \/ smazané/)
+  assert.match(app, /Smazat úkol/)
+  assert.match(app, /Smazat místnost/)
+  assert.match(app, /window\.confirm/)
+  assert.match(app, /Obnoví se pouze místnost/)
 })

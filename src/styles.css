@@ -1005,6 +1005,15 @@ h2 {
 .admin-floor > summary span { color: #67817c; font-size: 12px; }
 .admin-actions-list { display: grid; gap: 6px; padding: 7px; }
 .plan-row.inactive { opacity: .55; }
+.inactive-section > summary { background: #f2f3f2; }
+.inactive-badge { width: fit-content; margin: 0; padding: 6px 9px; border-radius: 999px; background: #ecefed; color: #52625e; font-size: 12px; font-weight: 800; }
+.danger-zone,
+.restore-zone { margin-top: 18px; padding-top: 14px; border-top: 1px solid #e7d2cf; display: grid; gap: 9px; }
+.danger-zone p,
+.restore-zone p { margin: 0; color: #6d7774; font-size: 12px; line-height: 1.45; }
+.danger-zone .danger-action { min-height: 46px; border: 1px solid #c95a4d; border-radius: 10px; background: #fff; color: #a3342b; font-weight: 800; }
+.restore-zone { border-top-color: #cfe1dc; }
+.restore-zone button { min-height: 46px; border: 1px solid #17675e; border-radius: 10px; background: #17675e; color: #fff; font-weight: 800; }
 .add-task.compact { width: 100%; min-height: 42px; margin: 0; }
 .more-screen,
 .operations-screen,

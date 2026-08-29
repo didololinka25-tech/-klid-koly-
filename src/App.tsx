@@ -606,6 +606,18 @@ export default function App() {
       );
     }
   };
+  const setTaskActive = async (taskId: string, active: boolean) => {
+    try {
+      setNotice("");
+      await schoolRepository.setTaskActive(taskId, active);
+      setEditing(null);
+      await load(session, profile);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Stav úkolu se nepodařilo změnit.";
+      setNotice(message);
+      throw error;
+    }
+  };
   const saveRoom = async (room: ManagedRoom) => {
     try {
       setNotice("");
@@ -617,6 +629,17 @@ export default function App() {
           ? error.message
           : "Místnost se nepodařilo uložit.",
       );
+      throw error;
+    }
+  };
+  const setRoomActive = async (roomId: string, active: boolean) => {
+    try {
+      setNotice("");
+      await schoolRepository.setRoomActive(roomId, active);
+      await load(session, profile);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Stav místnosti se nepodařilo změnit.";
+      setNotice(message);
       throw error;
     }
   };
@@ -757,7 +780,9 @@ export default function App() {
           onEdit={setEditing}
           onCancel={() => setEditing(null)}
           onSaveTask={saveTask}
+          onSetTaskActive={setTaskActive}
           onSaveRoom={saveRoom}
+          onSetRoomActive={setRoomActive}
           view={managementView}
           onView={setManagementView}
         />
@@ -1778,7 +1803,9 @@ function Management({
   onEdit,
   onCancel,
   onSaveTask,
+  onSetTaskActive,
   onSaveRoom,
+  onSetRoomActive,
   view,
   onView,
 }: {
@@ -1788,7 +1815,9 @@ function Management({
   onEdit: (task: Task) => void;
   onCancel: () => void;
   onSaveTask: (task: Task) => Promise<void>;
+  onSetTaskActive: (taskId: string, active: boolean) => Promise<void>;
   onSaveRoom: (room: ManagedRoom) => Promise<void>;
+  onSetRoomActive: (roomId: string, active: boolean) => Promise<void>;
   view: "plan" | "rooms";
   onView: (view: "plan" | "rooms") => void;
 }) {
@@ -1820,9 +1849,10 @@ function Management({
           onEdit={onEdit}
           onCancel={onCancel}
           onSave={onSaveTask}
+          onSetActive={onSetTaskActive}
         />
       ) : (
-        <RoomManager options={options} tasks={tasks} onSave={onSaveRoom} />
+        <RoomManager options={options} tasks={tasks} onSave={onSaveRoom} onSetActive={onSetRoomActive} />
       )}
     </>
   );
@@ -1835,6 +1865,7 @@ function PlanManager({
   onEdit,
   onCancel,
   onSave,
+  onSetActive,
 }: {
   tasks: Task[];
   options: PlanOptions;
@@ -1842,6 +1873,7 @@ function PlanManager({
   onEdit: (task: Task) => void;
   onCancel: () => void;
   onSave: (task: Task) => Promise<void>;
+  onSetActive: (taskId: string, active: boolean) => Promise<void>;
 }) {
   const addTask = (room?: PlanOptions["rooms"][number]) =>
     onEdit({
@@ -1863,7 +1895,8 @@ function PlanManager({
       active: true,
     });
   const floors = [...options.floors].sort((a, b) => a.sortOrder - b.sortOrder);
-  const commonTasks = tasks.filter((task) => !task.roomId);
+  const commonTasks = tasks.filter((task) => !task.roomId && task.active);
+  const inactiveTasks = tasks.filter((task) => !task.active);
   return (
     <section className="plan-manager">
       <p className="hint">
@@ -1877,13 +1910,14 @@ function PlanManager({
           options={options}
           onCancel={onCancel}
           onSave={onSave}
+          onSetActive={onSetActive}
         />
       ) : (
         <>
           <div className="admin-tree">
             {floors.map((floor) => {
               const rooms = options.rooms
-                .filter((room) => room.floorId === floor.id)
+                .filter((room) => room.floorId === floor.id && room.active)
                 .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "cs"));
               const floorTaskCount = rooms.reduce(
                 (sum, room) => sum + tasks.filter((task) => task.roomId === room.id && task.active).length,
@@ -1894,7 +1928,7 @@ function PlanManager({
                   <summary><b>{floor.name}</b><span>{floorTaskCount} úkolů</span></summary>
                   {rooms.map((room) => {
                     const roomTasks = tasks
-                      .filter((task) => task.roomId === room.id)
+                      .filter((task) => task.roomId === room.id && task.active)
                       .sort((a, b) => a.sortOrder - b.sortOrder);
                     return (
                       <details key={room.id} className="admin-room">
@@ -1904,7 +1938,7 @@ function PlanManager({
                         </summary>
                         <div className="admin-actions-list">
                           {roomTasks.map((task) => (
-                            <button key={task.id} className={task.active ? "plan-row" : "plan-row inactive"} onClick={() => onEdit({ ...task })}>
+                            <button key={task.id} className="plan-row" onClick={() => onEdit({ ...task })}>
                               <span><b>{task.title}</b><small>{formatTaskSchedule(task)}{task.prerequisite ? " · po předchozí činnosti" : ""}</small></span>
                               <i>Upravit</i>
                             </button>
@@ -1918,16 +1952,31 @@ function PlanManager({
               );
             })}
             <details className="admin-floor">
-              <summary><b>Společné úkoly</b><span>{commonTasks.filter((task) => task.active).length} úkolů</span></summary>
+              <summary><b>Společné úkoly</b><span>{commonTasks.length} úkolů</span></summary>
               <div className="admin-actions-list">
                 {commonTasks.sort((a, b) => a.sortOrder - b.sortOrder).map((task) => (
-                  <button key={task.id} className={task.active ? "plan-row" : "plan-row inactive"} onClick={() => onEdit({ ...task })}>
+                  <button key={task.id} className="plan-row" onClick={() => onEdit({ ...task })}>
                     <span><b>{task.title}</b><small>{formatTaskSchedule(task)}</small></span><i>Upravit</i>
                   </button>
                 ))}
                 <button className="add-task compact" onClick={() => addTask()}>+ Přidat společný úkol</button>
               </div>
             </details>
+            {inactiveTasks.length > 0 && (
+              <details className="admin-floor inactive-section">
+                <summary><b>Neaktivní / smazané</b><span>{inactiveTasks.length} úkolů</span></summary>
+                <div className="admin-actions-list">
+                  {inactiveTasks
+                    .sort((a, b) => a.floorSort - b.floorSort || a.sortOrder - b.sortOrder)
+                    .map((task) => (
+                      <button key={task.id} className="plan-row inactive" onClick={() => onEdit({ ...task })}>
+                        <span><b>{task.title}</b><small>{task.floor} · {task.room} · Neaktivní</small></span>
+                        <i>Obnovit</i>
+                      </button>
+                    ))}
+                </div>
+              </details>
+            )}
           </div>
         </>
       )}
@@ -1939,10 +1988,12 @@ function RoomManager({
   options,
   tasks,
   onSave,
+  onSetActive,
 }: {
   options: PlanOptions;
   tasks: Task[];
   onSave: (room: ManagedRoom) => Promise<void>;
+  onSetActive: (roomId: string, active: boolean) => Promise<void>;
 }) {
   const school =
     options.buildings.find((building) => building.name === "Škola") ??
@@ -1951,6 +2002,7 @@ function RoomManager({
     .filter((floor) => !school || floor.buildingId === school.id)
     .sort((a, b) => a.sortOrder - b.sortOrder);
   const [editingRoom, setEditingRoom] = useState<ManagedRoom | null>(null);
+  const inactiveRooms = options.rooms.filter((room) => !room.active);
   const addRoom = (floorId: string) => {
     const floor = schoolFloors.find((item) => item.id === floorId);
     if (!floor || !school) return;
@@ -1968,6 +2020,14 @@ function RoomManager({
     await onSave(room);
     setEditingRoom(null);
   };
+  const setActive = async (roomId: string, active: boolean) => {
+    try {
+      await onSetActive(roomId, active);
+      setEditingRoom(null);
+    } catch {
+      // Hlavní obrazovka zobrazí bezpečnou serverovou chybu a editor zůstane otevřený.
+    }
+  };
   return (
     <section className="room-manager">
       {editingRoom ? (
@@ -1976,12 +2036,13 @@ function RoomManager({
           options={options}
           onCancel={() => setEditingRoom(null)}
           onSave={save}
+          onSetActive={setActive}
         />
       ) : (
         <>
           <div className="admin-tree">
             {schoolFloors.map((floor) => {
-              const rooms = options.rooms.filter((room) => room.floorId === floor.id)
+              const rooms = options.rooms.filter((room) => room.floorId === floor.id && room.active)
                 .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "cs"));
               return (
                 <details key={floor.id} className="admin-floor">
@@ -1998,6 +2059,21 @@ function RoomManager({
                 </details>
               );
             })}
+            {inactiveRooms.length > 0 && (
+              <details className="admin-floor inactive-section">
+                <summary><b>Neaktivní / smazané</b><span>{inactiveRooms.length} místností</span></summary>
+                <div className="room-admin-list">
+                  {inactiveRooms
+                    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "cs"))
+                    .map((room) => (
+                      <button key={room.id} className="room-admin-row inactive" onClick={() => setEditingRoom({ ...room })}>
+                        <span><b>{room.name}</b><small>Neaktivní · úkoly zůstávají vypnuté</small></span>
+                        <i>Obnovit</i>
+                      </button>
+                    ))}
+                </div>
+              </details>
+            )}
           </div>
         </>
       )}
@@ -2010,11 +2086,13 @@ function RoomEditor({
   options,
   onCancel,
   onSave,
+  onSetActive,
 }: {
   room: ManagedRoom;
   options: PlanOptions;
   onCancel: () => void;
   onSave: (room: ManagedRoom) => Promise<void>;
+  onSetActive: (roomId: string, active: boolean) => Promise<void>;
 }) {
   const [draft, setDraft] = useState(room);
   const floors = options.floors
@@ -2097,29 +2175,34 @@ function RoomEditor({
           }
         />
       </label>
-      <label className="switch">
-        <input
-          type="checkbox"
-          checked={draft.active}
-          onChange={(event) =>
-            setDraft((current) => ({
-              ...current,
-              active: event.target.checked,
-            }))
-          }
-        />
-        Aktivní místnost
-      </label>
-      <p className="hint">
-        Deaktivace místnost nesmaže. Úkoly a historie zůstanou navázané na stejné
-        ID.
-      </p>
+      {!draft.active && <p className="inactive-badge">Neaktivní místnost</p>}
       <div className="editor-actions">
         <button type="button" onClick={onCancel}>
           Zrušit
         </button>
         <button type="submit">Uložit místnost</button>
       </div>
+      {room.id && room.active && (
+        <div className="danger-zone">
+          <button
+            type="button"
+            className="danger-action"
+            onClick={() => {
+              if (window.confirm("Smazáním místnosti se z aktivního plánu odstraní také všechny její úkoly. Historie zůstane zachovaná.\n\nOpravdu chcete místnost smazat?")) {
+                void onSetActive(room.id, false);
+              }
+            }}
+          >
+            Smazat místnost
+          </button>
+        </div>
+      )}
+      {room.id && !room.active && (
+        <div className="restore-zone">
+          <p>Obnoví se pouze místnost. Její úkoly zůstanou neaktivní, dokud je jednotlivě neobnovíte.</p>
+          <button type="button" onClick={() => void onSetActive(room.id, true)}>Obnovit místnost</button>
+        </div>
+      )}
     </form>
   );
 }
@@ -2130,12 +2213,14 @@ function TaskEditor({
   options,
   onCancel,
   onSave,
+  onSetActive,
 }: {
   task: Task;
   tasks: Task[];
   options: PlanOptions;
   onCancel: () => void;
   onSave: (task: Task) => Promise<void>;
+  onSetActive: (taskId: string, active: boolean) => Promise<void>;
 }) {
   const [draft, setDraft] = useState(task);
   const update = <K extends keyof Task>(key: K, value: Task[K]) =>
@@ -2200,7 +2285,7 @@ function TaskEditor({
           onChange={(event) => setRoom(event.target.value)}
         >
           <option value="">Společný úkol pro školu</option>
-          {options.rooms.map((room) => (
+          {options.rooms.filter((room) => room.active || room.id === draft.roomId).map((room) => (
             <option key={room.id} value={room.id}>
               {room.floor} · {room.name}
             </option>
@@ -2281,20 +2366,34 @@ function TaskEditor({
           onChange={(event) => update("sortOrder", Number(event.target.value))}
         />
       </label>
-      <label className="switch">
-        <input
-          type="checkbox"
-          checked={draft.active}
-          onChange={(event) => update("active", event.target.checked)}
-        />{" "}
-        Aktivní úkol
-      </label>
+      {!draft.active && <p className="inactive-badge">Neaktivní úkol</p>}
       <div className="editor-actions">
         <button type="button" onClick={onCancel}>
           Zrušit
         </button>
         <button type="submit">Uložit plán</button>
       </div>
+      {task.id && task.active && (
+        <div className="danger-zone">
+          <p>Historie dokončení zůstane zachovaná. Pokud na úkol navazuje jiná aktivní činnost, smazání bude bezpečně zamítnuto.</p>
+          <button
+            type="button"
+            className="danger-action"
+            onClick={() => {
+              if (window.confirm("Opravdu chcete tento úkol smazat? Historie dokončení zůstane zachovaná.")) {
+                void onSetActive(task.id, false).catch(() => undefined);
+              }
+            }}
+          >
+            Smazat úkol
+          </button>
+        </div>
+      )}
+      {task.id && !task.active && (
+        <div className="restore-zone">
+          <button type="button" onClick={() => void onSetActive(task.id, true).catch(() => undefined)}>Obnovit úkol</button>
+        </div>
+      )}
     </form>
   );
 }

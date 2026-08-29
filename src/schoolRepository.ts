@@ -237,10 +237,22 @@ export const schoolRepository = {
     const { error } = room.id ? await client().from('rooms').update(values).eq('id', room.id) : await client().from('rooms').insert(values)
     if (error) throw error
   },
+  setRoomActive: async (roomId: string, active: boolean) => {
+    const rpc = active ? 'restore_cleaning_room' : 'soft_delete_cleaning_room'
+    const { error } = await client().rpc(rpc, { target_room_id: roomId })
+    if (error) throw error
+  },
   saveTask: async (task: Task) => {
     const values = { room_id: task.roomId ?? null, name: task.title, activity_type: task.activityType, frequency: Object.entries(frequency).find(([, label]) => label === task.frequency)?.[0], active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.monthlyDay ?? null, requires_task_id: task.prerequisite ?? null }
     const result = task.id ? await client().from('cleaning_tasks').update(values).eq('id', task.id).select('id').single() : await client().from('cleaning_tasks').insert(values).select('id').single()
     if (result.error) throw result.error
+  },
+  setTaskActive: async (taskId: string, active: boolean) => {
+    const { error } = await client().rpc('set_cleaning_task_active', {
+      target_task_id: taskId,
+      target_active: active,
+    })
+    if (error) throw error
   },
   setCompletion: async (taskId: string, completed: boolean) => {
     const { error } = await client().rpc('set_cleaning_task_completion', { target_task_id: taskId, target_completion_date: localToday(), target_completed: completed })
