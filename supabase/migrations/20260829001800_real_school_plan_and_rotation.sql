@@ -107,7 +107,11 @@ update public.task_assignments set active = false where active;
 update public.cleaning_work_parts set active = false where active;
 update public.work_part_assignments set active = false, ends_on = coalesce(ends_on, current_date) where active;
 
-create temporary table desired_cleaning_plan (
+-- Migrační staging není TEMP: Supabase SQL Editor tak nemůže tabulku ztratit
+-- mezi příkazy kvůli implicitnímu COMMITu. Vzniká i zaniká uvnitř této jediné
+-- transakce, nikdy se nestane součástí výsledného schématu ani API.
+drop table if exists public._migration_01800_desired_cleaning_plan;
+create table public._migration_01800_desired_cleaning_plan (
   floor_name text,
   room_name text,
   task_code text,
@@ -120,10 +124,10 @@ create temporary table desired_cleaning_plan (
   period_week smallint,
   period_anchor_month date,
   requires_code text
-) on commit drop;
+);
 
 -- 1. patro: při každém úklidovém dni plus rozložené týdenní/periodické práce.
-insert into desired_cleaning_plan values
+insert into public._migration_01800_desired_cleaning_plan values
 ('1. patro','Vstup','carpet-vacuum','Vysát koberec','vacuum','cleaning_day','{1,3,5}',10,null,null,null,null),
 ('1. patro','Vstup','carpet-deep','Hloubkově vyčistit koberec vodním vysavačem','deep_clean','monthly','{1,3,5}',20,3,1,'2026-09-01',null),
 ('1. patro','Vstup','bench','Otřít lavičku','tables','weekly','{1}',30,null,null,null,null),
@@ -183,7 +187,7 @@ insert into desired_cleaning_plan values
 ('1. patro','Chodba','mop','Vytřít podlahu','mop','cleaning_day','{1,3,5}',20,null,null,null,'vacuum');
 
 -- Stejný úplný plán pro tři toalety v 1. patře.
-insert into desired_cleaning_plan
+insert into public._migration_01800_desired_cleaning_plan
 select '1. patro', room_name, task_code, task_name, activity_type, frequency,
        schedule_days, sort_order, period_months, period_week, period_anchor_month, requires_code
 from (values ('WC dívky'),('WC kluci'),('WC ženy')) rooms(room_name)
@@ -199,7 +203,7 @@ cross join (values
 ) task(task_code,task_name,activity_type,frequency,schedule_days,sort_order,period_months,period_week,period_anchor_month,requires_code);
 
 -- 2. patro: návštěvy střídá cleaning_cycle trigger; týdenní práce jsou při první návštěvě týdne.
-insert into desired_cleaning_plan values
+insert into public._migration_01800_desired_cleaning_plan values
 ('2. patro','WC kluci','toilet','Vyčistit záchod','toilet','cleaning_day','{1,3,5}',10,null,null,null,null),
 ('2. patro','WC kluci','urinal','Vyčistit pisoár','toilet','cleaning_day','{1,3,5}',20,null,null,null,null),
 ('2. patro','WC kluci','sink','Vyčistit umyvadlo a baterii','sink','cleaning_day','{1,3,5}',30,null,null,null,null),
@@ -232,7 +236,7 @@ insert into desired_cleaning_plan values
 ('2. patro','Školní zázemí','doors','Umýt dveře','doors','monthly','{1,3,5}',70,1,1,'2026-09-01',null);
 
 -- WC dospělí a pět samostatných učeben.
-insert into desired_cleaning_plan
+insert into public._migration_01800_desired_cleaning_plan
 select '2. patro','WC dospělí',task_code,task_name,activity_type,frequency,schedule_days,
        sort_order,period_months,period_week,period_anchor_month,requires_code
 from (values
@@ -246,7 +250,7 @@ from (values
   ('doors','Umýt dveře','doors','monthly','{1,3,5}',80,1,1,'2026-09-01',null)
 ) task(task_code,task_name,activity_type,frequency,schedule_days,sort_order,period_months,period_week,period_anchor_month,requires_code);
 
-insert into desired_cleaning_plan
+insert into public._migration_01800_desired_cleaning_plan
 select '2. patro',room_name,task_code,task_name,activity_type,frequency,schedule_days,
        sort_order,period_months,period_week,period_anchor_month,requires_code
 from (values ('Učebna 1'),('Učebna 2'),('Učebna 3'),('Učebna 4'),('Učebna 5')) rooms(room_name)
@@ -262,7 +266,7 @@ cross join (values
 ) task(task_code,task_name,activity_type,frequency,schedule_days,sort_order,period_months,period_week,period_anchor_month,requires_code);
 
 -- 3. patro: stejná alternace jako 2. patro, s opačným offsetem.
-insert into desired_cleaning_plan values
+insert into public._migration_01800_desired_cleaning_plan values
 ('3. patro','Ateliér','vacuum','Zamést / vysát podlahu','vacuum','cleaning_day','{1,3,5}',10,null,null,null,null),
 ('3. patro','Ateliér','mop','Vytřít podlahu','mop','cleaning_day','{1,3,5}',20,null,null,null,'vacuum'),
 ('3. patro','Ateliér','trash','Vynést koše','trash','cleaning_day','{1,3,5}',30,null,null,null,null),
@@ -306,7 +310,7 @@ insert into desired_cleaning_plan values
 ('3. patro','Chodba','mop','Vytřít podlahu','mop','cleaning_day','{1,3,5}',20,null,null,null,'vacuum');
 
 -- Dvě běžná WC ve 3. patře.
-insert into desired_cleaning_plan
+insert into public._migration_01800_desired_cleaning_plan
 select '3. patro',room_name,task_code,task_name,activity_type,frequency,schedule_days,
        sort_order,period_months,period_week,period_anchor_month,requires_code
 from (values ('WC holky'),('WC kluci')) rooms(room_name)
@@ -322,7 +326,7 @@ cross join (values
 ) task(task_code,task_name,activity_type,frequency,schedule_days,sort_order,period_months,period_week,period_anchor_month,requires_code);
 
 -- 4. patro a schodiště jednou týdně v pátek.
-insert into desired_cleaning_plan values
+insert into public._migration_01800_desired_cleaning_plan values
 ('4. patro','Mediační místnost','vacuum','Zamést / vysát normální podlahu','vacuum','weekly','{5}',10,null,null,null,null),
 ('4. patro','Mediační místnost','mop','Vytřít normální podlahu','mop','weekly','{5}',20,null,null,null,'vacuum'),
 ('4. patro','Mediační místnost','carpet-vacuum','Vysát koberec','vacuum','weekly','{5}',30,null,null,null,null),
@@ -340,7 +344,7 @@ insert into desired_cleaning_plan values
 ('Schodiště','Schodiště','windows','Umýt okna','windows','monthly','{5}',40,1,2,'2026-09-01',null);
 
 -- Společné úkoly školy.
-insert into desired_cleaning_plan values
+insert into public._migration_01800_desired_cleaning_plan values
 (null,null,'prepare','Projít školu a odstranit věci z cesty','other','cleaning_day','{1,3,5}',1,null,null,null,null),
 (null,null,'laundry','Vyprat hadry a utěrky','laundry','weekly','{5}',2,null,null,null,null);
 
@@ -359,7 +363,7 @@ select
   case when desired.floor_name in ('2. patro','3. patro') then 2 else null end,
   case when desired.floor_name = '2. patro' then 0 when desired.floor_name = '3. patro' then 1 else null end,
   desired.period_months, desired.period_week, desired.period_anchor_month
-from desired_cleaning_plan desired
+from public._migration_01800_desired_cleaning_plan desired
 left join public.buildings building on building.name = 'Škola'
 left join public.floors floor on floor.building_id = building.id and floor.name = desired.floor_name
 left join public.rooms room on room.building_id = building.id and room.floor_id = floor.id and room.name = desired.room_name
@@ -375,7 +379,7 @@ on conflict (plan_key) where plan_key is not null do update set
 -- Dependency se skládá pouze uvnitř stejné místnosti a správného typu podlahy.
 update public.cleaning_tasks task
 set requires_task_id = prerequisite.id
-from desired_cleaning_plan desired
+from public._migration_01800_desired_cleaning_plan desired
 join public.cleaning_tasks prerequisite
   on prerequisite.plan_key = 'v2026|' || coalesce(desired.floor_name,'school') || '|' || coalesce(desired.room_name,'common') || '|' || desired.requires_code
 where desired.requires_code is not null
@@ -483,8 +487,11 @@ begin
   if (select count(*) from public.rooms room join public.buildings b on b.id=room.building_id where b.name='Škola' and room.active) <> 32 then
     raise exception 'Nový plán nemá přesně 32 aktivních místností.';
   end if;
-  if (select count(*) from desired_cleaning_plan) <> 217 then
-    raise exception 'Kanonický plán nemá očekávaných 217 úkolů.';
+  if (
+    select count(*) from public.cleaning_tasks
+    where active and plan_key like 'v2026|%'
+  ) <> 217 then
+    raise exception 'Kanonický aktivní plán nemá očekávaných 217 úkolů.';
   end if;
   if exists (select 1 from public.cleaning_tasks where active and activity_type='disinfect') then
     raise exception 'V aktivním plánu zůstala dezinfekce.';
@@ -496,6 +503,16 @@ begin
     raise exception 'Chybí WC / sprcha.';
   end if;
   if exists (
+    select 1 from public.cleaning_tasks task
+    join public.rooms room on room.id=task.room_id
+    join public.floors floor on floor.id=room.floor_id
+    where task.active and task.plan_key like 'v2026|%'
+      and (
+        (floor.name='2. patro' and (task.cleaning_cycle_length,task.cleaning_cycle_offset) is distinct from (2::smallint,0::smallint))
+        or (floor.name='3. patro' and (task.cleaning_cycle_length,task.cleaning_cycle_offset) is distinct from (2::smallint,1::smallint))
+      )
+  ) then raise exception 'Rotace 2. a 3. patra není nastavena konzistentně.'; end if;
+  if exists (
     select 1 from public.cleaning_tasks mop
     where mop.plan_key like 'v2026|%' and mop.active and mop.activity_type='mop'
       and (mop.requires_task_id is null or not exists (
@@ -505,5 +522,7 @@ begin
   ) then raise exception 'Některé vytírání nemá správnou dependency.'; end if;
 end;
 $$;
+
+drop table public._migration_01800_desired_cleaning_plan;
 
 commit;

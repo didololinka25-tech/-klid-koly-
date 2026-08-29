@@ -185,7 +185,8 @@ test('zápis úkolů zůstává pod admin RLS a dependency pole se ukládá', ()
 })
 
 test('nový plán je nedestruktivní, idempotentní a bez A/B či dezinfekce', () => {
-  assert.doesNotMatch(migration18, /delete\s+from|truncate\s+|drop\s+table/i)
+  const withoutTemporaryCleanup = migration18.replace(/drop table(?: if exists)? public\._migration_01800_desired_cleaning_plan;/gi, '')
+  assert.doesNotMatch(withoutTemporaryCleanup, /delete\s+from|truncate\s+|drop\s+table/i)
   assert.match(migration18, /set active = false/i)
   assert.match(migration18, /plan_key text/i)
   assert.match(migration18, /on conflict \(plan_key\)/i)
@@ -221,6 +222,20 @@ test('serverový scheduler ověřuje rotaci pater i periodické práce', () => {
   assert.match(migration18, /period_week/i)
   assert.match(migration18, /create or replace function public\.is_cleaning_task_scheduled_on/i)
   assert.match(migration14, /is_cleaning_task_scheduled_on\(target_task_id, target_date\)/i)
+})
+
+test('01800 nepoužívá TEMP staging a finální kontroly čtou výsledná data', () => {
+  assert.doesNotMatch(migration18, /\)\s+on\s+commit\s+drop\s*;/i)
+  assert.doesNotMatch(migration18, /create\s+(temporary|temp)\s+table/i)
+  assert.match(migration18, /create table public\._migration_01800_desired_cleaning_plan/i)
+  const safetyBlock = migration18.match(/-- Bezpečnostní kontrola výsledku seedu\.[\s\S]*?\n\$\$;/i)?.[0] ?? ''
+  assert.doesNotMatch(safetyBlock, /desired_cleaning_plan/i)
+  assert.match(safetyBlock, /from public\.cleaning_tasks[\s\S]*plan_key like 'v2026\|%'/i)
+  assert.match(safetyBlock, /<> 217/i)
+  assert.match(safetyBlock, /cleaning_cycle_length,task\.cleaning_cycle_offset/i)
+  const commitsBeforeCleanup = migration18.slice(0, migration18.lastIndexOf('drop table public._migration_01800_desired_cleaning_plan')).match(/\bcommit\s*;/gi) ?? []
+  assert.equal(commitsBeforeCleanup.length, 0)
+  assert.match(migration18.trim(), /drop table public\._migration_01800_desired_cleaning_plan;\s*\n\s*commit;$/i)
 })
 
 test('frontend načte rozšířený plán jedním dotazem a umí bezpečný fallback před migrací', () => {
