@@ -114,9 +114,25 @@ with canonical_plan(
   schedule_days, sort_order, period_months, period_week,
   period_anchor_month, requires_code
 ) as (
+-- Nulová kotevní větev určuje všech 12 výsledných typů CTE. Každý samostatný
+-- VALUES blok má navíc typovaný první řádek, protože PostgreSQL nejdříve
+-- odvozuje typy uvnitř VALUES a až potom sjednocuje jednotlivé UNION větve.
+select
+  null::text, null::text, null::text, null::text, null::text, null::text,
+  null::smallint[], null::integer, null::smallint, null::smallint,
+  null::date, null::text
+where false
+
+union all
+
 -- 1. patro: při každém úklidovém dni plus rozložené týdenní/periodické práce.
-values
-('1. patro','Vstup','carpet-vacuum','Vysát koberec','vacuum','cleaning_day','{1,3,5}',10,null,null,null,null),
+select
+  floor_name::text, room_name::text, task_code::text, task_name::text,
+  activity_type::text, frequency::text, schedule_days::smallint[],
+  sort_order::integer, period_months::smallint, period_week::smallint,
+  period_anchor_month::date, requires_code::text
+from (values
+('1. patro'::text,'Vstup'::text,'carpet-vacuum'::text,'Vysát koberec'::text,'vacuum'::text,'cleaning_day'::text,'{1,3,5}'::smallint[],10::integer,null::smallint,null::smallint,null::date,null::text),
 ('1. patro','Vstup','carpet-deep','Hloubkově vyčistit koberec vodním vysavačem','deep_clean','monthly','{1,3,5}',20,3,1,'2026-09-01',null),
 ('1. patro','Vstup','bench','Otřít lavičku','tables','weekly','{1}',30,null,null,null,null),
 ('1. patro','Vstup','glass','Umýt skla','windows','monthly','{1,3,5}',40,1,2,'2026-09-01',null),
@@ -173,12 +189,15 @@ values
 
 ('1. patro','Chodba','vacuum','Zamést / vysát podlahu','vacuum','cleaning_day','{1,3,5}',10,null,null,null,null),
 ('1. patro','Chodba','mop','Vytřít podlahu','mop','cleaning_day','{1,3,5}',20,null,null,null,'vacuum')
+) seed(floor_name,room_name,task_code,task_name,activity_type,frequency,schedule_days,sort_order,period_months,period_week,period_anchor_month,requires_code)
 
 union all
 
 -- Stejný úplný plán pro tři toalety v 1. patře.
-select '1. patro', room_name, task_code, task_name, activity_type, frequency,
-       schedule_days, sort_order, period_months, period_week, period_anchor_month, requires_code
+select '1. patro'::text, room_name::text, task_code::text, task_name::text,
+       activity_type::text, frequency::text, schedule_days::smallint[],
+       sort_order::integer, period_months::smallint, period_week::smallint,
+       period_anchor_month::date, requires_code::text
 from (values ('WC dívky'),('WC kluci'),('WC ženy')) rooms(room_name)
 cross join (values
   ('toilet','Vyčistit záchod a splachovadlo','toilet','cleaning_day','{1,3,5}'::smallint[],10,null::smallint,null::smallint,null::date,null::text),
@@ -194,8 +213,13 @@ cross join (values
 union all
 
 -- 2. patro: návštěvy střídá cleaning_cycle trigger; týdenní práce jsou při první návštěvě týdne.
-values
-('2. patro','WC kluci','toilet','Vyčistit záchod','toilet','cleaning_day','{1,3,5}',10,null,null,null,null),
+select
+  floor_name::text, room_name::text, task_code::text, task_name::text,
+  activity_type::text, frequency::text, schedule_days::smallint[],
+  sort_order::integer, period_months::smallint, period_week::smallint,
+  period_anchor_month::date, requires_code::text
+from (values
+('2. patro'::text,'WC kluci'::text,'toilet'::text,'Vyčistit záchod'::text,'toilet'::text,'cleaning_day'::text,'{1,3,5}'::smallint[],10::integer,null::smallint,null::smallint,null::date,null::text),
 ('2. patro','WC kluci','urinal','Vyčistit pisoár','toilet','cleaning_day','{1,3,5}',20,null,null,null,null),
 ('2. patro','WC kluci','sink','Vyčistit umyvadlo a baterii','sink','cleaning_day','{1,3,5}',30,null,null,null,null),
 ('2. patro','WC kluci','mirror','Vyčistit zrcadlo','mirror','cleaning_day','{1,3,5}',40,null,null,null,null),
@@ -225,12 +249,15 @@ values
 ('2. patro','Školní zázemí','sills','Otřít parapety','surfaces','weekly','{1,3}',50,null,null,null,null),
 ('2. patro','Školní zázemí','windows','Umýt okna','windows','monthly','{1,3,5}',60,1,2,'2026-09-01',null),
 ('2. patro','Školní zázemí','doors','Umýt dveře','doors','monthly','{1,3,5}',70,1,1,'2026-09-01',null)
+) seed(floor_name,room_name,task_code,task_name,activity_type,frequency,schedule_days,sort_order,period_months,period_week,period_anchor_month,requires_code)
 
 union all
 
 -- WC dospělí a pět samostatných učeben.
-select '2. patro','WC dospělí',task_code,task_name,activity_type,frequency,schedule_days,
-       sort_order,period_months,period_week,period_anchor_month,requires_code
+select '2. patro'::text, 'WC dospělí'::text, task_code::text, task_name::text,
+       activity_type::text, frequency::text, schedule_days::smallint[],
+       sort_order::integer, period_months::smallint, period_week::smallint,
+       period_anchor_month::date, requires_code::text
 from (values
   ('toilet','Vyčistit záchod','toilet','cleaning_day','{1,3,5}'::smallint[],10,null::smallint,null::smallint,null::date,null::text),
   ('sink','Vyčistit umyvadlo a baterii','sink','cleaning_day','{1,3,5}',20,null,null,null,null),
@@ -244,8 +271,10 @@ from (values
 
 union all
 
-select '2. patro',room_name,task_code,task_name,activity_type,frequency,schedule_days,
-       sort_order,period_months,period_week,period_anchor_month,requires_code
+select '2. patro'::text, room_name::text, task_code::text, task_name::text,
+       activity_type::text, frequency::text, schedule_days::smallint[],
+       sort_order::integer, period_months::smallint, period_week::smallint,
+       period_anchor_month::date, requires_code::text
 from (values ('Učebna 1'),('Učebna 2'),('Učebna 3'),('Učebna 4'),('Učebna 5')) rooms(room_name)
 cross join (values
   ('vacuum','Zamést / vysát podlahu','vacuum','cleaning_day','{1,3,5}'::smallint[],10,null::smallint,null::smallint,null::date,null::text),
@@ -261,8 +290,13 @@ cross join (values
 union all
 
 -- 3. patro: stejná alternace jako 2. patro, s opačným offsetem.
-values
-('3. patro','Ateliér','vacuum','Zamést / vysát podlahu','vacuum','cleaning_day','{1,3,5}',10,null,null,null,null),
+select
+  floor_name::text, room_name::text, task_code::text, task_name::text,
+  activity_type::text, frequency::text, schedule_days::smallint[],
+  sort_order::integer, period_months::smallint, period_week::smallint,
+  period_anchor_month::date, requires_code::text
+from (values
+('3. patro'::text,'Ateliér'::text,'vacuum'::text,'Zamést / vysát podlahu'::text,'vacuum'::text,'cleaning_day'::text,'{1,3,5}'::smallint[],10::integer,null::smallint,null::smallint,null::date,null::text),
 ('3. patro','Ateliér','mop','Vytřít podlahu','mop','cleaning_day','{1,3,5}',20,null,null,null,'vacuum'),
 ('3. patro','Ateliér','trash','Vynést koše','trash','cleaning_day','{1,3,5}',30,null,null,null,null),
 ('3. patro','Ateliér','sink','Vyčistit umyvadlo a baterii','sink','cleaning_day','{1,3,5}',40,null,null,null,null),
@@ -303,12 +337,15 @@ values
 
 ('3. patro','Chodba','vacuum','Zamést / vysát podlahu','vacuum','cleaning_day','{1,3,5}',10,null,null,null,null),
 ('3. patro','Chodba','mop','Vytřít podlahu','mop','cleaning_day','{1,3,5}',20,null,null,null,'vacuum')
+) seed(floor_name,room_name,task_code,task_name,activity_type,frequency,schedule_days,sort_order,period_months,period_week,period_anchor_month,requires_code)
 
 union all
 
 -- Dvě běžná WC ve 3. patře.
-select '3. patro',room_name,task_code,task_name,activity_type,frequency,schedule_days,
-       sort_order,period_months,period_week,period_anchor_month,requires_code
+select '3. patro'::text, room_name::text, task_code::text, task_name::text,
+       activity_type::text, frequency::text, schedule_days::smallint[],
+       sort_order::integer, period_months::smallint, period_week::smallint,
+       period_anchor_month::date, requires_code::text
 from (values ('WC holky'),('WC kluci')) rooms(room_name)
 cross join (values
   ('toilet','Vyčistit záchod','toilet','cleaning_day','{1,3,5}'::smallint[],10,null::smallint,null::smallint,null::date,null::text),
@@ -324,8 +361,13 @@ cross join (values
 union all
 
 -- 4. patro a schodiště jednou týdně v pátek.
-values
-('4. patro','Mediační místnost','vacuum','Zamést / vysát normální podlahu','vacuum','weekly','{5}',10,null,null,null,null),
+select
+  floor_name::text, room_name::text, task_code::text, task_name::text,
+  activity_type::text, frequency::text, schedule_days::smallint[],
+  sort_order::integer, period_months::smallint, period_week::smallint,
+  period_anchor_month::date, requires_code::text
+from (values
+('4. patro'::text,'Mediační místnost'::text,'vacuum'::text,'Zamést / vysát normální podlahu'::text,'vacuum'::text,'weekly'::text,'{5}'::smallint[],10::integer,null::smallint,null::smallint,null::date,null::text),
 ('4. patro','Mediační místnost','mop','Vytřít normální podlahu','mop','weekly','{5}',20,null,null,null,'vacuum'),
 ('4. patro','Mediační místnost','carpet-vacuum','Vysát koberec','vacuum','weekly','{5}',30,null,null,null,null),
 ('4. patro','Mediační místnost','carpet-deep','Hloubkově vyčistit koberec vodním vysavačem','deep_clean','monthly','{5}',40,3,4,'2026-09-01',null),
@@ -340,13 +382,20 @@ values
 ('Schodiště','Schodiště','mop','Vytřít schodiště','mop','weekly','{5}',20,null,null,null,'vacuum'),
 ('Schodiště','Schodiště','railing','Otřít zábradlí','surfaces','weekly','{5}',30,null,null,null,null),
 ('Schodiště','Schodiště','windows','Umýt okna','windows','monthly','{5}',40,1,2,'2026-09-01',null)
+) seed(floor_name,room_name,task_code,task_name,activity_type,frequency,schedule_days,sort_order,period_months,period_week,period_anchor_month,requires_code)
 
 union all
 
 -- Společné úkoly školy.
-values
-(null,null,'prepare','Projít školu a odstranit věci z cesty','other','cleaning_day','{1,3,5}',1,null,null,null,null),
+select
+  floor_name::text, room_name::text, task_code::text, task_name::text,
+  activity_type::text, frequency::text, schedule_days::smallint[],
+  sort_order::integer, period_months::smallint, period_week::smallint,
+  period_anchor_month::date, requires_code::text
+from (values
+(null::text,null::text,'prepare'::text,'Projít školu a odstranit věci z cesty'::text,'other'::text,'cleaning_day'::text,'{1,3,5}'::smallint[],1::integer,null::smallint,null::smallint,null::date,null::text),
 (null,null,'laundry','Vyprat hadry a utěrky','laundry','weekly','{5}',2,null,null,null,null)
+) seed(floor_name,room_name,task_code,task_name,activity_type,frequency,schedule_days,sort_order,period_months,period_week,period_anchor_month,requires_code)
 )
 
 -- Kanonické řádky mají stabilní plan_key a lze je bezpečně upsertovat.

@@ -14,6 +14,7 @@ const migration15 = readFileSync(new URL('../supabase/migrations/20260829001500_
 const migration16 = readFileSync(new URL('../supabase/migrations/20260829001600_profile_and_attendance_settings.sql', import.meta.url), 'utf8')
 const migration17 = readFileSync(new URL('../supabase/migrations/20260829001700_soft_delete_cleaning_plan.sql', import.meta.url), 'utf8')
 const migration18 = readFileSync(new URL('../supabase/migrations/20260829001800_real_school_plan_and_rotation.sql', import.meta.url), 'utf8')
+const migration18TypeSql = readFileSync(new URL('../supabase/tests/01800_canonical_plan_types.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
   assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
@@ -241,6 +242,16 @@ test('01800 používá jediný CTE seed a žádnou pomocnou relation', () => {
   assert.equal((migration18.match(/^begin;$/gim) ?? []).length, 1)
   assert.equal((migration18.match(/^commit;$/gim) ?? []).length, 1)
   assert.match(migration18.trim(), /commit;$/i)
+})
+
+test('01800 kotví všech 12 canonical_plan typů před UNION větvemi', () => {
+  assert.match(migration18, /select\s+null::text, null::text, null::text, null::text, null::text, null::text,\s+null::smallint\[\], null::integer, null::smallint, null::smallint,\s+null::date, null::text\s+where false\s+union all/i)
+  assert.equal((migration18.match(/activity_type::text, frequency::text, schedule_days::smallint\[\],/gi) ?? []).length, 9)
+  assert.equal((migration18.match(/sort_order::integer, period_months::smallint, period_week::smallint,/gi) ?? []).length, 9)
+  assert.equal((migration18.match(/period_anchor_month::date, requires_code::text/gi) ?? []).length, 9)
+  assert.match(migration18TypeSql, /pg_typeof\(schedule_days\)::text/i)
+  assert.match(migration18TypeSql, /'smallint\[\]', 'integer', 'smallint', 'smallint', 'date', 'text'/i)
+  assert.match(migration18TypeSql.trim(), /rollback;$/i)
 })
 
 test('frontend načte rozšířený plán jedním dotazem a umí bezpečný fallback před migrací', () => {
