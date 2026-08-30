@@ -9,6 +9,7 @@ import {
   schoolRepository,
   type AccessRole,
   type AttendanceSettings,
+  type AttendanceAuditEntry,
   type AttendanceWorker,
   type AppSettings,
   type CleaningDayDraft,
@@ -1391,6 +1392,7 @@ function AttendanceDashboard({
         now={now}
         onEdit={setEditingRecord}
         onDelete={setDeletingRecord}
+        canViewAudit={isCaretaker}
       />
       {editingRecord && (
         <AttendanceEditor
@@ -1517,12 +1519,34 @@ function AttendanceHistory({
   now,
   onEdit,
   onDelete,
+  canViewAudit,
 }: {
   records: Attendance[];
   now: Date;
   onEdit: (record: Attendance) => void;
   onDelete: (record: Attendance) => void;
+  canViewAudit: boolean;
 }) {
+  const [auditRecord, setAuditRecord] = useState<Attendance | null>(null);
+  const [auditEntries, setAuditEntries] = useState<AttendanceAuditEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditMessage, setAuditMessage] = useState("");
+  const openAudit = async (record: Attendance) => {
+    setAuditRecord(record);
+    setAuditEntries([]);
+    setAuditMessage("");
+    setAuditLoading(true);
+    try {
+      const result = await schoolRepository.attendanceAudit(record.id);
+      setAuditEntries(result.entries);
+      if (!result.available) setAuditMessage("Historie změn bude dostupná po aplikaci migrace 02200.");
+      else if (!result.entries.length) setAuditMessage("Tato směna zatím nemá zaznamenanou změnu.");
+    } catch (error) {
+      setAuditMessage(error instanceof Error ? error.message : "Historii změn se nepodařilo načíst.");
+    } finally {
+      setAuditLoading(false);
+    }
+  };
   const months = new Map<string, Attendance[]>();
   records.forEach((record) =>
     months.set(record.date.slice(0, 7), [
@@ -1557,6 +1581,9 @@ function AttendanceHistory({
               </div>
               <div className="attendance-history-actions">
                 <button onClick={() => onEdit(record)}>Opravit</button>
+                {canViewAudit && (
+                  <button onClick={() => void openAudit(record)}>Historie změn</button>
+                )}
                 <button className="delete" onClick={() => onDelete(record)}>
                   Smazat
                 </button>
@@ -1566,7 +1593,54 @@ function AttendanceHistory({
         </details>
       ))}
       {!records.length && <p className="hint">Zatím nejsou evidované žádné směny.</p>}
+      {auditRecord && (
+        <AttendanceAuditDialog
+          record={auditRecord}
+          entries={auditEntries}
+          loading={auditLoading}
+          message={auditMessage}
+          onClose={() => setAuditRecord(null)}
+        />
+      )}
     </section>
+  );
+}
+
+function AttendanceAuditDialog({
+  record,
+  entries,
+  loading,
+  message,
+  onClose,
+}: {
+  record: Attendance;
+  entries: AttendanceAuditEntry[];
+  loading: boolean;
+  message: string;
+  onClose: () => void;
+}) {
+  const auditValue = (date: string, start: string, end?: string) =>
+    `${new Intl.DateTimeFormat("cs-CZ").format(new Date(`${date}T12:00:00`))} · ${formatTime(start)}–${end ? formatTime(end) : "probíhá"}`;
+  return (
+    <div className="confirmation-backdrop" role="presentation">
+      <section className="confirmation-dialog attendance-audit-dialog" role="dialog" aria-modal="true" aria-labelledby="attendance-audit-title">
+        <h2 id="attendance-audit-title">Historie změn směny</h2>
+        <p>{new Intl.DateTimeFormat("cs-CZ").format(new Date(`${record.date}T12:00:00`))}</p>
+        {loading && <p>Načítám historii…</p>}
+        {message && <p className="hint">{message}</p>}
+        <div className="attendance-audit-list">
+          {entries.map((entry) => (
+            <article key={entry.id}>
+              <small>{entry.changeKind === "clock_out" ? "Zaznamenání odchodu" : "Ruční oprava"}</small>
+              <span><b>Původně:</b> {auditValue(entry.oldDate, entry.oldStart, entry.oldEnd)}</span>
+              <span><b>Nově:</b> {auditValue(entry.newDate, entry.newStart, entry.newEnd)}</span>
+              <small>{entry.changedByName} · {new Intl.DateTimeFormat("cs-CZ", { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.changedAt))}</small>
+            </article>
+          ))}
+        </div>
+        <div className="confirmation-actions"><button onClick={onClose}>Zavřít</button></div>
+      </section>
+    </div>
   );
 }
 

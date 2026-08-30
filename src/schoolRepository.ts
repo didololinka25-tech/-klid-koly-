@@ -65,6 +65,19 @@ export type ManualEntry = {
 export type ManualData = { entries: ManualEntry[]; available: boolean; editable: boolean }
 export type AttendanceWorker = { id: string; name: string; role: AccessRole }
 export type AttendanceSettings = { plannedShiftsPerWeek: number; configurable: boolean }
+export type AttendanceAuditEntry = {
+  id: string
+  attendanceId: string
+  oldDate: string
+  oldStart: string
+  oldEnd?: string
+  newDate: string
+  newStart: string
+  newEnd?: string
+  changedByName: string
+  changedAt: string
+  changeKind: 'clock_out' | 'correction'
+}
 export type AppSettings = { dppAnnualLimitHours: number; available: boolean }
 export type Workplace = { id: string; name: string; active: boolean }
 export type PlanOptions = {
@@ -481,6 +494,33 @@ export const schoolRepository = {
     const { data, error } = await client().from('attendance').select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').eq('worker_id', workerId).order('started_at', { ascending: false })
     if (error) throw error
     return (data ?? []).map(mapAttendance)
+  },
+  attendanceAudit: async (attendanceId: string): Promise<{ entries: AttendanceAuditEntry[]; available: boolean }> => {
+    const { data, error } = await client()
+      .from('attendance_audit')
+      .select('id,attendance_id,old_attendance_date,old_started_at,old_ended_at,new_attendance_date,new_started_at,new_ended_at,changed_by_name,changed_at,change_kind')
+      .eq('attendance_id', attendanceId)
+      .order('changed_at', { ascending: false })
+    if (error) {
+      if (missingRelation(error)) return { entries: [], available: false }
+      throw error
+    }
+    return {
+      available: true,
+      entries: (data ?? []).map((row: any) => ({
+        id: row.id,
+        attendanceId: row.attendance_id,
+        oldDate: row.old_attendance_date,
+        oldStart: row.old_started_at,
+        oldEnd: row.old_ended_at ?? undefined,
+        newDate: row.new_attendance_date,
+        newStart: row.new_started_at,
+        newEnd: row.new_ended_at ?? undefined,
+        changedByName: row.changed_by_name,
+        changedAt: row.changed_at,
+        changeKind: row.change_kind,
+      })),
+    }
   },
   attendanceWorkers: async (): Promise<AttendanceWorker[]> => {
     const { data, error } = await client().from('profiles').select('id,full_name,role,access_role').eq('active', true).in('access_role', ['cleaning_team', 'admin']).order('full_name')

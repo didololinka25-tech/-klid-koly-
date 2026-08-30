@@ -327,6 +327,26 @@ h1 {
   border-color: #e8b4ae;
   color: #a3342b;
 }
+.attendance-audit-dialog {
+  max-height: min(84vh, 680px);
+  overflow-y: auto;
+}
+.attendance-audit-list {
+  display: grid;
+  gap: 10px;
+}
+.attendance-audit-list article {
+  display: grid;
+  gap: 5px;
+  padding: 11px;
+  border: 1px solid #dbe8e4;
+  border-radius: 10px;
+  background: #f8fbfa;
+}
+.attendance-audit-list span,
+.attendance-audit-list small {
+  line-height: 1.4;
+}
 .confirmation-backdrop {
   position: fixed;
   inset: 0;

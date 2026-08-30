@@ -18,6 +18,8 @@ const migration18TypeSql = readFileSync(new URL('../supabase/tests/01800_canonic
 const migration19 = readFileSync(new URL('../supabase/migrations/20260830001900_final_departure_checks.sql', import.meta.url), 'utf8')
 const migration20 = readFileSync(new URL('../supabase/migrations/20260830002000_cleaning_manual_and_staircase_windows.sql', import.meta.url), 'utf8')
 const migration21 = readFileSync(new URL('../supabase/migrations/20260830002100_attendance_integrity.sql', import.meta.url), 'utf8')
+const migration22 = readFileSync(new URL('../supabase/migrations/20260830002200_attendance_audit_history.sql', import.meta.url), 'utf8')
+const attendanceRepair = readFileSync(new URL('../supabase/diagnostics/repair_attendance_d05aac53.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
   assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
@@ -145,6 +147,29 @@ test('databáze odvozuje pracovní datum v Praze a odmítá překryv bez změny 
   assert.match(migration21, /pg_advisory_xact_lock/)
   assert.match(migration21, /errcode = '23P01'/)
   assert.doesNotMatch(migration21, /delete\s+from|update\s+public\.attendance/i)
+})
+
+test('audit docházky ukládá neměnné původní i nové hodnoty a čte jej pouze admin', () => {
+  assert.match(migration22, /old_attendance_date[\s\S]*old_started_at[\s\S]*old_ended_at/i)
+  assert.match(migration22, /new_attendance_date[\s\S]*new_started_at[\s\S]*new_ended_at/i)
+  assert.match(migration22, /changed_by[\s\S]*changed_at/i)
+  assert.match(migration22, /after update of attendance_date, started_at, ended_at/i)
+  assert.match(migration22, /using \(public\.is_admin\(\)\)/i)
+  assert.match(migration22, /revoke all on public\.attendance_audit from anon, authenticated/i)
+  assert.doesNotMatch(migration22, /grant (insert|update|delete)/i)
+  assert.match(repository, /attendanceAudit:[\s\S]*from\('attendance_audit'\)/)
+  assert.match(app, /Historie změn směny/)
+})
+
+test('jednorázová oprava chrání přesný UUID a očekávaný stav v jednom atomickém bloku', () => {
+  assert.match(attendanceRepair, /target_id constant uuid := 'd05aac53-d33f-4ba9-bb43-b91f128e586e'/i)
+  assert.match(attendanceRepair, /attendance_date = date '2026-08-30'/i)
+  assert.match(attendanceRepair, /2026-08-30 09:00:00 Europe\/Prague/i)
+  assert.match(attendanceRepair, /2026-08-30 12:06:00 Europe\/Prague/i)
+  assert.match(attendanceRepair, /2026-08-29 14:01:28 Europe\/Prague/i)
+  assert.match(attendanceRepair, /2026-08-29 18:30:00 Europe\/Prague/i)
+  assert.match(attendanceRepair, /get diagnostics changed_count = row_count[\s\S]*changed_count <> 1/i)
+  assert.doesNotMatch(attendanceRepair, /delete\s+from/i)
 })
 
 test('soft delete úkolu zachovává historii a chrání aktivní dependency', () => {
