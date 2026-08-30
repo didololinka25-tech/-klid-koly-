@@ -185,8 +185,7 @@ test('zápis úkolů zůstává pod admin RLS a dependency pole se ukládá', ()
 })
 
 test('nový plán je nedestruktivní, idempotentní a bez A/B či dezinfekce', () => {
-  const withoutTemporaryCleanup = migration18.replace(/drop table(?: if exists)? public\._migration_01800_desired_cleaning_plan;/gi, '')
-  assert.doesNotMatch(withoutTemporaryCleanup, /delete\s+from|truncate\s+|drop\s+table/i)
+  assert.doesNotMatch(migration18, /delete\s+from|truncate\s+|drop\s+table/i)
   assert.match(migration18, /set active = false/i)
   assert.match(migration18, /plan_key text/i)
   assert.match(migration18, /on conflict \(plan_key\)/i)
@@ -224,18 +223,24 @@ test('serverový scheduler ověřuje rotaci pater i periodické práce', () => {
   assert.match(migration14, /is_cleaning_task_scheduled_on\(target_task_id, target_date\)/i)
 })
 
-test('01800 nepoužívá TEMP staging a finální kontroly čtou výsledná data', () => {
-  assert.doesNotMatch(migration18, /\)\s+on\s+commit\s+drop\s*;/i)
-  assert.doesNotMatch(migration18, /create\s+(temporary|temp)\s+table/i)
-  assert.match(migration18, /create table public\._migration_01800_desired_cleaning_plan/i)
+test('01800 používá jediný CTE seed a žádnou pomocnou relation', () => {
+  assert.doesNotMatch(migration18, /desired_cleaning_plan|_migration_01800_desired_cleaning_plan/i)
+  assert.doesNotMatch(migration18, /create\s+(temporary|temp)\s+table|create\s+table\s+.*migration_01800/i)
+  assert.match(migration18, /with canonical_plan\([\s\S]*?\) as \([\s\S]*?insert into public\.cleaning_tasks/i)
+  const seedStatement = migration18.match(/with canonical_plan\([\s\S]*?on conflict \(plan_key\)[\s\S]*?period_anchor_month = excluded\.period_anchor_month;/i)?.[0] ?? ''
+  const cteBeforeInsert = seedStatement
+    .slice(0, seedStatement.indexOf('insert into public.cleaning_tasks'))
+    .replace(/--.*$/gm, '')
+  assert.doesNotMatch(cteBeforeInsert, /;/)
+  assert.match(migration18, /prerequisite\.plan_key = regexp_replace\(task\.plan_key, '\[\^\|\]\+\$', 'vacuum'\)/i)
   const safetyBlock = migration18.match(/-- Bezpečnostní kontrola výsledku seedu\.[\s\S]*?\n\$\$;/i)?.[0] ?? ''
-  assert.doesNotMatch(safetyBlock, /desired_cleaning_plan/i)
+  assert.doesNotMatch(safetyBlock, /canonical_plan/i)
   assert.match(safetyBlock, /from public\.cleaning_tasks[\s\S]*plan_key like 'v2026\|%'/i)
   assert.match(safetyBlock, /<> 217/i)
   assert.match(safetyBlock, /cleaning_cycle_length,task\.cleaning_cycle_offset/i)
-  const commitsBeforeCleanup = migration18.slice(0, migration18.lastIndexOf('drop table public._migration_01800_desired_cleaning_plan')).match(/\bcommit\s*;/gi) ?? []
-  assert.equal(commitsBeforeCleanup.length, 0)
-  assert.match(migration18.trim(), /drop table public\._migration_01800_desired_cleaning_plan;\s*\n\s*commit;$/i)
+  assert.equal((migration18.match(/^begin;$/gim) ?? []).length, 1)
+  assert.equal((migration18.match(/^commit;$/gim) ?? []).length, 1)
+  assert.match(migration18.trim(), /commit;$/i)
 })
 
 test('frontend načte rozšířený plán jedním dotazem a umí bezpečný fallback před migrací', () => {
