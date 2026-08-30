@@ -13,7 +13,10 @@ import {
   type AppSettings,
   type CleaningDayDraft,
   type CleaningDayRecord,
+  type ManagedFloor,
   type ManagedRoom,
+  type ManualData,
+  type ManualEntry,
   type Incident,
   type OperationsData,
   type PlanOptions,
@@ -37,6 +40,7 @@ type Section =
   | "Kalendář"
   | "Provoz"
   | "Více"
+  | "Manuál"
   | "Správa"
   | "Uživatelé";
 const sections: Section[] = ["Dnes", "Docházka", "Kalendář", "Provoz", "Více"];
@@ -46,6 +50,7 @@ const icon: Record<Section, string> = {
   Kalendář: "▣",
   Provoz: "⚠",
   Více: "•••",
+  Manuál: "ⓘ",
   Správa: "✓",
   Uživatelé: "♙",
 };
@@ -77,6 +82,7 @@ const activityTypes: Record<
 };
 const weekdays = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
 const finalCheckPrefix = "v2026|school|common|final-";
+const isFinalCheckTask = (task: Task) => Boolean(task.planKey?.startsWith(finalCheckPrefix) || task.planKey?.startsWith("admin|final|"));
 const todayLabel = new Intl.DateTimeFormat("cs-CZ", {
   weekday: "long",
   day: "numeric",
@@ -98,6 +104,7 @@ export default function App() {
     title: isTestCleaningDay ? "Testovací standardní úklid" : "Standardní úklid",
   });
   const [operations, setOperations] = useState<OperationsData>({ stock: [], incidents: [], rooms: [], editable: false });
+  const [manual, setManual] = useState<ManualData>({ entries: [], available: false, editable: false });
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [attendanceView, setAttendanceView] = useState<Attendance[]>([]);
   const [attendanceWorkers, setAttendanceWorkers] = useState<AttendanceWorker[]>([]);
@@ -219,9 +226,10 @@ export default function App() {
         ]);
         setUsers([]);
       }
-      const [daysResult, operationsResult] = await Promise.allSettled([
+      const [daysResult, operationsResult, manualResult] = await Promise.allSettled([
         schoolRepository.cleaningDays(),
         schoolRepository.operations(),
+        schoolRepository.manuals(activeProfile),
       ]);
       if (daysResult.status === "fulfilled") {
         setCleaningDays(daysResult.value.records);
@@ -229,6 +237,7 @@ export default function App() {
         setCleaningTaskSelectionAvailable(daysResult.value.taskSelectionAvailable);
       }
       if (operationsResult.status === "fulfilled") setOperations(operationsResult.value);
+      if (manualResult.status === "fulfilled") setManual(manualResult.value);
     },
     [],
   );
@@ -250,6 +259,7 @@ export default function App() {
       setAttendanceWorkers([]);
       setSelectedAttendanceWorker("");
       setWorkplaces([]);
+      setManual({ entries: [], available: false, editable: false });
       setAttendanceBuildingId("");
       if (next) load(next).catch((error) => setNotice(error.message));
     });
@@ -654,6 +664,37 @@ export default function App() {
       throw error;
     }
   };
+  const saveFloor = async (floor: ManagedFloor) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveFloor(floor);
+      await load(session, profile);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Patro nebo sekci se nepodařilo uložit.");
+      throw error;
+    }
+  };
+  const refreshManual = async () => setManual(await schoolRepository.manuals(profile));
+  const saveManualEntry = async (entry: ManualEntry) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveManualEntry(entry, profile.id);
+      await refreshManual();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Položku Manuálu se nepodařilo uložit.");
+      throw error;
+    }
+  };
+  const setManualEntryActive = async (id: string, active: boolean) => {
+    try {
+      setNotice("");
+      await schoolRepository.setManualEntryActive(id, active, profile.id);
+      await refreshManual();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Stav položky Manuálu se nepodařilo změnit.");
+      throw error;
+    }
+  };
   const setRoomActive = async (roomId: string, active: boolean) => {
     try {
       setNotice("");
@@ -783,8 +824,11 @@ export default function App() {
               {visibleDone} / {visible.length} hotovo
             </strong>
             <ProgressBar value={visibleDone} total={visible.length} label="Celkový průběh úklidu" />
-            {visible.length > 0 && visibleDone === visible.length && <p>Dnešní úklid je hotový.</p>}
+            {visible.length > 0 && visibleDone === visible.length && <p>Všechno hotovo – můžete odejít.</p>}
           </section>
+          {cleaningDay.kind !== "preview" && visible.length > 0 && (
+            <ArrivalReminders entries={manual.entries.filter((entry) => entry.entryType === "arrival" && entry.active)} />
+          )}
           {accessRole(profile) === "visitor" && (
             <p className="readonly-note">Návštěvnický přístup je pouze pro čtení.</p>
           )}
@@ -793,6 +837,7 @@ export default function App() {
             onComplete={complete}
             onCompleteAll={completeMany}
             pendingTaskIds={pendingTaskIds}
+            guides={manual.entries.filter((entry) => entry.entryType === "guide" && entry.active)}
           />
         </>
       )}
@@ -806,6 +851,7 @@ export default function App() {
           onSaveTask={saveTask}
           onSetTaskActive={setTaskActive}
           onSaveRoom={saveRoom}
+          onSaveFloor={saveFloor}
           onSetRoomActive={setRoomActive}
           view={managementView}
           onView={setManagementView}
@@ -860,6 +906,20 @@ export default function App() {
           onChanged={async () => setOperations(await schoolRepository.operations())}
         />
       )}
+      {section === "Manuál" && (
+        <ManualScreen
+          data={manual}
+          tasks={tasks}
+          onSave={saveManualEntry}
+          onSetActive={setManualEntryActive}
+          onEditDeparture={(task) => { setEditing(task); setManagementView("plan"); setSection("Správa"); }}
+          onAddDeparture={() => {
+            const order = Math.max(930, ...tasks.filter(isFinalCheckTask).map((task) => task.sortOrder)) + 10;
+            setEditing({ id: "", planKey: `admin|final|${crypto.randomUUID()}`, room: "Společný úkol", floor: "Společné úkoly", floorSort: -1, building: "Škola", title: "", activityType: "other", frequency: "denně", assignedTo: "Úklidový tým", done: false, canComplete: false, dueToday: false, sortOrder: order, scheduleDays: [1, 3, 5], active: true });
+            setManagementView("plan"); setSection("Správa");
+          }}
+        />
+      )}
       {section === "Více" && (
         <MoreScreen
           profile={profile}
@@ -871,6 +931,7 @@ export default function App() {
             setSection("Uživatelé");
           }}
           onOpenCleaningDays={() => setSection("Kalendář")}
+          onOpenManual={() => setSection("Manuál")}
           workplaces={workplaces}
           appSettings={appSettings}
           onSaveWorkplace={saveWorkplace}
@@ -1633,15 +1694,17 @@ function TaskHierarchy({
   onComplete,
   onCompleteAll,
   pendingTaskIds,
+  guides,
 }: {
   tasks: Task[];
   onComplete: (id: string) => Promise<void>;
   onCompleteAll: (tasks: Task[]) => Promise<void>;
   pendingTaskIds: Set<string>;
+  guides: ManualEntry[];
 }) {
-  const finalChecks = tasks.filter((task) => task.planKey?.startsWith(finalCheckPrefix));
-  const common = tasks.filter((task) => !task.roomId && !task.planKey?.startsWith(finalCheckPrefix));
-  const roomTasks = tasks.filter((task) => task.roomId);
+  const finalChecks = tasks.filter(isFinalCheckTask);
+  const common = tasks.filter((task) => !task.roomId && !isFinalCheckTask(task));
+  const roomTasks = tasks.filter((task) => task.roomId && !isFinalCheckTask(task));
   const floorGroups = new Map<string, Task[]>();
   roomTasks
     .forEach((task) =>
@@ -1659,6 +1722,7 @@ function TaskHierarchy({
             tasks={common}
             onComplete={onComplete}
             pendingTaskIds={pendingTaskIds}
+            guides={guides}
           />
         </section>
       )}
@@ -1672,6 +1736,7 @@ function TaskHierarchy({
             onComplete={onComplete}
             onCompleteAll={onCompleteAll}
             pendingTaskIds={pendingTaskIds}
+            guides={guides}
           />
         ))}
       {finalChecks.length > 0 && (
@@ -1680,7 +1745,7 @@ function TaskHierarchy({
             <span><h2>Před odchodem ze školy</h2><small>Povinná společná kontrola</small></span>
             <b>{finalChecks.filter((task) => task.done).length}/{finalChecks.length}</b>
           </div>
-          <TaskRows tasks={finalChecks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} />
+          <TaskRows tasks={finalChecks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} />
         </section>
       )}
       {tasks.length === 0 && (
@@ -1698,12 +1763,14 @@ function FloorGroup({
   onComplete,
   onCompleteAll,
   pendingTaskIds,
+  guides,
 }: {
   label: string;
   tasks: Task[];
   onComplete: (id: string) => Promise<void>;
   onCompleteAll: (tasks: Task[]) => Promise<void>;
   pendingTaskIds: Set<string>;
+  guides: ManualEntry[];
 }) {
   const [open, setOpen] = useState(true);
   const rooms = new Map<string, Task[]>();
@@ -1737,6 +1804,7 @@ function FloorGroup({
               onComplete={onComplete}
               onCompleteAll={onCompleteAll}
               pendingTaskIds={pendingTaskIds}
+              guides={guides}
             />
           ))}
         </div>
@@ -1751,12 +1819,14 @@ function RoomActivityGroup({
   onComplete,
   onCompleteAll,
   pendingTaskIds,
+  guides,
 }: {
   room: string;
   tasks: Task[];
   onComplete: (id: string) => Promise<void>;
   onCompleteAll: (tasks: Task[]) => Promise<void>;
   pendingTaskIds: Set<string>;
+  guides: ManualEntry[];
 }) {
   const [saving, setSaving] = useState(false);
   const completed = tasks.filter((task) => task.done).length;
@@ -1793,6 +1863,7 @@ function RoomActivityGroup({
         onComplete={onComplete}
         pendingTaskIds={pendingTaskIds}
         allTasks={tasks}
+        guides={guides}
       />
     </section>
   );
@@ -1803,12 +1874,15 @@ function TaskRows({
   onComplete,
   pendingTaskIds,
   allTasks = tasks,
+  guides = [],
 }: {
   tasks: Task[];
   onComplete: (id: string) => Promise<void>;
   pendingTaskIds: Set<string>;
   allTasks?: Task[];
+  guides?: ManualEntry[];
 }) {
+  const [openGuide, setOpenGuide] = useState<ManualEntry | null>(null);
   return (
     <div className="activity-grid">
       {[...tasks]
@@ -1817,21 +1891,18 @@ function TaskRows({
           const activity = activityTypes[task.activityType] ?? activityTypes.other;
           const blocked = Boolean(task.prerequisite && !allTasks.find((item) => item.id === task.prerequisite)?.done);
           const pending = pendingTaskIds.has(task.id);
+          const guide = guides.find((item) => item.activityTypes.includes(task.activityType));
           return (
-            <button
-              className={`activity-check${task.done ? " done" : ""}${blocked ? " blocked" : ""}`}
-              disabled={!task.canComplete || pending}
-              onClick={() => void onComplete(task.id)}
-              aria-pressed={task.done}
-              aria-label={`${task.done ? "Zrušit dokončení" : "Dokončit"}: ${task.title}`}
-              title={`${task.title}${task.prerequisite ? " – nejdříve zamést nebo vysát" : ""}`}
-              key={task.id}
-            >
-              <span className="activity-icon" aria-hidden="true">{pending ? "…" : task.done ? "✓" : blocked ? "🔒" : activity.icon}</span>
-              <span className="activity-copy"><b>{task.title}</b><small>{pending ? "Ukládám…" : blocked ? "Nejdříve předchozí činnost" : task.done ? "Hotovo" : activity.label}</small></span>
-            </button>
+            <article className={`activity-card${task.done ? " done" : ""}${blocked ? " blocked" : ""}`} key={task.id}>
+              <button className="activity-check" disabled={!task.canComplete || pending} onClick={() => void onComplete(task.id)} aria-pressed={task.done} aria-label={`${task.done ? "Zrušit dokončení" : "Dokončit"}: ${task.title}`} title={`${task.title}${task.prerequisite ? " – nejdříve zamést nebo vysát" : ""}`}>
+                <span className="activity-icon" aria-hidden="true">{pending ? "…" : task.done ? "✓" : blocked ? "🔒" : activity.icon}</span>
+                <span className="activity-copy"><b>{task.title}</b><small>{pending ? "Ukládám…" : blocked ? "Nejdříve předchozí činnost" : task.done ? "Hotovo" : activity.label}</small></span>
+              </button>
+              {guide && <button className="task-guide-link" onClick={() => setOpenGuide(guide)}>ⓘ Návod</button>}
+            </article>
           );
         })}
+      {openGuide && <ManualGuideModal entry={openGuide} onClose={() => setOpenGuide(null)} />}
     </div>
   );
 }
@@ -1850,6 +1921,7 @@ function Management({
   onSaveTask,
   onSetTaskActive,
   onSaveRoom,
+  onSaveFloor,
   onSetRoomActive,
   view,
   onView,
@@ -1862,6 +1934,7 @@ function Management({
   onSaveTask: (task: Task) => Promise<void>;
   onSetTaskActive: (taskId: string, active: boolean) => Promise<void>;
   onSaveRoom: (room: ManagedRoom) => Promise<void>;
+  onSaveFloor: (floor: ManagedFloor) => Promise<void>;
   onSetRoomActive: (roomId: string, active: boolean) => Promise<void>;
   view: "plan" | "rooms";
   onView: (view: "plan" | "rooms") => void;
@@ -1897,7 +1970,7 @@ function Management({
           onSetActive={onSetTaskActive}
         />
       ) : (
-        <RoomManager options={options} tasks={tasks} onSave={onSaveRoom} onSetActive={onSetRoomActive} />
+        <RoomManager options={options} tasks={tasks} onSave={onSaveRoom} onSaveFloor={onSaveFloor} onSetActive={onSetRoomActive} />
       )}
     </>
   );
@@ -2036,11 +2109,13 @@ function RoomManager({
   options,
   tasks,
   onSave,
+  onSaveFloor,
   onSetActive,
 }: {
   options: PlanOptions;
   tasks: Task[];
   onSave: (room: ManagedRoom) => Promise<void>;
+  onSaveFloor: (floor: ManagedFloor) => Promise<void>;
   onSetActive: (roomId: string, active: boolean) => Promise<void>;
 }) {
   const school =
@@ -2050,6 +2125,7 @@ function RoomManager({
     .filter((floor) => !school || floor.buildingId === school.id)
     .sort((a, b) => a.sortOrder - b.sortOrder);
   const [editingRoom, setEditingRoom] = useState<ManagedRoom | null>(null);
+  const [editingFloor, setEditingFloor] = useState<ManagedFloor | null>(null);
   const inactiveRooms = options.rooms.filter((room) => !room.active);
   const addRoom = (floorId: string) => {
     const floor = schoolFloors.find((item) => item.id === floorId);
@@ -2078,7 +2154,14 @@ function RoomManager({
   };
   return (
     <section className="room-manager">
-      {editingRoom ? (
+      {editingFloor ? (
+        <form className="task-editor room-editor" onSubmit={async (event) => { event.preventDefault(); await onSaveFloor(editingFloor); setEditingFloor(null); }}>
+          <h2>{editingFloor.id ? "Upravit patro / sekci" : "Nové patro / sekce"}</h2>
+          <label>Název<input required value={editingFloor.name} onChange={(event) => setEditingFloor({ ...editingFloor, name: event.target.value })} /></label>
+          <label>Pořadí<input type="number" value={editingFloor.sortOrder} onChange={(event) => setEditingFloor({ ...editingFloor, sortOrder: Number(event.target.value) })} /></label>
+          <div className="editor-actions"><button type="button" onClick={() => setEditingFloor(null)}>Zrušit</button><button>Uložit</button></div>
+        </form>
+      ) : editingRoom ? (
         <RoomEditor
           room={editingRoom}
           options={options}
@@ -2088,6 +2171,7 @@ function RoomManager({
         />
       ) : (
         <>
+          {school && <button className="add-task" onClick={() => setEditingFloor({ id: "", buildingId: school.id, name: "", sortOrder: Math.max(0, ...schoolFloors.map((floor) => floor.sortOrder)) + 10 })}>+ Přidat patro / sekci</button>}
           <div className="admin-tree">
             {schoolFloors.map((floor) => {
               const rooms = options.rooms.filter((room) => room.floorId === floor.id && room.active)
@@ -2096,6 +2180,7 @@ function RoomManager({
                 <details key={floor.id} className="admin-floor">
                   <summary><b>{floor.name}</b><span>{rooms.length} místností</span></summary>
                   <div className="room-admin-list">
+                    <button className="room-admin-row floor-edit" onClick={() => setEditingFloor(floor)}><span><b>Upravit patro / sekci</b><small>Název a pořadí</small></span><i>Upravit</i></button>
                     {rooms.map((room) => (
                       <button key={room.id} className={room.active ? "room-admin-row" : "room-admin-row inactive"} onClick={() => setEditingRoom({ id: room.id, buildingId: room.buildingId, floorId: room.floorId, name: room.name, active: room.active, sortOrder: room.sortOrder })}>
                         <span><b>{room.name}</b><small>{tasks.filter((task) => task.roomId === room.id && task.active).length} aktivních činností · pořadí {room.sortOrder}{room.active ? "" : " · neaktivní"}</small></span>
@@ -2274,6 +2359,7 @@ function TaskEditor({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const saveLock = useRef(false);
+  const departureCheck = isFinalCheckTask(draft);
   const update = <K extends keyof Task>(key: K, value: Task[K]) =>
     setDraft((current) => ({ ...current, [key]: value }));
   const setRoom = (id: string) => {
@@ -2339,7 +2425,8 @@ function TaskEditor({
           )}
         </select>
       </label>
-      <label>
+      {departureCheck && <p className="hint">Tato společná kontrola se automaticky zobrazuje před odchodem při každém skutečném úklidovém dni.</p>}
+      {!departureCheck && <label>
         Místnost / společný úkol
         <select
           value={draft.roomId ?? ""}
@@ -2352,12 +2439,12 @@ function TaskEditor({
             </option>
           ))}
         </select>
-      </label>
-      <label>
+      </label>}
+      {!departureCheck && <label>
         Patro / sekce
         <input value={draft.floor} readOnly />
-      </label>
-      <label>
+      </label>}
+      {!departureCheck && <label>
         Frekvence
         <select
           value={draft.frequency}
@@ -2369,8 +2456,8 @@ function TaskEditor({
             <option key={item}>{item}</option>
           ))}
         </select>
-      </label>
-      {draft.frequency !== "měsíčně" && draft.frequency !== "mimořádně" && (
+      </label>}
+      {!departureCheck && draft.frequency !== "měsíčně" && draft.frequency !== "mimořádně" && (
         <fieldset>
           <legend>Dny v týdnu</legend>
           <div className="day-buttons">
@@ -2389,7 +2476,7 @@ function TaskEditor({
           </div>
         </fieldset>
       )}
-      {draft.frequency === "měsíčně" && (
+      {!departureCheck && draft.frequency === "měsíčně" && (
         <>
           <label>
             Způsob rozložení
@@ -2433,7 +2520,7 @@ function TaskEditor({
           )}
         </>
       )}
-      <label>
+      {!departureCheck && <label>
         Předchozí nutná činnost
         <select
           value={draft.prerequisite ?? ""}
@@ -2448,7 +2535,7 @@ function TaskEditor({
             ))}
         </select>
         <small>Například vytření až po zametení nebo vysátí.</small>
-      </label>
+      </label>}
       <label>
         Pořadí
         <input
@@ -2651,6 +2738,89 @@ function formatTaskSchedule(task: Task) {
   return `${frequency}${days ? ` · ${days}` : ""}${floorVisit}${task.active ? "" : " · neaktivní"}`;
 }
 
+function ArrivalReminders({ entries }: { entries: ManualEntry[] }) {
+  if (!entries.length) return null;
+  return <section className="arrival-reminders"><p className="eyebrow">PO PŘÍCHODU</p>{entries.sort((a, b) => a.sortOrder - b.sortOrder).map((entry) => <p key={entry.id}><span>☀</span><b>{entry.title}</b>{entry.body && <small>{entry.body}</small>}</p>)}</section>;
+}
+
+function ManualGuideModal({ entry, onClose }: { entry: ManualEntry; onClose: () => void }) {
+  return <div className="confirmation-backdrop manual-modal" role="dialog" aria-modal="true" aria-label={entry.title} onClick={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+    <article className="confirmation-dialog manual-detail">
+      <div className="manual-detail-heading"><span><p className="eyebrow">{entry.category}</p><h2>{entry.title}</h2></span><button onClick={onClose} aria-label="Zavřít návod">Zavřít</button></div>
+      {entry.supplies && <section><h3>Co potřebuji</h3><p>{entry.supplies}</p></section>}
+      {entry.steps && <section><h3>Jak postupovat</h3><p>{entry.steps}</p></section>}
+      {entry.warnings && <section className="manual-warning"><h3>Na co si dát pozor</h3><p>{entry.warnings}</p></section>}
+      {entry.schoolNote && <section><h3>Poznámka školy</h3><p>{entry.schoolNote}</p></section>}
+      {entry.body && <p>{entry.body}</p>}
+    </article>
+  </div>;
+}
+
+function newManualEntry(entryType: ManualEntry["entryType"]): ManualEntry {
+  return { id: "", entryType, title: "", category: entryType === "arrival" ? "Po příchodu" : "Ostatní", body: "", supplies: "", steps: "", warnings: "", schoolNote: "", markerColor: "", activityTypes: [], featured: false, active: true, sortOrder: 100 };
+}
+
+function ManualScreen({ data, tasks, onSave, onSetActive, onEditDeparture, onAddDeparture }: {
+  data: ManualData; tasks: Task[];
+  onSave: (entry: ManualEntry) => Promise<void>; onSetActive: (id: string, active: boolean) => Promise<void>;
+  onEditDeparture: (task: Task) => void; onAddDeparture: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [manage, setManage] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<ManualEntry | null>(null);
+  const [openGuide, setOpenGuide] = useState<ManualEntry | null>(null);
+  const normalized = search.trim().toLocaleLowerCase("cs");
+  const active = data.entries.filter((entry) => entry.active);
+  const guides = active.filter((entry) => entry.entryType === "guide" && (!normalized || `${entry.title} ${entry.category} ${entry.supplies} ${entry.steps} ${entry.schoolNote}`.toLocaleLowerCase("cs").includes(normalized)));
+  const practical = active.filter((entry) => entry.entryType === "practical" && (!normalized || `${entry.title} ${entry.category} ${entry.body}`.toLocaleLowerCase("cs").includes(normalized)));
+  const arrival = active.filter((entry) => entry.entryType === "arrival");
+  const departures = tasks.filter(isFinalCheckTask).sort((a, b) => a.sortOrder - b.sortOrder);
+  if (!data.available) return <section className="panel"><h2>Manuál úklidu</h2><p>Manuál bude dostupný po aplikaci migrace 02000.</p></section>;
+  if (editingEntry) return <ManualEntryEditor entry={editingEntry} onCancel={() => setEditingEntry(null)} onSave={async (entry) => { await onSave(entry); setEditingEntry(null); }} />;
+  if (manage && data.editable) return <div className="manual-admin">
+    <div className="manual-page-heading"><span><p className="eyebrow">SPRÁVA OBSAHU</p><h2>Manuál úklidu</h2></span><button onClick={() => setManage(false)}>Hotovo</button></div>
+    <div className="manual-add-actions"><button onClick={() => setEditingEntry(newManualEntry("guide"))}>+ Návod</button><button onClick={() => setEditingEntry(newManualEntry("practical"))}>+ Praktická informace</button><button onClick={() => setEditingEntry(newManualEntry("arrival"))}>+ Připomínka po příchodu</button></div>
+    {(["guide", "practical", "arrival"] as const).map((type) => <section className="panel" key={type}><h3>{type === "guide" ? "Návody" : type === "practical" ? "Praktické informace" : "Po příchodu"}</h3>{data.entries.filter((entry) => entry.entryType === type).sort((a, b) => Number(b.active) - Number(a.active) || a.sortOrder - b.sortOrder).map((entry) => <article className={`manual-admin-row${entry.active ? "" : " inactive"}`} key={entry.id}><span><b>{entry.title}</b><small>{entry.category} · pořadí {entry.sortOrder} · {entry.active ? "Aktivní" : "Neaktivní"}</small></span><div><button onClick={() => setEditingEntry(entry)}>Upravit</button><button onClick={() => void onSetActive(entry.id, !entry.active)}>{entry.active ? "Deaktivovat" : "Obnovit"}</button></div></article>)}</section>)}
+    <section className="panel"><h3>Před odchodem ze školy</h3><p className="hint">Povinné kontroly jsou skutečné úkoly a zachovávají historii dokončení.</p>{departures.map((task) => <article className={`manual-admin-row${task.active ? "" : " inactive"}`} key={task.id}><span><b>{task.title}</b><small>Pořadí {task.sortOrder} · {task.active ? "Aktivní" : "Neaktivní"}</small></span><button onClick={() => onEditDeparture(task)}>Upravit</button></article>)}<button className="add-task" onClick={onAddDeparture}>+ Přidat kontrolu před odchodem</button></section>
+  </div>;
+  const categories = [...new Set(guides.map((entry) => entry.category))];
+  return <div className="manual-screen">
+    <div className="manual-page-heading"><span><p className="eyebrow">RYCHLÁ POMOC PŘI PRÁCI</p><h2>Manuál úklidu</h2></span>{data.editable && <button onClick={() => setManage(true)}>Spravovat</button>}</div>
+    <label className="manual-search">Hledat v Manuálu<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Např. okna nebo WC" /></label>
+    {!normalized && guides.some((entry) => entry.featured) && <section><h3>Rychlé návody</h3><div className="manual-featured">{guides.filter((entry) => entry.featured).map((entry) => <button key={entry.id} onClick={() => setOpenGuide(entry)}>{activityTypes[entry.activityTypes[0] as ActivityType]?.icon ?? "ⓘ"}<b>{entry.title}</b></button>)}</div></section>}
+    {practical.length > 0 && <section className="panel practical-info"><p className="eyebrow">PRAKTICKÉ INFORMACE ŠKOLY</p>{practical.sort((a, b) => a.sortOrder - b.sortOrder).map((entry) => <article key={entry.id}><i style={{ backgroundColor: entry.markerColor || "#dcebe7" }} /><span><b>{entry.title}</b><small>{entry.body}</small></span></article>)}</section>}
+    {!normalized && arrival.length > 0 && <section className="panel"><p className="eyebrow">PO PŘÍCHODU</p>{arrival.sort((a, b) => a.sortOrder - b.sortOrder).map((entry) => <p key={entry.id}><b>{entry.title}</b>{entry.body && <small className="manual-block-small">{entry.body}</small>}</p>)}</section>}
+    {categories.map((category) => <section className="manual-category" key={category}><h3>{category}</h3><div>{guides.filter((entry) => entry.category === category).sort((a, b) => a.sortOrder - b.sortOrder).map((entry) => <button key={entry.id} onClick={() => setOpenGuide(entry)}><span>{activityTypes[entry.activityTypes[0] as ActivityType]?.icon ?? "ⓘ"}</span><b>{entry.title}</b><i>›</i></button>)}</div></section>)}
+    {!guides.length && !practical.length && <p className="hint">Pro hledaný výraz nebyl nalezen žádný návod.</p>}
+    {openGuide && <ManualGuideModal entry={openGuide} onClose={() => setOpenGuide(null)} />}
+  </div>;
+}
+
+function ManualEntryEditor({ entry, onCancel, onSave }: { entry: ManualEntry; onCancel: () => void; onSave: (entry: ManualEntry) => Promise<void> }) {
+  const [draft, setDraft] = useState(entry);
+  const [saving, setSaving] = useState(false);
+  const update = <K extends keyof ManualEntry>(key: K, value: ManualEntry[K]) => setDraft((current) => ({ ...current, [key]: value }));
+  return <form className="task-editor manual-editor" onSubmit={async (event) => { event.preventDefault(); if (saving) return; setSaving(true); try { await onSave(draft); } finally { setSaving(false); } }}>
+    <h2>{entry.id ? "Upravit položku" : "Nová položka Manuálu"}</h2>
+    <label>Typ<select value={draft.entryType} onChange={(event) => update("entryType", event.target.value as ManualEntry["entryType"])}><option value="guide">Návod</option><option value="practical">Praktická informace</option><option value="arrival">Po příchodu</option></select></label>
+    <label>Název<input required value={draft.title} onChange={(event) => update("title", event.target.value)} /></label>
+    <label>Kategorie<input required value={draft.category} onChange={(event) => update("category", event.target.value)} /></label>
+    {draft.entryType === "guide" && <>
+      <label>Co potřebuji<textarea rows={3} value={draft.supplies} onChange={(event) => update("supplies", event.target.value)} /></label>
+      <label>Jak postupovat<textarea rows={4} value={draft.steps} onChange={(event) => update("steps", event.target.value)} /></label>
+      <label>Na co si dát pozor<textarea rows={3} value={draft.warnings} onChange={(event) => update("warnings", event.target.value)} /></label>
+      <label>Poznámka školy<textarea rows={3} value={draft.schoolNote} onChange={(event) => update("schoolNote", event.target.value)} /></label>
+      <fieldset><legend>Ukázat u kategorií úkolů</legend><div className="activity-type-checks">{(Object.entries(activityTypes) as [ActivityType, { icon: string; label: string }][]).map(([type, value]) => <label key={type}><input type="checkbox" checked={draft.activityTypes.includes(type)} onChange={(event) => update("activityTypes", event.target.checked ? [...draft.activityTypes, type] : draft.activityTypes.filter((item) => item !== type))} />{value.icon} {value.label}</label>)}</div></fieldset>
+      <label className="switch"><input type="checkbox" checked={draft.featured} onChange={(event) => update("featured", event.target.checked)} /> Rychlý návod nahoře</label>
+    </>}
+    {draft.entryType !== "guide" && <label>Text<textarea rows={3} value={draft.body} onChange={(event) => update("body", event.target.value)} /></label>}
+    {draft.entryType === "practical" && <label>Barevná značka<input type="color" value={draft.markerColor || "#dcebe7"} onChange={(event) => update("markerColor", event.target.value)} /></label>}
+    <label>Pořadí<input type="number" value={draft.sortOrder} onChange={(event) => update("sortOrder", Number(event.target.value))} /></label>
+    <label className="switch"><input type="checkbox" checked={draft.active} onChange={(event) => update("active", event.target.checked)} /> Aktivní</label>
+    <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+  </form>;
+}
+
 function MoreScreen({
   profile,
   pendingCount,
@@ -2658,6 +2828,7 @@ function MoreScreen({
   onOpenRooms,
   onOpenUsers,
   onOpenCleaningDays,
+  onOpenManual,
   workplaces,
   appSettings,
   onSaveWorkplace,
@@ -2669,6 +2840,7 @@ function MoreScreen({
   onOpenRooms: () => void;
   onOpenUsers: () => Promise<void>;
   onOpenCleaningDays: () => void;
+  onOpenManual: () => void;
   workplaces: Workplace[];
   appSettings: AppSettings;
   onSaveWorkplace: (workplace: Workplace) => Promise<void>;
@@ -2683,6 +2855,9 @@ function MoreScreen({
           <span>Otevřít správu uživatelů</span>
         </button>
       )}
+      <section className="panel manual-menu-link">
+        <button onClick={onOpenManual}><span><b>Manuál úklidu</b><small>Návody a praktické informace školy</small></span><i>›</i></button>
+      </section>
       {admin && (
         <section className="panel admin-menu">
           <p className="eyebrow">SPRÁVA APLIKACE</p>
@@ -2920,7 +3095,7 @@ function OperationsScreen({
             {bought.map((item) => (
               <article className="operation-card resolved" key={item.id}>
                 <div><b>{item.name}</b>{item.note && <span>{item.note}</span>}</div>
-                {(canManage || item.createdBy === userId) && data.editable && <button disabled={mutating} onClick={() => void mutate(() => schoolRepository.setPurchaseItemStatus(item.id, "needed")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Znovu otevřít"}</button>}
+                {(canManage || item.createdBy === userId) && data.editable && <div className="operation-actions"><button disabled={mutating} onClick={() => void mutate(() => schoolRepository.setPurchaseItemStatus(item.id, "needed")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Znovu otevřít"}</button><button disabled={mutating} onClick={() => void mutate(() => schoolRepository.archivePurchaseItem(item.id)).catch(() => undefined)}>Archivovat</button></div>}
               </article>
             ))}
           </details>
@@ -2949,6 +3124,7 @@ function OperationsScreen({
               <div className="operation-actions">
                 <button disabled={mutating} onClick={() => setIncidentEditor(item)}>Upravit</button>
                 <button disabled={mutating} className="success" onClick={() => void mutate(() => schoolRepository.setIncidentStatus(item.id, "resolved")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Opraveno"}</button>
+                <button disabled={mutating} onClick={() => void mutate(() => schoolRepository.archiveIncident(item.id)).catch(() => undefined)}>Archivovat</button>
               </div>
             )}
           </article>
@@ -2960,7 +3136,7 @@ function OperationsScreen({
             {resolvedIncidents.map((item) => (
               <article className="operation-card resolved" key={item.id}>
                 <div><b>{item.title}</b><span>{[item.room, item.floor].filter(Boolean).join(" · ")}</span></div>
-                {(canManage || item.createdBy === userId) && data.editable && <button disabled={mutating} onClick={() => void mutate(() => schoolRepository.setIncidentStatus(item.id, "reported")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Znovu otevřít"}</button>}
+                {(canManage || item.createdBy === userId) && data.editable && <div className="operation-actions"><button disabled={mutating} onClick={() => void mutate(() => schoolRepository.setIncidentStatus(item.id, "reported")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Znovu otevřít"}</button><button disabled={mutating} onClick={() => void mutate(() => schoolRepository.archiveIncident(item.id)).catch(() => undefined)}>Archivovat</button></div>}
               </article>
             ))}
           </details>

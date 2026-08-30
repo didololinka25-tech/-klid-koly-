@@ -16,6 +16,7 @@ const migration17 = readFileSync(new URL('../supabase/migrations/20260829001700_
 const migration18 = readFileSync(new URL('../supabase/migrations/20260829001800_real_school_plan_and_rotation.sql', import.meta.url), 'utf8')
 const migration18TypeSql = readFileSync(new URL('../supabase/tests/01800_canonical_plan_types.sql', import.meta.url), 'utf8')
 const migration19 = readFileSync(new URL('../supabase/migrations/20260830001900_final_departure_checks.sql', import.meta.url), 'utf8')
+const migration20 = readFileSync(new URL('../supabase/migrations/20260830002000_cleaning_manual_and_staircase_windows.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
   assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
@@ -267,15 +268,56 @@ test('závěrečná kontrola je sdílený canonical checklist bez A/B', () => {
   assert.match(migration19, /'cleaning_day'.*'\{1,3,5\}'::smallint\[\]/i)
   assert.doesNotMatch(migration19, /delete\s+from|truncate\s+|drop\s+table/i)
   assert.match(app, /Před odchodem ze školy/)
-  assert.match(app, /task\.planKey\?\.startsWith\(finalCheckPrefix\)/)
+  assert.match(app, /isFinalCheckTask/)
 })
 
 test('Dnes ukazuje názvy činností, progress a stav dependency', () => {
   assert.match(app, /role="progressbar"/)
-  assert.match(app, /Dnešní úklid je hotový/)
+  assert.match(app, /Všechno hotovo – můžete odejít/)
   assert.match(app, /<b>\{task\.title\}<\/b>/)
   assert.match(app, /Nejdříve předchozí činnost/)
   assert.match(app, /await schoolRepository\.setCompletion[\s\S]*setTasks/)
+})
+
+test('Manuál je databázově řízený, soft-delete a chráněný rolemi', () => {
+  assert.match(migration20, /create table if not exists public\.manual_entries/i)
+  assert.match(migration20, /alter table public\.manual_entries enable row level security/i)
+  assert.match(migration20, /public\.can_view_school_data\(\) and \(active or public\.is_admin\(\)\)/i)
+  assert.match(migration20, /create policy "admins create manual"[\s\S]*public\.is_admin\(\)/i)
+  assert.match(migration20, /create policy "admins update manual"[\s\S]*public\.is_admin\(\)/i)
+  assert.doesNotMatch(migration20, /create policy[^;]+for delete/i)
+  assert.match(migration20, /revoke delete on public\.manual_entries from authenticated/i)
+  assert.doesNotMatch(migration20, /delete\s+from\s+public\.manual_entries|truncate\s+public\.manual_entries/i)
+  assert.match(repository, /from\('manual_entries'\)[\s\S]*missingRelation/)
+  for (const action of ['Spravovat', '+ Návod', '+ Praktická informace', '+ Připomínka po příchodu']) assert.match(app, new RegExp(action.replace('+', '\\+')))
+})
+
+test('jeden návod se mapuje na více úkolů přes activity category', () => {
+  assert.match(migration20, /activity_types text\[\]/i)
+  assert.match(app, /item\.activityTypes\.includes\(task\.activityType\)/)
+  assert.match(app, /ⓘ Návod/)
+  assert.match(app, /Co potřebuji[\s\S]*Jak postupovat[\s\S]*Na co si dát pozor[\s\S]*Poznámka školy/)
+})
+
+test('praktické informace a příchod jsou editovatelné bez deploye', () => {
+  for (const text of ['Modrý pytel · 60 l', 'Žlutý pytel · 35 l', 'Bílý pytel · 25 l', 'Bílý pytel · 10 l', 'Okna a zrcadla', 'Záchody / WC', 'Otevřít okna podle počasí']) assert.match(migration20, new RegExp(text))
+  assert.match(app, /entryType === "practical"/)
+  assert.match(app, /entryType === "arrival"/)
+  assert.match(app, /type="color"/)
+})
+
+test('okna schodiště jsou týdenní ve stejný den jako ostatní schodiště', () => {
+  assert.match(migration20, /plan_key = 'v2026\|Schodiště\|Schodiště\|windows'/)
+  assert.match(migration20, /set frequency = 'weekly', schedule_days = '\{5\}'::smallint\[\]/i)
+  assert.match(migration20, /period_months = null, period_week = null/i)
+  assert.doesNotMatch(migration20, /delete\s+from|truncate\s+/i)
+})
+
+test('admin může spravovat patra a závěrečné kontroly bez SQL', () => {
+  assert.match(repository, /saveFloor:/)
+  assert.match(app, /\+ Přidat patro \/ sekci/)
+  assert.match(app, /\+ Přidat kontrolu před odchodem/)
+  assert.match(repository, /task\.planKey\?\.startsWith\('admin\|final\|'\)/)
 })
 
 test('frontend načte rozšířený plán jedním dotazem a umí bezpečný fallback před migrací', () => {

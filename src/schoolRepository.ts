@@ -54,6 +54,14 @@ export type Incident = { id: string; date: string; title: string; note: string; 
 export type OperationRoom = { id: string; name: string; floor: string }
 export type OperationsData = { stock: StockItem[]; incidents: Incident[]; rooms: OperationRoom[]; editable: boolean }
 export type ManagedRoom = { id: string; buildingId: string; floorId: string | null; name: string; active: boolean; sortOrder: number }
+export type ManagedFloor = { id: string; buildingId: string; name: string; sortOrder: number }
+export type ManualEntryType = 'guide' | 'practical' | 'arrival'
+export type ManualEntry = {
+  id: string; entryType: ManualEntryType; title: string; category: string; body: string
+  supplies: string; steps: string; warnings: string; schoolNote: string; markerColor: string
+  activityTypes: string[]; featured: boolean; active: boolean; sortOrder: number
+}
+export type ManualData = { entries: ManualEntry[]; available: boolean; editable: boolean }
 export type AttendanceWorker = { id: string; name: string; role: AccessRole }
 export type AttendanceSettings = { plannedShiftsPerWeek: number; configurable: boolean }
 export type AppSettings = { dppAnnualLimitHours: number; available: boolean }
@@ -245,6 +253,14 @@ export const schoolRepository = {
     const { error } = room.id ? await client().from('rooms').update(values).eq('id', room.id) : await client().from('rooms').insert(values)
     if (error) throw error
   },
+  saveFloor: async (floor: ManagedFloor) => {
+    const values = { building_id: floor.buildingId, name: floor.name.trim(), sort_order: floor.sortOrder }
+    if (!values.name) throw new Error('Název patra nebo sekce nesmí být prázdný.')
+    const { error } = floor.id
+      ? await client().from('floors').update(values).eq('id', floor.id)
+      : await client().from('floors').insert(values)
+    if (error) throw error
+  },
   setRoomActive: async (roomId: string, active: boolean) => {
     const rpc = active ? 'restore_cleaning_room' : 'soft_delete_cleaning_room'
     const { error } = await client().rpc(rpc, { target_room_id: roomId })
@@ -271,6 +287,13 @@ export const schoolRepository = {
     if (duplicate) throw new Error('Stejný aktivní úkol se stejným harmonogramem už v této místnosti existuje.')
 
     const values: Record<string, unknown> = { room_id: task.roomId ?? null, name, activity_type: task.activityType, frequency: frequencyKey, active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.periodMonths ? null : task.monthlyDay ?? null, requires_task_id: task.prerequisite ?? null }
+    const departureCheck = task.planKey?.startsWith('admin|final|') || task.planKey?.startsWith('v2026|school|common|final-')
+    if (departureCheck) {
+      values.room_id = null; values.frequency = 'cleaning_day'; values.schedule_days = [1, 3, 5]
+      values.monthly_day = null; values.requires_task_id = null; values.period_months = null
+      values.period_week = null; values.period_anchor_month = null
+    }
+    if (!task.id && task.planKey?.startsWith('admin|final|')) values.plan_key = task.planKey
     if (task.periodMonths !== undefined) {
       values.period_months = task.periodMonths
       values.period_week = task.periodWeek ?? null
@@ -349,6 +372,41 @@ export const schoolRepository = {
     const { error } = await client().from('cleaning_day_exceptions').update({ status: 'cancelled' }).eq('id', id)
     if (error) throw error
   },
+  manuals: async (profile: Profile): Promise<ManualData> => {
+    const { data, error } = await client().from('manual_entries')
+      .select('id,entry_type,title,category,body,supplies,steps,warnings,school_note,marker_color,activity_types,featured,active,sort_order')
+      .order('sort_order').order('title')
+    if (missingRelation(error)) return { entries: [], available: false, editable: false }
+    if (error) throw error
+    return {
+      entries: (data ?? []).map((row: any) => ({
+        id: row.id, entryType: row.entry_type, title: row.title, category: row.category,
+        body: row.body ?? '', supplies: row.supplies ?? '', steps: row.steps ?? '', warnings: row.warnings ?? '',
+        schoolNote: row.school_note ?? '', markerColor: row.marker_color ?? '', activityTypes: row.activity_types ?? [],
+        featured: row.featured, active: row.active, sortOrder: row.sort_order,
+      })),
+      available: true,
+      editable: canManageOperations(profile),
+    }
+  },
+  saveManualEntry: async (entry: ManualEntry, userId: string) => {
+    const values = {
+      entry_type: entry.entryType, title: entry.title.trim(), category: entry.category.trim() || 'Ostatní',
+      body: entry.body.trim() || null, supplies: entry.supplies.trim() || null, steps: entry.steps.trim() || null,
+      warnings: entry.warnings.trim() || null, school_note: entry.schoolNote.trim() || null,
+      marker_color: entry.markerColor || null, activity_types: entry.activityTypes,
+      featured: entry.featured, active: entry.active, sort_order: entry.sortOrder, updated_by: userId,
+    }
+    if (!values.title) throw new Error('Název položky nesmí být prázdný.')
+    const result = entry.id
+      ? await client().from('manual_entries').update(values).eq('id', entry.id)
+      : await client().from('manual_entries').insert({ ...values, created_by: userId })
+    if (result.error) throw result.error
+  },
+  setManualEntryActive: async (id: string, active: boolean, userId: string) => {
+    const { error } = await client().from('manual_entries').update({ active, updated_by: userId }).eq('id', id)
+    if (error) throw error
+  },
   operations: async (): Promise<OperationsData> => {
     const db = client()
     const [stockResult, incidentResult, roomResult, floorResult] = await Promise.all([
@@ -412,6 +470,10 @@ export const schoolRepository = {
   setIncidentStatus: async (id: string, status: 'reported' | 'resolved') => {
     const { data: current } = await client().auth.getUser()
     const { error } = await client().from('incidents').update({ status, resolved_at: status === 'resolved' ? new Date().toISOString() : null, resolved_by: status === 'resolved' ? current.user?.id : null }).eq('id', id)
+    if (error) throw error
+  },
+  archiveIncident: async (id: string) => {
+    const { error } = await client().from('incidents').update({ active: false }).eq('id', id)
     if (error) throw error
   },
   attendance: async (workerId: string): Promise<Attendance[]> => {
