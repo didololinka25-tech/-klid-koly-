@@ -17,6 +17,7 @@ const migration18 = readFileSync(new URL('../supabase/migrations/20260829001800_
 const migration18TypeSql = readFileSync(new URL('../supabase/tests/01800_canonical_plan_types.sql', import.meta.url), 'utf8')
 const migration19 = readFileSync(new URL('../supabase/migrations/20260830001900_final_departure_checks.sql', import.meta.url), 'utf8')
 const migration20 = readFileSync(new URL('../supabase/migrations/20260830002000_cleaning_manual_and_staircase_windows.sql', import.meta.url), 'utf8')
+const migration21 = readFileSync(new URL('../supabase/migrations/20260830002100_attendance_integrity.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
   assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
@@ -129,6 +130,21 @@ test('docházka a report používají building_id bez vytváření paralelní hi
   assert.match(repository, /buildingName: building\?\.name \?\? 'Škola'/)
   assert.doesNotMatch(migration16, /create table.*attendance/is)
   assert.doesNotMatch(migration16, /delete\s+from/i)
+})
+
+test('oprava docházky aktualizuje přesné ID a nikdy nevytváří nový řádek', () => {
+  const updateBlock = repository.match(/updateAttendance:[\s\S]*?deleteAttendance:/)?.[0] ?? ''
+  assert.match(updateBlock, /from\('attendance'\)\.update\(values\)\.eq\('id', id\)/)
+  assert.match(updateBlock, /\.select\('id'\)\.single\(\)/)
+  assert.doesNotMatch(updateBlock, /\.insert\(/)
+})
+
+test('databáze odvozuje pracovní datum v Praze a odmítá překryv bez změny historie', () => {
+  assert.match(migration21, /new\.attendance_date := \(new\.started_at at time zone 'Europe\/Prague'\)::date/i)
+  assert.match(migration21, /tstzrange\(existing\.started_at[\s\S]*&& tstzrange\(new\.started_at/i)
+  assert.match(migration21, /pg_advisory_xact_lock/)
+  assert.match(migration21, /errcode = '23P01'/)
+  assert.doesNotMatch(migration21, /delete\s+from|update\s+public\.attendance/i)
 })
 
 test('soft delete úkolu zachovává historii a chrání aktivní dependency', () => {

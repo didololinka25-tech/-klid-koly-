@@ -8,6 +8,7 @@ import {
   type CleaningDayException,
 } from './scheduling'
 import { isSameTaskDefinition } from './taskValidation'
+import { pragueDateKey, validateAttendanceInterval } from './attendanceTime'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -496,12 +497,17 @@ export const schoolRepository = {
     if (error) throw error
   },
   updateAttendance: async (id: string, startedAt: string, endedAt?: string, buildingId?: string) => {
-    const start = new Date(startedAt); const end = endedAt ? new Date(endedAt) : null
-    if (Number.isNaN(start.getTime()) || (end && (Number.isNaN(end.getTime()) || end < start))) throw new Error('Zkontrolujte začátek a konec směny.')
-    const localDate = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
-    const values = { started_at: start.toISOString(), ended_at: end?.toISOString() ?? null, attendance_date: localDate, ...(buildingId ? { building_id: buildingId } : {}) }
-    const { error } = await client().from('attendance').update(values).eq('id', id)
-    if (error) throw error
+    const db = client()
+    const { data: target, error: targetError } = await db.from('attendance').select('id,worker_id').eq('id', id).single()
+    if (targetError) throw targetError
+    const { data: existing, error: existingError } = await db.from('attendance').select('id,started_at,ended_at').eq('worker_id', target.worker_id).neq('id', id)
+    if (existingError) throw existingError
+    const records = (existing ?? []).map((row: any) => ({ id: row.id, start: row.started_at, end: row.ended_at ?? undefined }))
+    const { start, end, attendanceDate } = validateAttendanceInterval(records, startedAt, endedAt, id)
+    const values = { started_at: start.toISOString(), ended_at: end?.toISOString() ?? null, attendance_date: attendanceDate, ...(buildingId ? { building_id: buildingId } : {}) }
+    const { data, error } = await db.from('attendance').update(values).eq('id', id).eq('worker_id', target.worker_id).select('id').single()
+    if (error) throw attendanceError(error)
+    if (!data) throw new Error('Opravená směna nebyla nalezena.')
   },
   deleteAttendance: async (id: string, workerId: string) => {
     const { data, error } = await client().from('attendance').delete().eq('id', id).eq('worker_id', workerId).select('id').maybeSingle()
@@ -511,13 +517,20 @@ export const schoolRepository = {
   startAttendance: async (workerId: string, buildingId: string): Promise<Attendance> => {
     if (!buildingId) throw new Error('Vyberte pracoviště směny.')
     const db = client()
-    const { data, error } = await db.from('attendance').insert({ worker_id: workerId, building_id: buildingId, attendance_date: localToday() }).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').single()
-    if (error) throw error
+    const now = new Date()
+    const { data: existing, error: existingError } = await db.from('attendance').select('id,started_at,ended_at').eq('worker_id', workerId)
+    if (existingError) throw existingError
+    validateAttendanceInterval(
+      (existing ?? []).map((row: any) => ({ id: row.id, start: row.started_at, end: row.ended_at ?? undefined })),
+      now.toISOString(),
+    )
+    const { data, error } = await db.from('attendance').insert({ worker_id: workerId, building_id: buildingId, started_at: now.toISOString(), attendance_date: pragueDateKey(now) }).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').single()
+    if (error) throw attendanceError(error)
     return mapAttendance(data)
   },
   finishAttendance: async (id: string): Promise<Attendance> => {
     const { data, error } = await client().from('attendance').update({ ended_at: new Date().toISOString() }).eq('id', id).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').single()
-    if (error) throw error
+    if (error) throw attendanceError(error)
     return mapAttendance(data)
   },
   subscribe: (onChange: () => void): RealtimeChannel => client().channel('school-changes')
@@ -527,6 +540,13 @@ export const schoolRepository = {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_items' }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents' }, onChange)
     .subscribe(),
+}
+
+function attendanceError(error: { code?: string; message?: string }) {
+  if (error.code === '23P01' || error.message?.includes('překrývá')) {
+    return new Error('Směna se překrývá s jinou evidovanou směnou tohoto pracovníka.')
+  }
+  return error
 }
 
 function mapAttendance(row: any): Attendance {

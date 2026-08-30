@@ -33,6 +33,7 @@ import {
 import { isSupabaseConfigured } from "./supabase";
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay, type CleaningDayContext } from "./scheduling";
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
+import { attendanceEditorStartValue, pragueDateKey, pragueDateTimeInput } from "./attendanceTime";
 
 type Section =
   | "Dnes"
@@ -971,7 +972,7 @@ const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 
 function localDateKey(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return pragueDateKey(date);
 }
 
 function useCurrentTime() {
@@ -1624,8 +1625,7 @@ function DeleteAttendanceConfirmation({
 }
 
 function localDateTimeInput(value: string) {
-  const date = new Date(value);
-  return `${localDateKey(date)}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  return pragueDateTimeInput(value);
 }
 
 function AttendanceEditor({
@@ -1639,17 +1639,24 @@ function AttendanceEditor({
   onCancel: () => void;
   onSave: (start: string, end?: string, buildingId?: string) => Promise<void>;
 }) {
-  const [start, setStart] = useState(localDateTimeInput(record.start));
+  const [start, setStart] = useState(attendanceEditorStartValue(record.start, record.date));
   const [end, setEnd] = useState(
     record.end ? localDateTimeInput(record.end) : "",
   );
   const [buildingId, setBuildingId] = useState(record.buildingId ?? workplaces[0]?.id ?? "");
+  const [saving, setSaving] = useState(false);
   return (
     <form
       className="task-editor attendance-editor"
-      onSubmit={(event) => {
+      onSubmit={async (event) => {
         event.preventDefault();
-        void onSave(start, end || undefined, buildingId || undefined);
+        if (saving) return;
+        setSaving(true);
+        try {
+          await onSave(start, end || undefined, buildingId || undefined);
+        } finally {
+          setSaving(false);
+        }
       }}
     >
       <h2>Opravit směnu</h2>
@@ -1680,10 +1687,10 @@ function AttendanceEditor({
         Oprava zachová stejný záznam směny. Historická data se nemažou.
       </p>
       <div className="editor-actions">
-        <button type="button" onClick={onCancel}>
+        <button type="button" onClick={onCancel} disabled={saving}>
           Zrušit
         </button>
-        <button type="submit">Uložit opravu</button>
+        <button type="submit" disabled={saving}>{saving ? "Ukládám…" : "Uložit opravu"}</button>
       </div>
     </form>
   );

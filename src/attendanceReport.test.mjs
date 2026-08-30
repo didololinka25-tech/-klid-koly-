@@ -44,3 +44,13 @@ test('generátor vytvoří neprázdný PDF dokument s A4 stránkou', () => {
   assert.match(text, /\/Subtype \/Image/)
   assert.ok(pdf.byteLength > 400)
 })
+
+test('měsíční součet zahrne přesně DB řádky a zachová směnu předchozího dne', () => {
+  const shifts = [
+    { id: '29', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-08-29', start: '2026-08-29T07:00:00Z', end: '2026-08-29T10:00:00Z' },
+    { id: '30', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-08-30', start: '2026-08-30T07:20:00Z', end: '2026-08-30T10:06:00Z' },
+  ]
+  const report = buildAttendanceReport(shifts, 'Didi Ceridwen', '2026-08', 300, new Date('2026-08-31T12:00:00Z'))
+  assert.deepEqual(report.rows.map((row) => row.id), ['29', '30'])
+  assert.equal(report.monthMs, (3 * 60 + 2 * 60 + 46) * 60 * 1000)
+})
