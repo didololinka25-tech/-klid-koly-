@@ -21,6 +21,8 @@ const migration21 = readFileSync(new URL('../supabase/migrations/20260830002100_
 const migration22 = readFileSync(new URL('../supabase/migrations/20260830002200_attendance_audit_history.sql', import.meta.url), 'utf8')
 const migration23 = readFileSync(new URL('../supabase/migrations/20260830002300_kindergarten_workplace_and_plan.sql', import.meta.url), 'utf8')
 const migration24 = readFileSync(new URL('../supabase/migrations/20260830002400_worker_contract_history.sql', import.meta.url), 'utf8')
+const migration25 = readFileSync(new URL('../supabase/migrations/20260830002500_restore_missing_app_settings.sql', import.meta.url), 'utf8')
+const settingsDiagnostics = readFileSync(new URL('../supabase/diagnostics/verify_02300_02400_state.sql', import.meta.url), 'utf8')
 const attendanceRepair = readFileSync(new URL('../supabase/diagnostics/repair_attendance_d05aac53.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
@@ -392,4 +394,40 @@ test('frontend načte rozšířený plán jedním dotazem a umí bezpečný fall
   assert.match(app, /dueTasksForDate/)
   assert.match(app, /isTaskDueForCleaningDay\(taskScheduleInput\(task\), context\)/)
   assert.match(app, /monthGridDates\(month\)/)
+})
+
+test('02500 obnoví app_settings bez přepsání existujícího DPP limitu', () => {
+  assert.match(migration25, /create table if not exists public\.app_settings/i)
+  assert.match(migration25, /dpp_annual_limit_hours numeric\(7,2\)[\s\S]*default 300/i)
+  assert.match(migration25, /insert into public\.app_settings[\s\S]*select true, 300[\s\S]*where not exists/i)
+  assert.doesNotMatch(migration25, /on conflict[\s\S]*do update|set\s+dpp_annual_limit_hours\s*=\s*300/i)
+  assert.doesNotMatch(migration25, /delete\s+from|truncate\s+|drop\s+table/i)
+})
+
+test('02500 zachová RLS a dovolí zápis nastavení jen adminským RPC', () => {
+  assert.match(migration25, /alter table public\.app_settings enable row level security/i)
+  assert.match(migration25, /using \(public\.can_view_school_data\(\)\)/i)
+  assert.match(migration25, /revoke all on public\.app_settings from anon, authenticated/i)
+  assert.match(migration25, /grant select on public\.app_settings to authenticated/i)
+  assert.match(migration25, /if not public\.is_admin\(\)/i)
+  assert.match(migration25, /security definer[\s\S]*set search_path = public, pg_temp/i)
+  assert.match(migration25, /revoke all on function public\.set_dpp_annual_limit\(numeric\) from public, anon, authenticated/i)
+})
+
+test('02500 je atomická a připraví přesný základ pro následnou 02400', () => {
+  assert.equal((migration25.match(/^begin;$/gim) ?? []).length, 1)
+  assert.equal((migration25.match(/^commit;$/gim) ?? []).length, 1)
+  assert.match(migration25.trim(), /commit;$/i)
+  for (const column of ['id', 'dpp_annual_limit_hours', 'updated_at', 'updated_by']) {
+    assert.match(migration25, new RegExp(`add column if not exists ${column}|${column} boolean primary key`, 'i'))
+  }
+  assert.match(migration24, /begin;[\s\S]*alter table public\.app_settings[\s\S]*commit;\s*$/i)
+})
+
+test('diagnostika 02300 a rollbacku 02400 je pouze čtecí', () => {
+  assert.match(settingsDiagnostics, /active_kindergarten_rooms/)
+  assert.match(settingsDiagnostics, /active_kindergarten_tasks/)
+  assert.match(settingsDiagnostics, /to_regclass\('public\.worker_contracts'\)/)
+  assert.match(settingsDiagnostics, /to_regprocedure\('public\.set_dpc_settings\(numeric,smallint\)'\)/)
+  assert.doesNotMatch(settingsDiagnostics, /\b(insert|update|delete|alter|create|drop|truncate)\b/i)
 })
