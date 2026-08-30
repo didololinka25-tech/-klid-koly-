@@ -76,6 +76,7 @@ const activityTypes: Record<
   other: { icon: "✓", label: "Ostatní" },
 };
 const weekdays = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
+const finalCheckPrefix = "v2026|school|common|final-";
 const todayLabel = new Intl.DateTimeFormat("cs-CZ", {
   weekday: "long",
   day: "numeric",
@@ -351,7 +352,12 @@ export default function App() {
     try {
       setNotice("");
       await schoolRepository.setCompletion(id, !target.done);
-      await load(session, profile);
+      setTasks((current) => current.map((task) => task.id === id ? { ...task, done: !target.done } : task));
+      try {
+        await load(session, profile);
+      } catch {
+        setNotice("Úkol je uložený, ale aktuální stav se nepodařilo znovu načíst. Zkontrolujte připojení.");
+      }
     } catch (error) {
       setNotice(
         error instanceof Error ? error.message : "Úkol se nepodařilo uložit.",
@@ -405,7 +411,13 @@ export default function App() {
         }
       }
       await schoolRepository.setCompletions(orderedIds);
-      await load(session, profile);
+      const completedIds = new Set(orderedIds);
+      setTasks((current) => current.map((task) => completedIds.has(task.id) ? { ...task, done: true } : task));
+      try {
+        await load(session, profile);
+      } catch {
+        setNotice("Úkoly jsou uložené, ale aktuální stav se nepodařilo znovu načíst. Zkontrolujte připojení.");
+      }
     } catch (error) {
       setNotice(
         error instanceof Error
@@ -710,6 +722,7 @@ export default function App() {
     section === "Dnes"
       ? tasks.filter((task) => task.active && task.dueToday)
       : tasks;
+  const visibleDone = visible.filter((task) => task.done).length;
   const navigation = sections.filter((item) => {
     if (item === "Docházka") return canWork(profile);
     return true;
@@ -761,15 +774,16 @@ export default function App() {
               onBuildingChange={setAttendanceBuildingId}
             />
           )}
-          <section className="hero">
-            <span>
+          <section className={visible.length > 0 && visibleDone === visible.length ? "hero cleaning-complete" : "hero"}>
+            <span className="hero-copy">
               <b>{cleaningDayHeading(cleaningDay, visible.length)}</b>
               <small>{cleaningDayDescription(cleaningDay)}</small>
             </span>
             <strong>
-              {visible.filter((task) => task.done).length} / {visible.length}{" "}
-              hotovo
+              {visibleDone} / {visible.length} hotovo
             </strong>
+            <ProgressBar value={visibleDone} total={visible.length} label="Celkový průběh úklidu" />
+            {visible.length > 0 && visibleDone === visible.length && <p>Dnešní úklid je hotový.</p>}
           </section>
           {accessRole(profile) === "visitor" && (
             <p className="readonly-note">Návštěvnický přístup je pouze pro čtení.</p>
@@ -1625,10 +1639,11 @@ function TaskHierarchy({
   onCompleteAll: (tasks: Task[]) => Promise<void>;
   pendingTaskIds: Set<string>;
 }) {
-  const common = tasks.filter((task) => !task.roomId);
+  const finalChecks = tasks.filter((task) => task.planKey?.startsWith(finalCheckPrefix));
+  const common = tasks.filter((task) => !task.roomId && !task.planKey?.startsWith(finalCheckPrefix));
+  const roomTasks = tasks.filter((task) => task.roomId);
   const floorGroups = new Map<string, Task[]>();
-  tasks
-    .filter((task) => task.roomId)
+  roomTasks
     .forEach((task) =>
       floorGroups.set(`${task.building}|${task.floor}`, [
         ...(floorGroups.get(`${task.building}|${task.floor}`) ?? []),
@@ -1659,6 +1674,15 @@ function TaskHierarchy({
             pendingTaskIds={pendingTaskIds}
           />
         ))}
+      {finalChecks.length > 0 && (
+        <section className="shared-tasks final-checks">
+          <div className="section-heading">
+            <span><h2>Kontrola při odchodu</h2><small>Společné pro celý dnešní úklid</small></span>
+            <b>{finalChecks.filter((task) => task.done).length}/{finalChecks.length}</b>
+          </div>
+          <TaskRows tasks={finalChecks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} />
+        </section>
+      )}
       {tasks.length === 0 && (
         <section className="empty">
           <span>✓</span>
@@ -1701,6 +1725,7 @@ function FloorGroup({
           </small>
         </span>
         <i>{open ? "⌃" : "⌄"}</i>
+        <ProgressBar value={complete} total={tasks.length} label={`Průběh: ${label}`} />
       </button>
       {open && (
         <div className="room-list">
@@ -1767,6 +1792,7 @@ function RoomActivityGroup({
         tasks={tasks}
         onComplete={onComplete}
         pendingTaskIds={pendingTaskIds}
+        allTasks={tasks}
       />
     </section>
   );
@@ -1776,10 +1802,12 @@ function TaskRows({
   tasks,
   onComplete,
   pendingTaskIds,
+  allTasks = tasks,
 }: {
   tasks: Task[];
   onComplete: (id: string) => Promise<void>;
   pendingTaskIds: Set<string>;
+  allTasks?: Task[];
 }) {
   return (
     <div className="activity-grid">
@@ -1787,23 +1815,30 @@ function TaskRows({
         .sort((a, b) => a.sortOrder - b.sortOrder)
         .map((task) => {
           const activity = activityTypes[task.activityType] ?? activityTypes.other;
+          const blocked = Boolean(task.prerequisite && !allTasks.find((item) => item.id === task.prerequisite)?.done);
+          const pending = pendingTaskIds.has(task.id);
           return (
             <button
-              className={task.done ? "activity-check done" : "activity-check"}
-              disabled={!task.canComplete || pendingTaskIds.has(task.id)}
+              className={`activity-check${task.done ? " done" : ""}${blocked ? " blocked" : ""}`}
+              disabled={!task.canComplete || pending}
               onClick={() => void onComplete(task.id)}
               aria-pressed={task.done}
               aria-label={`${task.done ? "Zrušit dokončení" : "Dokončit"}: ${task.title}`}
               title={`${task.title}${task.prerequisite ? " – nejdříve zamést nebo vysát" : ""}`}
               key={task.id}
             >
-              <span aria-hidden="true">{task.done ? "✓" : activity.icon}</span>
-              <small>{activity.label}</small>
+              <span className="activity-icon" aria-hidden="true">{pending ? "…" : task.done ? "✓" : blocked ? "🔒" : activity.icon}</span>
+              <span className="activity-copy"><b>{task.title}</b><small>{pending ? "Ukládám…" : blocked ? "Nejdříve předchozí činnost" : task.done ? "Hotovo" : activity.label}</small></span>
             </button>
           );
         })}
     </div>
   );
+}
+
+function ProgressBar({ value, total, label }: { value: number; total: number; label: string }) {
+  const percent = total > 0 ? Math.min(100, Math.round((value / total) * 100)) : 0;
+  return <span className="cleaning-progress" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={total} aria-valuenow={value}><i style={{ width: `${percent}%` }} /></span>;
 }
 
 function Management({
@@ -2602,14 +2637,18 @@ function formatDate(value?: string | null) {
 }
 
 function formatTaskSchedule(task: Task) {
+  const floorVisit = task.cleaningCycleLength
+    ? ` · při návštěvě ${task.floor.replace(/patro$/, "patra")}`
+    : "";
   if (task.frequency === "měsíčně" && task.periodMonths) {
-    const interval = task.periodMonths === 1 ? "Měsíčně" : task.periodMonths === 2 ? "Každé 2 měsíce" : "Čtvrtletně";
-    return `${interval} · ${task.periodWeek ?? 1}. týden období`;
+    const interval = task.periodMonths === 1 ? "1× měsíčně" : task.periodMonths === 2 ? "Každé 2 měsíce" : "Každé 3 měsíce";
+    return `${interval} · ${task.periodWeek ?? 1}. týden období${floorVisit}`;
   }
-  if (task.frequency === "měsíčně") return `Měsíčně · ${task.monthlyDay ?? 1}. den`;
+  if (task.frequency === "měsíčně") return `1× měsíčně · ${task.monthlyDay ?? 1}. den`;
   if (task.frequency === "mimořádně") return "Mimořádně";
   const days = task.scheduleDays.map((day) => weekdays[day - 1]).filter(Boolean).join(" / ");
-  return `${task.frequency}${days ? ` · ${days}` : ""}${task.active ? "" : " · neaktivní"}`;
+  const frequency = task.frequency === "denně" ? "Každý úklidový den" : task.frequency === "týdně" ? "1× týdně" : task.frequency;
+  return `${frequency}${days ? ` · ${days}` : ""}${floorVisit}${task.active ? "" : " · neaktivní"}`;
 }
 
 function MoreScreen({
@@ -2981,7 +3020,7 @@ function dueTasksForDate(tasks: Task[], records: CleaningDayRecord[], date: stri
 
 function floorPictogram(floor: string) {
   const number = floor.match(/^[1-4]/)?.[0];
-  return number ?? (floor === "Schodiště" ? "↕" : "•");
+  return number ? `${number}F` : (floor === "Schodiště" ? "SCH" : "•");
 }
 
 function CalendarDayDetail({ date, tasks, context }: { date: string; tasks: Task[]; context: CleaningDayContext }) {
@@ -3093,7 +3132,7 @@ function CleaningCalendar({
             );
           })}
         </div>
-        <div className="calendar-legend"><span><i>1–4</i> patro</span><span><i>↕</i> schodiště</span>{(["vacuum","mop","toilet","trash","tables","windows","doors","tiles","surfaces","laundry","deep_clean"] as ActivityType[]).map((type) => <span key={type}><i>{activityTypes[type].icon}</i>{activityTypes[type].label}</span>)}</div>
+        <div className="calendar-legend"><span><i>1F–4F</i> patro</span><span><i>SCH</i> schodiště</span>{(["vacuum","mop","toilet","trash","tables","windows","doors","tiles","surfaces","laundry","deep_clean"] as ActivityType[]).map((type) => <span key={type}><i>{activityTypes[type].icon}</i>{activityTypes[type].label}</span>)}</div>
       </section>
       <CalendarDayDetail date={selected.date} tasks={selected.tasks} context={selected.context} />
       <section className="calendar-list">

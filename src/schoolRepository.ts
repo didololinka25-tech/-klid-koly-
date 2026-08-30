@@ -140,7 +140,7 @@ export const schoolRepository = {
   tasks: async (profile: Profile, includeAll = false): Promise<TaskLoad> => {
     const db = client()
     const date = localToday()
-    let taskResult: any = await db.from('cleaning_tasks').select('id,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id,cleaning_cycle_length,cleaning_cycle_offset,period_months,period_week,period_anchor_month').order('sort_order')
+    let taskResult: any = await db.from('cleaning_tasks').select('id,plan_key,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id,cleaning_cycle_length,cleaning_cycle_offset,period_months,period_week,period_anchor_month').order('sort_order')
     if (missingColumn(taskResult.error)) {
       taskResult = await db.from('cleaning_tasks').select('id,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id').order('sort_order')
     }
@@ -181,7 +181,7 @@ export const schoolRepository = {
       const building: any = room?.building_id ? buildingById.get(room.building_id) : null
       const scheduleDays = Array.isArray(row.schedule_days) ? row.schedule_days.map(Number) : []
       return {
-        id: row.id, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1,
+        id: row.id, planKey: row.plan_key ?? null, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1,
         building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
         assignedTo: 'Úklidový tým', done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile) && !isTestCleaningDay,
         dueToday: room?.active !== false && isTaskDueForCleaningDay(row, cleaningDay), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,

@@ -59,22 +59,26 @@ h1 {
 }
 .hero {
   padding: 15px;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
   color: #24675d;
   margin-bottom: 20px;
 }
+.hero .cleaning-progress,
+.hero > p { grid-column: 1 / -1; }
+.hero > p { margin: -6px 0 0; color: #165e56; font-weight: 900; }
+.hero.cleaning-complete { border-color: #78b9ad; background: #f1faf7; }
 .hero strong {
   white-space: nowrap;
   color: #123d36;
 }
-.hero > span {
+.hero > .hero-copy {
   min-width: 0;
   display: grid;
   gap: 3px;
 }
-.hero > span small {
+.hero > .hero-copy small {
   color: #67817c;
   line-height: 1.3;
 }
@@ -443,11 +447,12 @@ h2 {
   color: #123d36;
   width: 100%;
   padding: 14px;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   text-align: left;
 }
+.floor-toggle .cleaning-progress { grid-column: 1 / -1; margin-top: 5px; }
 .floor-toggle span {
   display: grid;
   gap: 2px;
@@ -512,33 +517,36 @@ h2 {
 }
 .activity-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
-  gap: 5px;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 7px;
 }
 .activity-check {
   min-width: 0;
-  min-height: 58px;
+  min-height: 62px;
   border: 1px solid #c5ddd7;
   border-radius: 12px;
-  padding: 6px 3px;
+  padding: 8px;
   display: grid;
-  place-items: center;
-  gap: 2px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  text-align: left;
   background: #f8fbfa;
   color: #174d45;
 }
-.activity-check span {
+.activity-check .activity-icon {
   font-size: 21px;
   line-height: 1;
+  text-align: center;
 }
+.activity-copy { min-width: 0; display: grid; gap: 2px; }
+.activity-copy b { overflow-wrap: anywhere; font-size: 12px; line-height: 1.2; }
 .activity-check small {
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
   color: #52766f;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
-  white-space: nowrap;
+  line-height: 1.15;
 }
 .activity-check.done {
   border-color: #2b8879;
@@ -548,6 +556,8 @@ h2 {
 .activity-check.done small {
   color: #dff4ee;
 }
+.activity-check.done b { text-decoration: line-through; text-decoration-thickness: 1px; }
+.activity-check.blocked:not(.done) { border-style: dashed; background: #f5f7f6; color: #637a75; }
 .activity-check:disabled {
   opacity: 0.5;
 }
@@ -559,6 +569,13 @@ h2 {
   color: #416d65;
   font-size: 13px;
 }
+.cleaning-progress { display: block; width: 100%; height: 7px; overflow: hidden; border-radius: 999px; background: #dcebe7; }
+.cleaning-progress > i { display: block; height: 100%; border-radius: inherit; background: #2b8879; transition: width .2s ease; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.section-heading h2 { margin: 0; }
+.section-heading span { display: grid; gap: 2px; }
+.section-heading small { color: #6d827d; font-size: 11px; }
+.final-checks { margin-top: 14px; padding: 12px; border: 1px solid #d6e5e1; border-radius: 14px; background: #f8fbfa; }
 .access-state button,
 .user-card > button {
   width: 100%;
@@ -1093,7 +1110,7 @@ h2 {
 .calendar-day > b { font-size: 11px; }
 .floor-pictograms,
 .activity-pictograms { display: flex; flex-wrap: wrap; gap: 2px; min-width: 0; }
-.floor-pictograms i { min-width: 16px; height: 16px; border-radius: 5px; background: #165e56; color: #fff; font-size: 9px; font-style: normal; font-weight: 900; line-height: 16px; text-align: center; }
+.floor-pictograms i { min-width: 23px; height: 16px; padding: 0 2px; border-radius: 5px; background: #165e56; color: #fff; font-size: 8px; font-style: normal; font-weight: 900; line-height: 16px; text-align: center; }
 .activity-pictograms i { font-size: 13px; font-style: normal; line-height: 15px; }
 .calendar-day > em { color: #985d00; font-size: 9px; font-style: normal; font-weight: 900; }
 .calendar-legend { display: flex; flex-wrap: wrap; gap: 5px 10px; color: #627b75; font-size: 10px; line-height: 1.3; }

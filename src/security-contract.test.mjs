@@ -15,6 +15,7 @@ const migration16 = readFileSync(new URL('../supabase/migrations/20260829001600_
 const migration17 = readFileSync(new URL('../supabase/migrations/20260829001700_soft_delete_cleaning_plan.sql', import.meta.url), 'utf8')
 const migration18 = readFileSync(new URL('../supabase/migrations/20260829001800_real_school_plan_and_rotation.sql', import.meta.url), 'utf8')
 const migration18TypeSql = readFileSync(new URL('../supabase/tests/01800_canonical_plan_types.sql', import.meta.url), 'utf8')
+const migration19 = readFileSync(new URL('../supabase/migrations/20260830001900_final_departure_checks.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
   assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
@@ -97,7 +98,7 @@ test('kritické mobilní zápisy jsou chráněné proti opakovanému klepnutí',
   assert.match(app, /taskWriteLocks\.current\.has\(id\)/)
   assert.match(app, /attendanceWriteLock\.current/)
   assert.match(app, /disabled=\{saving\}/)
-  assert.match(app, /disabled=\{!task\.canComplete \|\| pendingTaskIds\.has\(task\.id\)\}/)
+  assert.match(app, /const pending = pendingTaskIds\.has\(task\.id\)[\s\S]*disabled=\{!task\.canComplete \|\| pending\}/)
   assert.match(app, /mutationLock\.current/)
 })
 
@@ -252,6 +253,25 @@ test('01800 kotví všech 12 canonical_plan typů před UNION větvemi', () => {
   assert.match(migration18TypeSql, /pg_typeof\(schedule_days\)::text/i)
   assert.match(migration18TypeSql, /'smallint\[\]', 'integer', 'smallint', 'smallint', 'date', 'text'/i)
   assert.match(migration18TypeSql.trim(), /rollback;$/i)
+})
+
+test('závěrečná kontrola je sdílený canonical checklist bez A/B', () => {
+  for (const key of ['final-windows', 'final-doors', 'final-soap', 'final-tools']) {
+    assert.match(migration19, new RegExp(`v2026\\|school\\|common\\|${key}`))
+  }
+  assert.match(migration19, /on conflict \(plan_key\)/i)
+  assert.match(migration19, /'cleaning_day'.*'\{1,3,5\}'::smallint\[\]/i)
+  assert.doesNotMatch(migration19, /delete\s+from|truncate\s+|drop\s+table/i)
+  assert.match(app, /Kontrola při odchodu/)
+  assert.match(app, /task\.planKey\?\.startsWith\(finalCheckPrefix\)/)
+})
+
+test('Dnes ukazuje názvy činností, progress a stav dependency', () => {
+  assert.match(app, /role="progressbar"/)
+  assert.match(app, /Dnešní úklid je hotový/)
+  assert.match(app, /<b>\{task\.title\}<\/b>/)
+  assert.match(app, /Nejdříve předchozí činnost/)
+  assert.match(app, /await schoolRepository\.setCompletion[\s\S]*setTasks/)
 })
 
 test('frontend načte rozšířený plán jedním dotazem a umí bezpečný fallback před migrací', () => {
