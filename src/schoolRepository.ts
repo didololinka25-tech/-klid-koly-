@@ -218,12 +218,18 @@ export const schoolRepository = {
     })
     return { tasks, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
   },
-  planOptions: async (): Promise<PlanOptions> => {
+  planOptions: async (buildingId?: string): Promise<PlanOptions> => {
     const db = client()
+    let floorQuery = db.from('floors').select('id,building_id,name,sort_order').order('sort_order')
+    let roomQuery = db.from('rooms').select('id,building_id,floor_id,name,active,sort_order').order('sort_order')
+    if (buildingId) {
+      floorQuery = floorQuery.eq('building_id', buildingId)
+      roomQuery = roomQuery.eq('building_id', buildingId)
+    }
     const [{ data: buildings, error: buildingsError }, { data: floors, error: floorsError }, { data: rooms, error: roomsError }] = await Promise.all([
       db.from('buildings').select('id,name').eq('active', true).order('name'),
-      db.from('floors').select('id,building_id,name,sort_order').order('sort_order'),
-      db.from('rooms').select('id,building_id,floor_id,name,active,sort_order').order('sort_order'),
+      floorQuery,
+      roomQuery,
     ])
     if (buildingsError || floorsError || roomsError) throw buildingsError ?? floorsError ?? roomsError
     const floorById = new Map((floors ?? []).map((floor: any) => [floor.id, floor]))
@@ -477,6 +483,7 @@ export const schoolRepository = {
     }
   },
   savePurchaseItem: async (item: { id?: string; name: string; note: string; buildingId: string }, userId: string) => {
+    if (!item.buildingId) throw new Error('Vyberte pracoviště.')
     const values = { name: item.name.trim(), note: item.note.trim() || null, building_id: item.buildingId }
     let result = item.id
       ? await client().from('stock_items').update(values).eq('id', item.id)
@@ -498,6 +505,7 @@ export const schoolRepository = {
     if (error) throw error
   },
   saveIncident: async (item: { id?: string; title: string; note: string; buildingId: string; roomId?: string | null }, userId: string) => {
+    if (!item.buildingId) throw new Error('Vyberte pracoviště.')
     const selectedRoom = item.roomId ? await client().from('rooms').select('building_id').eq('id', item.roomId).single() : null
     if (selectedRoom?.error) throw selectedRoom.error
     if (selectedRoom?.data?.building_id && selectedRoom.data.building_id !== item.buildingId) throw new Error('Vybraná místnost nepatří do zvoleného pracoviště.')

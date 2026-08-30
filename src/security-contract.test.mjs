@@ -433,12 +433,14 @@ test('diagnostika 02300 a rollbacku 02400 je pouze čtecí', () => {
   assert.doesNotMatch(settingsDiagnostics, /\b(insert|update|delete|alter|create|drop|truncate)\b/i)
 })
 
-test('přepínače pracoviště filtrují skutečná data a docházka má vlastní význam', () => {
+test('pracoviště je lokální součást konkrétní akce, ne globální filtr', () => {
   assert.match(app, /Pracoviště této směny/)
-  assert.match(app, /buildingTasks = tasks\.filter\(\(task\) => task\.buildingId === buildingId\)/)
-  assert.match(app, /buildingRecords = records\.filter\(\(record\) => record\.buildingId === buildingId\)/)
-  assert.match(app, /options\.floors\.filter\(\(floor\) => floor\.buildingId === selectedBuildingId\)/)
+  assert.match(app, /Aktuální směna:/)
+  assert.match(app, /PRACOVIŠTĚ/)
+  assert.match(app, /dayBuildings/)
+  assert.doesNotMatch(app, /selectedBuildingId|Zobrazené pracoviště/)
   assert.match(repository, /attendanceStartValues\(workerId, buildingId/)
+  assert.match(repository, /planOptions: async \(buildingId\?: string\)/)
 })
 
 test('Provoz ukládá budovu, validuje místnost a migrace zachová historické položky', () => {

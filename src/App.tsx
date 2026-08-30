@@ -36,7 +36,7 @@ import { isSupabaseConfigured } from "./supabase";
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay, type CleaningDayContext } from "./scheduling";
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
 import { attendanceEditorStartValue, pragueDateKey, pragueDateTimeInput } from "./attendanceTime";
-import { forBuilding, roomForBuilding, selectedBuildingId as validBuildingId } from "./buildingScope";
+import { forBuilding, roomForBuilding } from "./buildingScope";
 
 type Section =
   | "Dnes"
@@ -1169,7 +1169,7 @@ function TodayAttendance({
         {!todayRecords.length && !open && <strong>Směna ještě nezačala</strong>}
         {open && (
           <>
-            <span>Pracoviště: {open.buildingName}</span>
+            <span>Aktuální směna: {open.buildingName}</span>
             <span>Příchod: {formatTime(open.start)}</span>
             <strong>Pracuji: {formatDuration(shiftDuration(open, now))}</strong>
           </>
@@ -2076,8 +2076,34 @@ function Management({
   view: "plan" | "rooms";
   onView: (view: "plan" | "rooms") => void;
 }) {
+  const [adminBuildingId, setAdminBuildingId] = useState<string | null>(null);
+  const adminBuilding = options.buildings.find((building) => building.id === adminBuildingId);
+  if (!adminBuilding) {
+    return (
+      <section className="panel admin-building-home">
+        <p className="eyebrow">PRACOVIŠTĚ</p>
+        <h2>Co chcete spravovat?</h2>
+        <div className="admin-building-cards">
+          {options.buildings.map((building) => (
+            <button key={building.id} onClick={() => setAdminBuildingId(building.id)}>
+              <b>{building.name}</b>
+              <span>{options.rooms.filter((room) => room.buildingId === building.id && room.active).length} místností · {tasks.filter((task) => task.buildingId === building.id && task.active).length} úkolů</span>
+            </button>
+          ))}
+        </div>
+      </section>
+    );
+  }
+  const buildingOptions: PlanOptions = {
+    buildings: [adminBuilding],
+    floors: options.floors.filter((floor) => floor.buildingId === adminBuilding.id),
+    rooms: options.rooms.filter((room) => room.buildingId === adminBuilding.id),
+  };
+  const buildingTasks = tasks.filter((task) => task.buildingId === adminBuilding.id);
   return (
     <>
+      <button className="back-button" onClick={() => { onCancel(); setAdminBuildingId(null); }}>← Pracoviště</button>
+      <h2>{adminBuilding.name}</h2>
       <div className="management-tabs" role="tablist" aria-label="Správa školy">
         <button
           className={view === "plan" ? "active" : ""}
@@ -2098,8 +2124,9 @@ function Management({
       </div>
       {view === "plan" ? (
         <PlanManager
-          tasks={tasks}
-          options={options}
+          tasks={buildingTasks}
+          options={buildingOptions}
+          buildingId={adminBuilding.id}
           editing={editing}
           onEdit={onEdit}
           onCancel={onCancel}
@@ -2107,7 +2134,7 @@ function Management({
           onSetActive={onSetTaskActive}
         />
       ) : (
-        <RoomManager options={options} tasks={tasks} onSave={onSaveRoom} onSaveFloor={onSaveFloor} onSetActive={onSetRoomActive} />
+        <RoomManager buildingId={adminBuilding.id} options={buildingOptions} tasks={buildingTasks} onSave={onSaveRoom} onSaveFloor={onSaveFloor} onSetActive={onSetRoomActive} />
       )}
     </>
   );
@@ -2116,6 +2143,7 @@ function Management({
 function PlanManager({
   tasks,
   options,
+  buildingId,
   editing,
   onEdit,
   onCancel,
@@ -2124,15 +2152,14 @@ function PlanManager({
 }: {
   tasks: Task[];
   options: PlanOptions;
+  buildingId: string;
   editing: Task | null;
   onEdit: (task: Task) => void;
   onCancel: () => void;
   onSave: (task: Task) => Promise<void>;
   onSetActive: (taskId: string, active: boolean) => Promise<void>;
 }) {
-  const [selectedBuildingId, setSelectedBuildingId] = useState(options.buildings.find((building) => building.name === "Škola")?.id ?? options.buildings[0]?.id ?? "");
-  useEffect(() => setSelectedBuildingId((current) => validBuildingId(current, options.buildings)), [options.buildings]);
-  const selectedBuilding = options.buildings.find((building) => building.id === selectedBuildingId);
+  const selectedBuilding = options.buildings.find((building) => building.id === buildingId);
   const addTask = (room?: PlanOptions["rooms"][number]) =>
     onEdit({
       id: "",
@@ -2155,9 +2182,9 @@ function PlanManager({
       periodAnchorMonth: undefined,
       active: true,
     });
-  const floors = options.floors.filter((floor) => floor.buildingId === selectedBuildingId).sort((a, b) => a.sortOrder - b.sortOrder);
-  const commonTasks = tasks.filter((task) => !task.roomId && task.active && task.buildingId === selectedBuildingId);
-  const inactiveTasks = tasks.filter((task) => !task.active && task.buildingId === selectedBuildingId);
+  const floors = options.floors.filter((floor) => floor.buildingId === buildingId).sort((a, b) => a.sortOrder - b.sortOrder);
+  const commonTasks = tasks.filter((task) => !task.roomId && task.active && task.buildingId === buildingId);
+  const inactiveTasks = tasks.filter((task) => !task.active && task.buildingId === buildingId);
   return (
     <section className="plan-manager">
       <p className="hint">
@@ -2175,7 +2202,6 @@ function PlanManager({
         />
       ) : (
         <>
-          {options.buildings.length > 1 && <label className="admin-building-picker">Zobrazené pracoviště<select value={selectedBuildingId} onChange={(event) => setSelectedBuildingId(event.target.value)}>{options.buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>}
           <div className="admin-tree">
             {floors.map((floor) => {
               const rooms = options.rooms
@@ -2247,21 +2273,21 @@ function PlanManager({
 }
 
 function RoomManager({
+  buildingId,
   options,
   tasks,
   onSave,
   onSaveFloor,
   onSetActive,
 }: {
+  buildingId: string;
   options: PlanOptions;
   tasks: Task[];
   onSave: (room: ManagedRoom) => Promise<void>;
   onSaveFloor: (floor: ManagedFloor) => Promise<void>;
   onSetActive: (roomId: string, active: boolean) => Promise<void>;
 }) {
-  const [selectedBuildingId, setSelectedBuildingId] = useState(options.buildings.find((building) => building.name === "Škola")?.id ?? options.buildings[0]?.id ?? "");
-  useEffect(() => setSelectedBuildingId((current) => validBuildingId(current, options.buildings)), [options.buildings]);
-  const selectedBuilding = options.buildings.find((building) => building.id === selectedBuildingId) ?? options.buildings[0];
+  const selectedBuilding = options.buildings.find((building) => building.id === buildingId);
   const buildingFloors = options.floors
     .filter((floor) => !selectedBuilding || floor.buildingId === selectedBuilding.id)
     .sort((a, b) => a.sortOrder - b.sortOrder);
@@ -2312,7 +2338,6 @@ function RoomManager({
         />
       ) : (
         <>
-          <label className="admin-building-picker">Pracoviště<select value={selectedBuildingId} onChange={(event) => setSelectedBuildingId(event.target.value)}>{options.buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>
           {selectedBuilding && <button className="add-task" onClick={() => setEditingFloor({ id: "", buildingId: selectedBuilding.id, name: "", sortOrder: Math.max(0, ...buildingFloors.map((floor) => floor.sortOrder)) + 10 })}>+ Přidat patro / sekci</button>}
           <div className="admin-tree">
             {buildingFloors.map((floor) => {
@@ -3188,16 +3213,11 @@ function OperationsScreen({
   const [message, setMessage] = useState("");
   const [mutating, setMutating] = useState(false);
   const mutationLock = useRef(false);
-  const [buildingId, setBuildingId] = useState(data.buildings.find((building) => building.name === "Škola")?.id ?? data.buildings[0]?.id ?? "");
-  useEffect(() => setBuildingId((current) => validBuildingId(current, data.buildings)), [data.buildings]);
-  const selectedBuilding = data.buildings.find((building) => building.id === buildingId);
-  const stock = data.stock.filter((item) => !data.buildingScopeAvailable || !item.buildingId || item.buildingId === buildingId);
-  const incidents = data.incidents.filter((item) => !item.buildingId || item.buildingId === buildingId);
-  const rooms = forBuilding(data.rooms, buildingId);
-  const needed = stock.filter((item) => item.status === "needed");
-  const bought = stock.filter((item) => item.status === "resolved");
-  const openIncidents = incidents.filter((item) => item.status !== "resolved");
-  const resolvedIncidents = incidents.filter((item) => item.status === "resolved");
+  const buildingName = (buildingId?: string | null) => data.buildings.find((building) => building.id === buildingId)?.name ?? "Pracoviště neuvedeno";
+  const needed = data.stock.filter((item) => item.status === "needed");
+  const bought = data.stock.filter((item) => item.status === "resolved");
+  const openIncidents = data.incidents.filter((item) => item.status !== "resolved");
+  const resolvedIncidents = data.incidents.filter((item) => item.status === "resolved");
   const mutate = async (action: () => Promise<void>) => {
     if (mutationLock.current) return;
     mutationLock.current = true;
@@ -3217,8 +3237,6 @@ function OperationsScreen({
   return (
     <div className="operations-screen">
       {message && <div className="notice">{message}</div>}
-      {data.buildings.length > 1 && <label className="admin-building-picker">Zobrazené pracoviště<select value={buildingId} onChange={(event) => { setBuildingId(event.target.value); setPurchaseEditor(null); setIncidentEditor(null); }}>{data.buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>}
-      {!data.buildingScopeAvailable && data.editable && <div className="notice">Nákupní položky budou oddělené podle pracoviště po aplikaci migrace 02600. Závady a místnosti už vybrané pracoviště respektují.</div>}
       {!data.editable && canCreate && (
         <div className="notice">Editace Provozu bude dostupná po aplikaci migrace 01500.</div>
       )}
@@ -3230,8 +3248,7 @@ function OperationsScreen({
         {purchaseEditor && (
           <PurchaseEditor
             item={purchaseEditor === "new" ? undefined : purchaseEditor}
-            buildingId={buildingId}
-            buildingName={selectedBuilding?.name ?? "Pracoviště"}
+            buildings={data.buildings}
             onCancel={() => setPurchaseEditor(null)}
             onSave={async (draft) => {
               await mutate(() => schoolRepository.savePurchaseItem(draft, userId));
@@ -3241,7 +3258,7 @@ function OperationsScreen({
         )}
         {needed.map((item) => (
           <article className="operation-card" key={item.id}>
-            <div><b>{item.name}</b>{item.note && <span>{item.note}</span>}</div>
+            <div><b>{item.name}</b><small>{buildingName(item.buildingId)}</small>{item.note && <span>{item.note}</span>}</div>
             {(canManage || item.createdBy === userId) && data.editable && (
               <div className="operation-actions">
                 <button disabled={mutating} onClick={() => setPurchaseEditor(item)}>Upravit</button>
@@ -3257,7 +3274,7 @@ function OperationsScreen({
             <summary>Vyřešené ({bought.length})</summary>
             {bought.map((item) => (
               <article className="operation-card resolved" key={item.id}>
-                <div><b>{item.name}</b>{item.note && <span>{item.note}</span>}</div>
+                <div><b>{item.name}</b><small>{buildingName(item.buildingId)}</small>{item.note && <span>{item.note}</span>}</div>
                 {(canManage || item.createdBy === userId) && data.editable && <div className="operation-actions"><button disabled={mutating} onClick={() => void mutate(() => schoolRepository.setPurchaseItemStatus(item.id, "needed")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Znovu otevřít"}</button><button disabled={mutating} onClick={() => void mutate(() => schoolRepository.archivePurchaseItem(item.id)).catch(() => undefined)}>Archivovat</button></div>}
               </article>
             ))}
@@ -3272,9 +3289,8 @@ function OperationsScreen({
         {incidentEditor && (
           <IncidentEditor
             item={incidentEditor === "new" ? undefined : incidentEditor}
-            rooms={rooms}
-            buildingId={buildingId}
-            buildingName={selectedBuilding?.name ?? "Pracoviště"}
+            rooms={data.rooms}
+            buildings={data.buildings}
             onCancel={() => setIncidentEditor(null)}
             onSave={async (draft) => {
               await mutate(() => schoolRepository.saveIncident(draft, userId));
@@ -3284,7 +3300,7 @@ function OperationsScreen({
         )}
         {openIncidents.map((item) => (
           <article className="operation-card incident" key={item.id}>
-            <div><b>⚠ {item.title}</b><span>{[item.room, item.floor].filter(Boolean).join(" · ") || "Místo neuvedeno"}</span>{item.note && <small>{item.note}</small>}</div>
+            <div><b>⚠ {item.title}</b><small>{buildingName(item.buildingId)}</small><span>{[item.room, item.floor].filter(Boolean).join(" · ") || "Místo neuvedeno"}</span>{item.note && <small>{item.note}</small>}</div>
             {(canManage || item.createdBy === userId) && data.editable && (
               <div className="operation-actions">
                 <button disabled={mutating} onClick={() => setIncidentEditor(item)}>Upravit</button>
@@ -3300,7 +3316,7 @@ function OperationsScreen({
             <summary>Vyřešené ({resolvedIncidents.length})</summary>
             {resolvedIncidents.map((item) => (
               <article className="operation-card resolved" key={item.id}>
-                <div><b>{item.title}</b><span>{[item.room, item.floor].filter(Boolean).join(" · ")}</span></div>
+                <div><b>{item.title}</b><small>{buildingName(item.buildingId)}</small><span>{[item.room, item.floor].filter(Boolean).join(" · ")}</span></div>
                 {(canManage || item.createdBy === userId) && data.editable && <div className="operation-actions"><button disabled={mutating} onClick={() => void mutate(() => schoolRepository.setIncidentStatus(item.id, "reported")).catch(() => undefined)}>{mutating ? "Ukládám…" : "Znovu otevřít"}</button><button disabled={mutating} onClick={() => void mutate(() => schoolRepository.archiveIncident(item.id)).catch(() => undefined)}>Archivovat</button></div>}
               </article>
             ))}
@@ -3311,13 +3327,14 @@ function OperationsScreen({
   );
 }
 
-function PurchaseEditor({ item, buildingId, buildingName, onSave, onCancel }: { item?: StockItem; buildingId: string; buildingName: string; onSave: (item: { id?: string; name: string; note: string; buildingId: string }) => Promise<void>; onCancel: () => void }) {
+function PurchaseEditor({ item, buildings, onSave, onCancel }: { item?: StockItem; buildings: Workplace[]; onSave: (item: { id?: string; name: string; note: string; buildingId: string }) => Promise<void>; onCancel: () => void }) {
   const [name, setName] = useState(item?.name ?? "");
   const [note, setNote] = useState(item?.note ?? "");
+  const [buildingId, setBuildingId] = useState(item?.buildingId ?? "");
   const [saving, setSaving] = useState(false);
   return (
     <form className="operation-editor" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave({ id: item?.id, name, note, buildingId }); } finally { setSaving(false); } }}>
-      <b>Pracoviště: {buildingName}</b>
+      <label>Pracoviště<select value={buildingId} onChange={(event) => setBuildingId(event.target.value)} required><option value="">Vyberte pracoviště</option>{buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>
       <label>Název<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Např. Gumové rukavice" required /></label>
       <label>Poznámka<textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="Volitelná upřesňující poznámka" /></label>
       <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
@@ -3325,16 +3342,18 @@ function PurchaseEditor({ item, buildingId, buildingName, onSave, onCancel }: { 
   );
 }
 
-function IncidentEditor({ item, rooms, buildingId, buildingName, onSave, onCancel }: { item?: Incident; rooms: OperationsData["rooms"]; buildingId: string; buildingName: string; onSave: (item: { id?: string; title: string; note: string; buildingId: string; roomId?: string | null }) => Promise<void>; onCancel: () => void }) {
+function IncidentEditor({ item, rooms, buildings, onSave, onCancel }: { item?: Incident; rooms: OperationsData["rooms"]; buildings: Workplace[]; onSave: (item: { id?: string; title: string; note: string; buildingId: string; roomId?: string | null }) => Promise<void>; onCancel: () => void }) {
   const [title, setTitle] = useState(item?.title ?? "");
   const [note, setNote] = useState(item?.note ?? "");
   const [roomId, setRoomId] = useState(item?.roomId ?? "");
+  const [buildingId, setBuildingId] = useState(item?.buildingId ?? "");
+  const buildingRooms = forBuilding(rooms, buildingId);
   const [saving, setSaving] = useState(false);
   return (
     <form className="operation-editor" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave({ id: item?.id, title, note, buildingId, roomId: roomForBuilding(rooms, roomId, buildingId) }); } finally { setSaving(false); } }}>
-      <b>Pracoviště: {buildingName}</b>
+      <label>Pracoviště<select value={buildingId} onChange={(event) => { setBuildingId(event.target.value); setRoomId(""); }} required><option value="">Vyberte pracoviště</option>{buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>
       <label>Co je rozbité<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Např. Nefunguje světlo" required /></label>
-      <label>Místnost<select value={roomForBuilding(rooms, roomId, buildingId) ?? ""} onChange={(event) => setRoomId(event.target.value)}><option value="">Místo neuvedeno</option>{rooms.map((room) => <option key={room.id} value={room.id}>{room.floor} · {room.name}</option>)}</select></label>
+      <label>Místnost<select value={roomForBuilding(rooms, roomId, buildingId) ?? ""} onChange={(event) => setRoomId(event.target.value)} disabled={!buildingId}><option value="">Místo neuvedeno</option>{buildingRooms.map((room) => <option key={room.id} value={room.id}>{room.floor} · {room.name}</option>)}</select></label>
       <label>Poznámka<textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="Volitelné upřesnění" /></label>
       <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
     </form>
@@ -3361,6 +3380,12 @@ function dueTasksForDate(tasks: Task[], records: CleaningDayRecord[], date: stri
       const context = resolveCleaningDay(date, records.filter((record) => !task.buildingId || record.buildingId === task.buildingId));
       return isTaskDueForCleaningDay(taskScheduleInput(task), context);
     });
+}
+
+function calendarContextForDate(tasks: Task[], records: CleaningDayRecord[], date: string) {
+  const buildingIds = [...new Set(tasks.map((task) => task.buildingId).filter((id): id is string => Boolean(id)))];
+  if (buildingIds.length === 1) return resolveCleaningDay(date, records.filter((record) => record.buildingId === buildingIds[0]));
+  return resolveCleaningDay(date, []);
 }
 
 function floorPictogram(floor: string) {
@@ -3413,22 +3438,16 @@ function CleaningCalendar({
   onCancel: (id: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState<CleaningDayRecord | "new" | null>(null);
-  const [buildingId, setBuildingId] = useState(buildings.find((item) => item.name === "Škola")?.id ?? buildings[0]?.id ?? "");
-  useEffect(() => setBuildingId((current) => validBuildingId(current, buildings)), [buildings]);
-  const selectedBuilding = buildings.find((building) => building.id === buildingId);
-  const buildingTasks = tasks.filter((task) => task.buildingId === buildingId);
-  const buildingRecords = records.filter((record) => record.buildingId === buildingId);
   const today = localDateKey();
   const [month, setMonth] = useState(today.slice(0, 7));
   const [selectedDate, setSelectedDate] = useState(today);
-  const future = buildingRecords.filter((item) => item.executionDate >= today).sort((a, b) => a.executionDate.localeCompare(b.executionDate));
-  const calendarDays = useMemo(() => monthGridDates(month).map((date) => ({
-    date,
-    tasks: dueTasksForDate(buildingTasks, buildingRecords, date),
-    context: resolveCleaningDay(date, buildingRecords),
-  })), [month, buildingRecords, buildingTasks]);
+  const future = records.filter((item) => item.executionDate >= today).sort((a, b) => a.executionDate.localeCompare(b.executionDate));
+  const calendarDays = useMemo(() => monthGridDates(month).map((date) => {
+    const due = dueTasksForDate(tasks, records, date);
+    return { date, tasks: due, context: calendarContextForDate(due, records, date) };
+  }), [month, records, tasks]);
   const selected = calendarDays.find((item) => item.date === selectedDate)
-    ?? { date: selectedDate, tasks: dueTasksForDate(buildingTasks, buildingRecords, selectedDate), context: resolveCleaningDay(selectedDate, buildingRecords) };
+    ?? (() => { const due = dueTasksForDate(tasks, records, selectedDate); return { date: selectedDate, tasks: due, context: calendarContextForDate(due, records, selectedDate) }; })();
   const moveMonth = (amount: number) => {
     const [year, monthNumber] = month.split("-").map(Number);
     const next = new Date(Date.UTC(year, monthNumber - 1 + amount, 1));
@@ -3441,18 +3460,17 @@ function CleaningCalendar({
     <div className="cleaning-calendar">
       <section className="panel calendar-intro">
         <p className="eyebrow">PRAVIDELNÝ PLÁN</p>
-        <b>{selectedBuilding?.name === "Školka" ? "Úterý" : "Pondělí · středa · pátek"}</b>
+        <b>Škola: Po · St · Pá &nbsp;|&nbsp; Školka: Út</b>
         <small>Výjimky níže jsou uložené samostatně. Google Calendar zatím není připojený.</small>
       </section>
       {!available && (
         <div className="notice">Správa skutečných mimořádných a přesunutých dnů bude dostupná po zkontrolování a aplikaci migrace 01300.</div>
       )}
-      {!editing && buildings.length > 1 && <label className="calendar-building-picker">Zobrazené pracoviště<select value={buildingId} onChange={(event) => setBuildingId(event.target.value)}>{buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>}
       {available && canManage && !editing && <button className="primary-action" onClick={() => setEditing("new")}>+ Přidat úklidový den</button>}
       {available && editing && (
         <CleaningDayEditor
           record={editing === "new" ? undefined : editing}
-          buildingId={buildingId}
+          buildings={buildings}
           tasks={tasks}
           taskSelectionAvailable={taskSelectionAvailable}
           onCancel={() => setEditing(null)}
@@ -3466,6 +3484,7 @@ function CleaningCalendar({
           {calendarDays.map((item) => {
             const floors = [...new Set(item.tasks.map((task) => task.floor).filter((floor) => floor !== "Společné úkoly"))];
             const activities = [...new Set(item.tasks.map((task) => task.activityType))];
+            const dayBuildings = [...new Set(item.tasks.map((task) => task.building))];
             return (
               <button
                 key={item.date}
@@ -3474,6 +3493,7 @@ function CleaningCalendar({
                 aria-label={`${formatDate(item.date)}, ${item.tasks.length} úkolů`}
               >
                 <strong>{Number(item.date.slice(8, 10))}</strong>
+                <span className="building-pictograms">{dayBuildings.map((building) => <i key={building}>{building === "Školka" ? "MŠ" : "Š"}</i>)}</span>
                 <span className="floor-pictograms">{floors.slice(0, 4).map((floor) => <i key={floor}>{floorPictogram(floor)}</i>)}</span>
                 <span className="activity-pictograms">{activities.slice(0, 4).map((activity) => <i key={activity}>{activityTypes[activity]?.icon ?? "✓"}</i>)}</span>
                 {item.context.kind === "extraordinary" && <em>M</em>}
@@ -3492,6 +3512,7 @@ function CleaningCalendar({
             <div>
               <small>{item.kind === "extraordinary" ? "MIMOŘÁDNÝ ÚKLID" : "PŘESUNUTÝ ÚKLID"}</small>
               <b>{item.title}</b>
+              <span>{buildings.find((building) => building.id === item.buildingId)?.name ?? "Pracoviště"}</span>
               <span>{formatDate(item.executionDate)}{item.sourceDate ? ` · původně ${formatDate(item.sourceDate)}` : ""}</span>
               {item.note && <p>{item.note}</p>}
             </div>
@@ -3641,19 +3662,20 @@ function ExtraordinaryTaskSelector({
 
 function CleaningDayEditor({
   record,
-  buildingId,
+  buildings,
   tasks,
   taskSelectionAvailable,
   onCancel,
   onSave,
 }: {
   record?: CleaningDayRecord;
-  buildingId: string;
+  buildings: PlanOptions["buildings"];
   tasks: Task[];
   taskSelectionAvailable: boolean;
   onCancel: () => void;
   onSave: (draft: CleaningDayDraft) => Promise<void>;
 }) {
+  const [buildingId, setBuildingId] = useState(record?.buildingId ?? "");
   const workplaceTasks = tasks.filter((task) => !task.buildingId || task.buildingId === buildingId);
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -3690,6 +3712,7 @@ function CleaningDayEditor({
       } finally { setSaving(false); }
     }}>
       <h2>{record ? "Upravit úklidový den" : "Nový úklidový den"}</h2>
+      <label>Pracoviště<select value={buildingId} onChange={(event) => setBuildingId(event.target.value)} required disabled={Boolean(record)}><option value="">Vyberte pracoviště</option>{buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>
       <fieldset><legend>Typ</legend>
         <label className="radio"><input type="radio" checked={kind === "extraordinary"} onChange={() => setKind("extraordinary")} /> Mimořádný úklid</label>
         <label className="radio"><input type="radio" checked={kind === "rescheduled"} onChange={() => setKind("rescheduled")} /> Přesun pravidelného úklidu</label>

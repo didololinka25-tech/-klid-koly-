@@ -13,14 +13,6 @@ export function roomForBuilding<T extends { id: string; buildingId: string }>(
   return rooms.some((room) => room.id === roomId && room.buildingId === buildingId) ? roomId : null
 }
 
-export function selectedBuildingId(
-  current: string,
-  buildings: { id: string; active?: boolean }[],
-) {
-  const available = buildings.filter((building) => building.active !== false)
-  return available.some((building) => building.id === current) ? current : (available[0]?.id ?? '')
-}
-
 export function attendanceStartValues(
   workerId: string,
   buildingId: string,

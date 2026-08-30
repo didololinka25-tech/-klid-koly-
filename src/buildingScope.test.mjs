@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { attendanceStartValues, forBuilding, roomForBuilding, selectedBuildingId } from './buildingScope.ts'
+import { attendanceStartValues, forBuilding, roomForBuilding } from './buildingScope.ts'
 
 const school = { id: 'school', name: 'Škola', active: true }
 const kindergarten = { id: 'kindergarten', name: 'Školka', active: true }
@@ -12,11 +12,6 @@ const tasks = [
   ...Array.from({ length: 217 }, (_, index) => ({ id: `school-task-${index}`, buildingId: school.id })),
   ...Array.from({ length: 43 }, (_, index) => ({ id: `kindergarten-task-${index}`, buildingId: kindergarten.id })),
 ]
-
-test('změna Škola na Školka skutečně změní vybrané buildingId', () => {
-  assert.equal(selectedBuildingId('kindergarten', [school, kindergarten]), 'kindergarten')
-  assert.equal(selectedBuildingId('missing', [school, kindergarten]), 'school')
-})
 
 test('Příchod předá do DB přesný building_id Školky', () => {
   assert.deepEqual(attendanceStartValues('worker', 'kindergarten', '2026-09-01T14:00:00Z', '2026-09-01'), {
@@ -32,4 +27,10 @@ test('Správa filtruje 11 místností a 43 úkolů Školky podle buildingId', ()
 test('Provoz nepřijme room_id z jiné budovy', () => {
   assert.equal(roomForBuilding(rooms, 'school-1', 'kindergarten'), null)
   assert.equal(roomForBuilding(rooms, 'kindergarten-1', 'kindergarten'), 'kindergarten-1')
+})
+
+test('lokální výběr pracoviště filtruje jen data konkrétní akce', () => {
+  assert.equal(forBuilding(tasks, 'school').length, 217)
+  assert.equal(forBuilding(tasks, 'kindergarten').length, 43)
+  assert.equal(tasks.length, 260)
 })

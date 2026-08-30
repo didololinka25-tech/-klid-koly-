@@ -1241,6 +1241,12 @@ nav button {
 .building-task-heading h2 { margin: 0; font-size: 22px; }
 .calendar-detail-building { display: grid; gap: 8px; }
 .calendar-detail-building > h3 { margin: 10px 0 0; color: #174d45; }
+.admin-building-cards { display: grid; gap: 10px; }
+.admin-building-cards button { min-height: 72px; display: grid; gap: 5px; padding: 14px; text-align: left; border: 1px solid #cfe0dc; border-radius: 14px; background: #fff; color: #174d45; }
+.admin-building-cards button b { font-size: 18px; }
+.admin-building-cards button span { color: #607a74; }
+.building-pictograms { display: flex; gap: 2px; flex-wrap: wrap; }
+.building-pictograms i { min-width: 19px; padding: 1px 3px; border-radius: 5px; background: #dcefea; color: #174d45; font-size: 8px; font-style: normal; font-weight: 900; text-align: center; }
 .admin-building-picker, .calendar-building-picker { display: grid; gap: 5px; margin: 0 0 12px; font-weight: 800; }
 .worker-contracts { padding: 14px; margin: 16px 0; }
 .contract-row { width: 100%; min-height: 52px; display: flex; justify-content: space-between; align-items: center; text-align: left; border: 0; border-top: 1px solid #e0ebe7; background: #fff; color: #174d45; }
