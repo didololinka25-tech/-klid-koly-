@@ -11,10 +11,10 @@ insert into public.cleaning_tasks (
   period_months, period_week, period_anchor_month
 )
 values
-  ('v2026|school|common|final-windows', null, 'Zkontrolovat okna', 'windows', 'cleaning_day', true, 900, '{1,3,5}'::smallint[], null, null, null, 'fixed', null, 1, null, null, null, null, null),
-  ('v2026|school|common|final-doors', null, 'Zkontrolovat dveře', 'doors', 'cleaning_day', true, 910, '{1,3,5}'::smallint[], null, null, null, 'fixed', null, 1, null, null, null, null, null),
-  ('v2026|school|common|final-soap', null, 'Doplnit mýdlo podle potřeby', 'sink', 'cleaning_day', true, 920, '{1,3,5}'::smallint[], null, null, null, 'fixed', null, 1, null, null, null, null, null),
-  ('v2026|school|common|final-tools', null, 'Uklidit úklidové pomůcky', 'other', 'cleaning_day', true, 930, '{1,3,5}'::smallint[], null, null, null, 'fixed', null, 1, null, null, null, null, null)
+  ('v2026|school|common|final-close-windows', null, 'Zavřít všechna okna', 'windows', 'cleaning_day', true, 900, '{1,3,5}'::smallint[], null, null, null, 'fixed', null, 1, null, null, null, null, null),
+  ('v2026|school|common|final-check-doors', null, 'Zavřít / zkontrolovat dveře', 'doors', 'cleaning_day', true, 910, '{1,3,5}'::smallint[], null, null, null, 'fixed', null, 1, null, null, null, null, null),
+  ('v2026|school|common|final-trash', null, 'Vynést odpadky', 'trash', 'cleaning_day', true, 920, '{1,3,5}'::smallint[], null, null, null, 'fixed', null, 1, null, null, null, null, null),
+  ('v2026|school|common|final-laundry', null, 'Posbírat použité hadry na vyprání', 'laundry', 'cleaning_day', true, 930, '{1,3,5}'::smallint[], null, null, null, 'fixed', null, 1, null, null, null, null, null)
 on conflict (plan_key) where plan_key is not null do update set
   room_id = null,
   name = excluded.name,

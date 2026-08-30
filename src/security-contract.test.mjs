@@ -256,13 +256,17 @@ test('01800 kotví všech 12 canonical_plan typů před UNION větvemi', () => {
 })
 
 test('závěrečná kontrola je sdílený canonical checklist bez A/B', () => {
-  for (const key of ['final-windows', 'final-doors', 'final-soap', 'final-tools']) {
+  for (const key of ['final-close-windows', 'final-check-doors', 'final-trash', 'final-laundry']) {
     assert.match(migration19, new RegExp(`v2026\\|school\\|common\\|${key}`))
   }
+  for (const item of ['Zavřít všechna okna', 'Zavřít / zkontrolovat dveře', 'Vynést odpadky', 'Posbírat použité hadry na vyprání']) {
+    assert.match(migration19, new RegExp(item))
+  }
+  assert.doesNotMatch(migration19, /final-(soap|tools|windows)(?:'|,)/)
   assert.match(migration19, /on conflict \(plan_key\)/i)
   assert.match(migration19, /'cleaning_day'.*'\{1,3,5\}'::smallint\[\]/i)
   assert.doesNotMatch(migration19, /delete\s+from|truncate\s+|drop\s+table/i)
-  assert.match(app, /Kontrola při odchodu/)
+  assert.match(app, /Před odchodem ze školy/)
   assert.match(app, /task\.planKey\?\.startsWith\(finalCheckPrefix\)/)
 })
 

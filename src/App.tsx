@@ -1677,7 +1677,7 @@ function TaskHierarchy({
       {finalChecks.length > 0 && (
         <section className="shared-tasks final-checks">
           <div className="section-heading">
-            <span><h2>Kontrola při odchodu</h2><small>Společné pro celý dnešní úklid</small></span>
+            <span><h2>Před odchodem ze školy</h2><small>Povinná společná kontrola</small></span>
             <b>{finalChecks.filter((task) => task.done).length}/{finalChecks.length}</b>
           </div>
           <TaskRows tasks={finalChecks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} />
