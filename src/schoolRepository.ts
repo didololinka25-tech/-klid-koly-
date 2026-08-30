@@ -9,6 +9,7 @@ import {
 } from './scheduling'
 import { isSameTaskDefinition } from './taskValidation'
 import { pragueDateKey, validateAttendanceInterval } from './attendanceTime'
+import { attendanceStartValues } from './buildingScope'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -50,10 +51,10 @@ export type CleaningDayDraft = {
   note?: string | null
   selectedTaskIds?: string[]
 }
-export type StockItem = { id: string; name: string; note: string; status: 'needed' | 'resolved'; createdBy?: string | null }
+export type StockItem = { id: string; name: string; note: string; status: 'needed' | 'resolved'; buildingId?: string | null; createdBy?: string | null }
 export type Incident = { id: string; date: string; title: string; note: string; status: string; buildingId?: string | null; building: string; roomId?: string | null; room: string; floor: string; createdBy?: string | null }
 export type OperationRoom = { id: string; buildingId: string; building: string; name: string; floor: string }
-export type OperationsData = { stock: StockItem[]; incidents: Incident[]; rooms: OperationRoom[]; editable: boolean }
+export type OperationsData = { stock: StockItem[]; incidents: Incident[]; rooms: OperationRoom[]; buildings: Workplace[]; editable: boolean; buildingScopeAvailable: boolean }
 export type ManagedRoom = { id: string; buildingId: string; floorId: string | null; name: string; active: boolean; sortOrder: number }
 export type ManagedFloor = { id: string; buildingId: string; name: string; sortOrder: number }
 export type ManualEntryType = 'guide' | 'practical' | 'arrival'
@@ -437,12 +438,17 @@ export const schoolRepository = {
   },
   operations: async (): Promise<OperationsData> => {
     const db = client()
-    const [stockResult, incidentResult, roomResult, floorResult, buildingResult] = await Promise.all([
-      db.from('stock_items').select('id,name,note,status,created_by').eq('active', true).order('created_at', { ascending: false }),
-      db.from('incidents').select('id,incident_date,title,note,status,room_id,worker_id').eq('active', true).order('incident_date', { ascending: false }).limit(100),
+    let stockResult = await db.from('stock_items').select('id,name,note,status,building_id,created_by').eq('active', true).order('created_at', { ascending: false })
+    let buildingScopeAvailable = true
+    if (stockResult.error && missingColumn(stockResult.error)) {
+      buildingScopeAvailable = false
+      stockResult = await db.from('stock_items').select('id,name,note,status,created_by').eq('active', true).order('created_at', { ascending: false }) as typeof stockResult
+    }
+    const [incidentResult, roomResult, floorResult, buildingResult] = await Promise.all([
+      db.from('incidents').select('id,incident_date,title,note,status,building_id,room_id,worker_id').eq('active', true).order('incident_date', { ascending: false }).limit(100),
       db.from('rooms').select('id,name,floor_id,building_id').eq('active', true).order('sort_order'),
       db.from('floors').select('id,name,sort_order').order('sort_order'),
-      db.from('buildings').select('id,name').eq('active', true).order('name'),
+      db.from('buildings').select('id,name,active').eq('active', true).order('name'),
     ])
     const schemaMissing = [stockResult.error, incidentResult.error].some((error) => error?.code === '42703' || error?.message.includes('column'))
     if (schemaMissing) {
@@ -452,10 +458,9 @@ export const schoolRepository = {
       ])
       if (legacyStock.error || legacyIncidents.error) throw legacyStock.error ?? legacyIncidents.error
       return {
-        stock: (legacyStock.data ?? []).map((item: any) => ({ id: item.id, name: item.name, note: '', status: 'needed', createdBy: null })),
+        stock: (legacyStock.data ?? []).map((item: any) => ({ id: item.id, name: item.name, note: '', status: 'needed', buildingId: null, createdBy: null })),
         incidents: (legacyIncidents.data ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, title: item.description, note: '', status: item.status, building: '', roomId: item.room_id, room: '', floor: '', createdBy: item.worker_id })),
-        rooms: [],
-        editable: false,
+        rooms: [], buildings: [], editable: false, buildingScopeAvailable: false,
       }
     }
     const error = stockResult.error ?? incidentResult.error ?? roomResult.error ?? floorResult.error ?? buildingResult.error
@@ -465,17 +470,23 @@ export const schoolRepository = {
     const rooms = (roomResult.data ?? []).map((room: any) => ({ id: room.id, buildingId: room.building_id, building: buildings.get(room.building_id) ?? 'Pracoviště', name: room.name, floor: floors.get(room.floor_id) ?? 'Společné' }))
     const roomMap = new Map(rooms.map((room) => [room.id, room]))
     return {
-      stock: (stockResult.data ?? []).map((item: any) => ({ id: item.id, name: item.name, note: item.note ?? '', status: item.status, createdBy: item.created_by })),
-      incidents: (incidentResult.data ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, title: item.title, note: item.note ?? '', status: item.status, buildingId: roomMap.get(item.room_id)?.buildingId ?? null, building: roomMap.get(item.room_id)?.building ?? '', roomId: item.room_id, room: roomMap.get(item.room_id)?.name ?? '', floor: roomMap.get(item.room_id)?.floor ?? '', createdBy: item.worker_id })),
-      rooms,
-      editable: true,
+      stock: (stockResult.data ?? []).map((item: any) => ({ id: item.id, name: item.name, note: item.note ?? '', status: item.status, buildingId: item.building_id ?? null, createdBy: item.created_by })),
+      incidents: (incidentResult.data ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, title: item.title, note: item.note ?? '', status: item.status, buildingId: item.building_id ?? roomMap.get(item.room_id)?.buildingId ?? null, building: buildings.get(item.building_id ?? roomMap.get(item.room_id)?.buildingId) ?? '', roomId: item.room_id, room: roomMap.get(item.room_id)?.name ?? '', floor: roomMap.get(item.room_id)?.floor ?? '', createdBy: item.worker_id })),
+      rooms, buildings: (buildingResult.data ?? []).map((item: any) => ({ id: item.id, name: item.name, active: item.active })),
+      editable: true, buildingScopeAvailable,
     }
   },
-  savePurchaseItem: async (item: { id?: string; name: string; note: string }, userId: string) => {
-    const values = { name: item.name.trim(), note: item.note.trim() || null }
-    const result = item.id
+  savePurchaseItem: async (item: { id?: string; name: string; note: string; buildingId: string }, userId: string) => {
+    const values = { name: item.name.trim(), note: item.note.trim() || null, building_id: item.buildingId }
+    let result = item.id
       ? await client().from('stock_items').update(values).eq('id', item.id)
       : await client().from('stock_items').insert({ ...values, active: true, status: 'needed', created_by: userId })
+    if (result.error && missingColumn(result.error)) {
+      const legacyValues = { name: values.name, note: values.note }
+      result = item.id
+        ? await client().from('stock_items').update(legacyValues).eq('id', item.id)
+        : await client().from('stock_items').insert({ ...legacyValues, active: true, status: 'needed', created_by: userId })
+    }
     if (result.error) throw result.error
   },
   setPurchaseItemStatus: async (id: string, status: 'needed' | 'resolved') => {
@@ -486,18 +497,16 @@ export const schoolRepository = {
     const { error } = await client().from('stock_items').update({ active: false }).eq('id', id)
     if (error) throw error
   },
-  saveIncident: async (item: { id?: string; title: string; note: string; roomId?: string | null }, userId: string) => {
+  saveIncident: async (item: { id?: string; title: string; note: string; buildingId: string; roomId?: string | null }, userId: string) => {
+    const selectedRoom = item.roomId ? await client().from('rooms').select('building_id').eq('id', item.roomId).single() : null
+    if (selectedRoom?.error) throw selectedRoom.error
+    if (selectedRoom?.data?.building_id && selectedRoom.data.building_id !== item.buildingId) throw new Error('Vybraná místnost nepatří do zvoleného pracoviště.')
     if (item.id) {
-      const { error } = await client().from('incidents').update({ title: item.title.trim(), description: item.title.trim(), note: item.note.trim() || null, room_id: item.roomId || null }).eq('id', item.id)
+      const { error } = await client().from('incidents').update({ title: item.title.trim(), description: item.title.trim(), note: item.note.trim() || null, building_id: item.buildingId, room_id: item.roomId || null }).eq('id', item.id)
       if (error) throw error
       return
     }
-    const selectedRoom = item.roomId ? await client().from('rooms').select('building_id').eq('id', item.roomId).single() : null
-    if (selectedRoom?.error) throw selectedRoom.error
-    const fallback = selectedRoom?.data ? null : await client().from('buildings').select('id').eq('name', 'Škola').single()
-    if (fallback?.error) throw fallback.error
-    const buildingId = selectedRoom?.data?.building_id ?? fallback?.data?.id
-    const { error } = await client().from('incidents').insert({ worker_id: userId, building_id: buildingId, title: item.title.trim(), description: item.title.trim(), note: item.note.trim() || null, room_id: item.roomId || null, status: 'reported', active: true })
+    const { error } = await client().from('incidents').insert({ worker_id: userId, building_id: item.buildingId, title: item.title.trim(), description: item.title.trim(), note: item.note.trim() || null, room_id: item.roomId || null, status: 'reported', active: true })
     if (error) throw error
   },
   setIncidentStatus: async (id: string, status: 'reported' | 'resolved') => {
@@ -611,7 +620,8 @@ export const schoolRepository = {
       (existing ?? []).map((row: any) => ({ id: row.id, start: row.started_at, end: row.ended_at ?? undefined })),
       now.toISOString(),
     )
-    const { data, error } = await db.from('attendance').insert({ worker_id: workerId, building_id: buildingId, started_at: now.toISOString(), attendance_date: pragueDateKey(now) }).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').single()
+    const values = attendanceStartValues(workerId, buildingId, now.toISOString(), pragueDateKey(now))
+    const { data, error } = await db.from('attendance').insert(values).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').single()
     if (error) throw attendanceError(error)
     return mapAttendance(data)
   },

@@ -22,6 +22,7 @@ const migration22 = readFileSync(new URL('../supabase/migrations/20260830002200_
 const migration23 = readFileSync(new URL('../supabase/migrations/20260830002300_kindergarten_workplace_and_plan.sql', import.meta.url), 'utf8')
 const migration24 = readFileSync(new URL('../supabase/migrations/20260830002400_worker_contract_history.sql', import.meta.url), 'utf8')
 const migration25 = readFileSync(new URL('../supabase/migrations/20260830002500_restore_missing_app_settings.sql', import.meta.url), 'utf8')
+const migration26 = readFileSync(new URL('../supabase/migrations/20260830002600_multi_building_operations.sql', import.meta.url), 'utf8')
 const settingsDiagnostics = readFileSync(new URL('../supabase/diagnostics/verify_02300_02400_state.sql', import.meta.url), 'utf8')
 const attendanceRepair = readFileSync(new URL('../supabase/diagnostics/repair_attendance_d05aac53.sql', import.meta.url), 'utf8')
 
@@ -430,4 +431,21 @@ test('diagnostika 02300 a rollbacku 02400 je pouze čtecí', () => {
   assert.match(settingsDiagnostics, /to_regclass\('public\.worker_contracts'\)/)
   assert.match(settingsDiagnostics, /to_regprocedure\('public\.set_dpc_settings\(numeric,smallint\)'\)/)
   assert.doesNotMatch(settingsDiagnostics, /\b(insert|update|delete|alter|create|drop|truncate)\b/i)
+})
+
+test('přepínače pracoviště filtrují skutečná data a docházka má vlastní význam', () => {
+  assert.match(app, /Pracoviště této směny/)
+  assert.match(app, /buildingTasks = tasks\.filter\(\(task\) => task\.buildingId === buildingId\)/)
+  assert.match(app, /buildingRecords = records\.filter\(\(record\) => record\.buildingId === buildingId\)/)
+  assert.match(app, /options\.floors\.filter\(\(floor\) => floor\.buildingId === selectedBuildingId\)/)
+  assert.match(repository, /attendanceStartValues\(workerId, buildingId/)
+})
+
+test('Provoz ukládá budovu, validuje místnost a migrace zachová historické položky', () => {
+  assert.match(repository, /building_id: item\.buildingId/)
+  assert.match(repository, /Vybraná místnost nepatří do zvoleného pracoviště/)
+  assert.match(migration26, /add column if not exists building_id uuid references public\.buildings\(id\) on delete restrict/i)
+  assert.match(migration26, /Historické položky bez building_id zůstávají zachované/i)
+  assert.doesNotMatch(migration26, /delete\s+from|truncate\s+|drop\s+table/i)
+  assert.match(migration26, /relrowsecurity/i)
 })
