@@ -22,6 +22,7 @@ export type AttendanceReport = {
   monthMs: number
   yearMs: number
   annualLimitHours: number
+  contractLabel: string
   generatedAt: Date
 }
 
@@ -39,6 +40,7 @@ export function buildAttendanceReport(
   month: string,
   annualLimitHours: number,
   now = new Date(),
+  contracts: { contractType: 'dpp' | 'dpc' | 'other'; validFrom: string; validTo?: string; active: boolean }[] = [],
 ): AttendanceReport {
   const year = month.slice(0, 4)
   const monthRecords = records
@@ -58,6 +60,8 @@ export function buildAttendanceReport(
     durationMs: duration(record, now),
   }))
   const totals = new Map<string, number>()
+  const contractTypes = new Set(monthRecords.map((record) => contracts.find((contract) => contract.active && contract.validFrom <= record.date && (!contract.validTo || contract.validTo >= record.date))?.contractType).filter(Boolean))
+  const contractLabel = contractTypes.size > 1 ? 'Více pracovních vztahů' : contractTypes.has('dpc') ? 'DPČ' : contractTypes.has('other') ? 'Jiný pracovní vztah' : contractTypes.has('dpp') ? 'DPP' : 'Neuvedeno'
   rows.forEach((row) => totals.set(row.workplace, (totals.get(row.workplace) ?? 0) + row.durationMs))
   return {
     workerName,
@@ -74,6 +78,7 @@ export function buildAttendanceReport(
       .filter((record) => record.date.startsWith(year))
       .reduce((sum, record) => sum + duration(record, now), 0),
     annualLimitHours,
+    contractLabel,
     generatedAt: now,
   }
 }
@@ -96,7 +101,7 @@ function drawPage(report: AttendanceReport, rows: AttendanceReportRow[], page: n
   context.fillText(`Měsíc: ${report.monthLabel}`, 74, 195)
   context.fillText(`Pracovník: ${report.workerName}`, 74, 233)
   context.fillText(`Pracoviště: ${workplaces}`, 74, 271)
-  context.fillText('Typ: DPP', 74, 309)
+  context.fillText(`Typ: ${report.contractLabel}`, 74, 309)
 
   const columns = [74, 235, 325, 650, 805, 960]
   let y = 372
@@ -134,7 +139,7 @@ function drawPage(report: AttendanceReport, rows: AttendanceReportRow[], page: n
     context.font = '700 24px Arial, sans-serif'
     context.fillText(`Celkem za rok: ${reportDuration(report.yearMs)}`, 74, y)
     y += 38
-    context.fillText(`DPP: ${reportDuration(report.yearMs)} / ${report.annualLimitHours} h`, 74, y)
+    if (report.contractLabel === 'DPP') context.fillText(`DPP: ${reportDuration(report.yearMs)} / ${report.annualLimitHours} h`, 74, y)
   }
   context.fillStyle = '#617772'
   context.font = '18px Arial, sans-serif'

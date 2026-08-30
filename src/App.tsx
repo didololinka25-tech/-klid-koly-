@@ -24,6 +24,7 @@ import {
   type Profile,
   type StockItem,
   type UserProfile,
+  type WorkerContract,
   type Workplace,
 } from "./schoolRepository";
 import {
@@ -115,9 +116,13 @@ export default function App() {
     plannedShiftsPerWeek: 3,
     configurable: false,
   });
+  const [workerContracts, setWorkerContracts] = useState<WorkerContract[]>([]);
   const [appSettings, setAppSettings] = useState<AppSettings>({
     dppAnnualLimitHours: 300,
+    dpcWeeklyHoursReference: 20,
+    dpcReferencePeriodWeeks: 26,
     available: false,
+    contractsAvailable: false,
   });
   const [workplaces, setWorkplaces] = useState<Workplace[]>([]);
   const [attendanceBuildingId, setAttendanceBuildingId] = useState("");
@@ -169,7 +174,7 @@ export default function App() {
       setAppSettings(
         appSettingsResult.status === "fulfilled"
           ? appSettingsResult.value
-          : { dppAnnualLimitHours: 300, available: false },
+          : { dppAnnualLimitHours: 300, dpcWeeklyHoursReference: 20, dpcReferencePeriodWeeks: 26, available: false, contractsAvailable: false },
       );
       const taskResult = await Promise.resolve(
         schoolRepository.tasks(activeProfile, canManageOperations(activeProfile)),
@@ -297,10 +302,12 @@ export default function App() {
     Promise.all([
       schoolRepository.attendance(workerId),
       schoolRepository.attendanceSettings(workerId),
+      schoolRepository.workerContracts(workerId),
     ])
-      .then(([records, settings]) => {
+      .then(([records, settings, contracts]) => {
         setAttendanceView(records);
         setAttendanceSettings(settings);
+        setWorkerContracts(contracts);
       })
       .catch((error) => setNotice(error.message));
   }, [profile, selectedAttendanceWorker, attendanceRefresh]);
@@ -622,6 +629,26 @@ export default function App() {
       throw error;
     }
   };
+  const saveWorkerContract = async (contract: WorkerContract) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveWorkerContract(contract);
+      setWorkerContracts(await schoolRepository.workerContracts(contract.workerId));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Pracovní vztah se nepodařilo uložit.");
+      throw error;
+    }
+  };
+  const saveDpcSettings = async (weeklyHours: number, referenceWeeks: number) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveDpcSettings(weeklyHours, referenceWeeks);
+      setAppSettings(await schoolRepository.appSettings());
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Nastavení DPČ se nepodařilo uložit.");
+      throw error;
+    }
+  };
   const saveTask = async (task: Task) => {
     try {
       setNotice("");
@@ -774,7 +801,7 @@ export default function App() {
     <main className="app">
       <header>
         <div>
-          <p className="eyebrow">ÚKLID ŠKOLY · ŠKOLA</p>
+          <p className="eyebrow">ÚKLID ŠKOLY</p>
           <h1>{section}</h1>
           <p className="date">{todayLabel}</p>
         </div>
@@ -874,6 +901,8 @@ export default function App() {
           onSelectWorker={setSelectedAttendanceWorker}
           settings={attendanceSettings}
           dppAnnualLimitHours={appSettings.dppAnnualLimitHours}
+          appSettings={appSettings}
+          contracts={workerContracts}
           currentUserId={profile.id}
           isCaretaker={canManageOperations(profile)}
           onClock={clock}
@@ -885,6 +914,7 @@ export default function App() {
           onSaveAttendance={saveAttendance}
           onDeleteAttendance={deleteAttendance}
           onSaveSettings={saveAttendanceSettings}
+          onSaveContract={saveWorkerContract}
         />
       )}
       {section === "Kalendář" && (
@@ -893,7 +923,7 @@ export default function App() {
           available={cleaningDaysAvailable}
           taskSelectionAvailable={cleaningTaskSelectionAvailable}
           canManage={canManageOperations(profile)}
-          buildingId={planOptions.buildings.find((item) => item.name === "Škola")?.id ?? ""}
+          buildings={planOptions.buildings}
           tasks={tasks}
           onSave={saveCleaningDay}
           onCancel={cancelCleaningDay}
@@ -938,6 +968,7 @@ export default function App() {
           appSettings={appSettings}
           onSaveWorkplace={saveWorkplace}
           onSaveDppLimit={saveDppLimit}
+          onSaveDpcSettings={saveDpcSettings}
         />
       )}
       {profileEditorOpen && (
@@ -1174,6 +1205,8 @@ function AttendanceDashboard({
   onSelectWorker,
   settings,
   dppAnnualLimitHours,
+  appSettings,
+  contracts,
   currentUserId,
   isCaretaker,
   onClock,
@@ -1185,6 +1218,7 @@ function AttendanceDashboard({
   onSaveAttendance,
   onDeleteAttendance,
   onSaveSettings,
+  onSaveContract,
 }: {
   records: Attendance[];
   workers: AttendanceWorker[];
@@ -1192,6 +1226,8 @@ function AttendanceDashboard({
   onSelectWorker: (id: string) => void;
   settings: AttendanceSettings;
   dppAnnualLimitHours: number;
+  appSettings: AppSettings;
+  contracts: WorkerContract[];
   currentUserId: string;
   isCaretaker: boolean;
   onClock: () => Promise<void>;
@@ -1208,6 +1244,7 @@ function AttendanceDashboard({
   ) => Promise<void>;
   onDeleteAttendance: (id: string, workerId: string) => Promise<void>;
   onSaveSettings: (value: number) => Promise<void>;
+  onSaveContract: (contract: WorkerContract) => Promise<void>;
 }) {
   const now = useCurrentTime();
   const [editingRecord, setEditingRecord] = useState<Attendance | null>(null);
@@ -1230,6 +1267,10 @@ function AttendanceDashboard({
     [records, now, settings.plannedShiftsPerWeek, dppAnnualLimitHours],
   );
   const isOwn = selectedWorkerId === currentUserId;
+  const todayKey = pragueDateKey(now);
+  const currentContract = contracts.find((contract) => contract.active && contract.validFrom <= todayKey && (!contract.validTo || contract.validTo >= todayKey));
+  const isDpp = currentContract?.contractType === "dpp";
+  const isDpc = currentContract?.contractType === "dpc";
   const progress = Math.min(
     100,
     (metrics.yearHours / dppAnnualLimitHours) * 100,
@@ -1292,25 +1333,21 @@ function AttendanceDashboard({
           <small>TENTO MĚSÍC</small>
           <strong>{formatDuration(metrics.monthMs)}</strong>
         </article>
-        <article>
-          <small>ROK – DPP</small>
-          <strong>
-            {metrics.yearHours.toFixed(1)} / {dppAnnualLimitHours} h
-          </strong>
-          <span>Zbývá {metrics.remainingHours.toFixed(1)} h</span>
-        </article>
+        {isDpp ? <article><small>ROK – DPP</small><strong>{metrics.yearHours.toFixed(1)} / {dppAnnualLimitHours} h</strong><span>Zbývá {metrics.remainingHours.toFixed(1)} h</span></article>
+          : isDpc ? <article><small>TÝDEN – DPČ</small><strong>{(metrics.weekMs / HOUR_MS).toFixed(1)} h</strong><span>plánovací údaj {appSettings.dpcWeeklyHoursReference} h / týden</span></article>
+          : <article><small>PRACOVNÍ VZTAH</small><strong>Není nastaven</strong><span>Správce doplní platnost smlouvy.</span></article>}
       </div>
-      <div className="dpp-progress" aria-label="Čerpání ročního limitu DPP">
+      {isDpp && <div className="dpp-progress" aria-label="Čerpání ročního limitu DPP">
         <span style={{ width: `${progress}%` }} />
-      </div>
-      {yearWarning && (
+      </div>}
+      {isDpp && yearWarning && (
         <div
           className={`attendance-alert ${metrics.yearHours >= dppAnnualLimitHours * (280 / 300) ? "danger" : ""}`}
         >
           {yearWarning}
         </div>
       )}
-      <section className="pace-card">
+      {isDpp && <section className="pace-card">
         <p className="eyebrow">DOPORUČENÉ TEMPO</p>
         <strong>
           Průměr do konce roku: cca {metrics.recommendedWeeklyHours.toFixed(1)} h
@@ -1350,7 +1387,8 @@ function AttendanceDashboard({
         {!settings.configurable && (
           <small>Nastavení bude dostupné po aplikaci připravené migrace.</small>
         )}
-      </section>
+      </section>}
+      {isDpc && <section className="pace-card"><p className="eyebrow">DPČ</p><strong>Týden Po–Ne: {formatDuration(metrics.weekMs)}</strong><p>Měsíc: {formatDuration(metrics.monthMs)}</p><small>{appSettings.dpcWeeklyHoursReference} hodin týdně je plánovací údaj, nikoli automatický zákaz evidence skutečné práce. Referenční období: {appSettings.dpcReferencePeriodWeeks} týdnů.</small></section>}
       <ShiftWarnings records={records} now={now} />
       <section className="week-detail">
         <h2>Aktuální týden</h2>
@@ -1386,7 +1424,9 @@ function AttendanceDashboard({
         now={now}
         workerName={selectedName}
         dppAnnualLimitHours={dppAnnualLimitHours}
+        contracts={contracts}
       />
+      {isCaretaker && <WorkerContractsPanel workerId={selectedWorkerId} contracts={contracts} onSave={onSaveContract} />}
       <AttendanceHistory
         records={records}
         now={now}
@@ -1422,16 +1462,36 @@ function AttendanceDashboard({
   );
 }
 
+function WorkerContractsPanel({ workerId, contracts, onSave }: { workerId: string; contracts: WorkerContract[]; onSave: (contract: WorkerContract) => Promise<void> }) {
+  const [editing, setEditing] = useState<WorkerContract | null>(null);
+  const [saving, setSaving] = useState(false);
+  const label = (value: WorkerContract["contractType"]) => value === "dpp" ? "DPP" : value === "dpc" ? "DPČ" : "Jiný vztah";
+  return <section className="worker-contracts panel"><div className="section-heading"><span><p className="eyebrow">PRACOVNÍ VZTAHY</p><h2>Historie smluv</h2></span><button onClick={() => setEditing({ id: "", workerId, contractType: "dpp", validFrom: localDateKey(), validTo: undefined, note: "", active: true })}>+ Přidat</button></div>
+    {contracts.map((contract) => <button className="contract-row" key={contract.id} onClick={() => setEditing(contract)}><span><b>{label(contract.contractType)}</b><small>{formatDate(contract.validFrom)} – {contract.validTo ? formatDate(contract.validTo) : "dosud"}{contract.active ? "" : " · neaktivní"}</small></span><i>Upravit</i></button>)}
+    {!contracts.length && <p className="hint">Pracovní vztah zatím není nastaven. Datum zahájení se úmyslně nehádá.</p>}
+    {editing && <div className="confirmation-backdrop" role="dialog" aria-modal="true"><form className="confirmation-dialog" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave(editing); setEditing(null); } finally { setSaving(false); } }}><h2>{editing.id ? "Upravit pracovní vztah" : "Nový pracovní vztah"}</h2>
+      <label>Typ<select value={editing.contractType} onChange={(event) => setEditing({ ...editing, contractType: event.target.value as WorkerContract["contractType"] })}><option value="dpp">DPP</option><option value="dpc">DPČ</option><option value="other">Jiný vztah</option></select></label>
+      <label>Platí od<input type="date" required value={editing.validFrom} onChange={(event) => setEditing({ ...editing, validFrom: event.target.value })} /></label>
+      <label>Platí do<input type="date" value={editing.validTo ?? ""} onChange={(event) => setEditing({ ...editing, validTo: event.target.value || undefined })} /></label>
+      <label>Poznámka<textarea rows={2} value={editing.note} onChange={(event) => setEditing({ ...editing, note: event.target.value })} /></label>
+      <label className="switch"><input type="checkbox" checked={editing.active} onChange={(event) => setEditing({ ...editing, active: event.target.checked })} /> Aktivní</label>
+      <div className="editor-actions"><button type="button" onClick={() => setEditing(null)} disabled={saving}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+    </form></div>}
+  </section>;
+}
+
 function MonthlyAttendanceReport({
   records,
   now,
   workerName,
   dppAnnualLimitHours,
+  contracts,
 }: {
   records: Attendance[];
   now: Date;
   workerName: string;
   dppAnnualLimitHours: number;
+  contracts: WorkerContract[];
 }) {
   const [month, setMonth] = useState(localDateKey(now).slice(0, 7));
   const [preview, setPreview] = useState(false);
@@ -1443,8 +1503,9 @@ function MonthlyAttendanceReport({
         month,
         dppAnnualLimitHours,
         now,
+        contracts,
       ),
-    [records, workerName, month, dppAnnualLimitHours, now],
+    [records, workerName, month, dppAnnualLimitHours, now, contracts],
   );
   return (
     <section className="monthly-report">
@@ -1460,7 +1521,7 @@ function MonthlyAttendanceReport({
       <div className="monthly-report-summary">
         <span>Celkem za měsíc <b>{reportDuration(report.monthMs)}</b></span>
         <span>Celkem za rok <b>{reportDuration(report.yearMs)}</b></span>
-        <span className="report-dpp">DPP <b>{reportDuration(report.yearMs)} / {dppAnnualLimitHours} h</b></span>
+        <span className="report-dpp">{report.contractLabel}{report.contractLabel === "DPP" && <b> {reportDuration(report.yearMs)} / {dppAnnualLimitHours} h</b>}</span>
       </div>
       <div className="report-actions">
         <button onClick={() => setPreview((value) => !value)}>
@@ -1488,7 +1549,7 @@ function AttendanceReportPreview({
         <span>Měsíc: {report.monthLabel}</span>
         <span>Pracovník: {report.workerName}</span>
         <span>Pracoviště: {report.workplaces.join(", ") || "—"}</span>
-        <span>Typ: DPP</span>
+        <span>Typ: {report.contractLabel}</span>
       </header>
       <div className="report-rows">
         {report.rows.map((row) => (
@@ -1507,7 +1568,7 @@ function AttendanceReportPreview({
           <span key={total.name}>{total.name}: {reportDuration(total.durationMs)}</span>
         ))}
         <b>Celkem za rok: {reportDuration(report.yearMs)}</b>
-        <b>DPP: {reportDuration(report.yearMs)} / {report.annualLimitHours} h</b>
+        {report.contractLabel === "DPP" && <b>DPP: {reportDuration(report.yearMs)} / {report.annualLimitHours} h</b>}
         <small>Vygenerováno z evidence docházky Klid Koly</small>
       </footer>
     </div>
@@ -1784,42 +1845,25 @@ function TaskHierarchy({
   guides: ManualEntry[];
 }) {
   const finalChecks = tasks.filter(isFinalCheckTask);
-  const common = tasks.filter((task) => !task.roomId && !isFinalCheckTask(task));
-  const roomTasks = tasks.filter((task) => task.roomId && !isFinalCheckTask(task));
-  const floorGroups = new Map<string, Task[]>();
-  roomTasks
-    .forEach((task) =>
-      floorGroups.set(`${task.building}|${task.floor}`, [
-        ...(floorGroups.get(`${task.building}|${task.floor}`) ?? []),
-        task,
-      ]),
-    );
+  const workTasks = tasks.filter((task) => !isFinalCheckTask(task));
+  const buildings = new Map<string, Task[]>();
+  workTasks.forEach((task) => buildings.set(task.building, [...(buildings.get(task.building) ?? []), task]));
   return (
     <>
-      {common.length > 0 && (
-        <section className="shared-tasks">
-          <h2>Společné úkoly</h2>
-          <TaskRows
-            tasks={common}
-            onComplete={onComplete}
-            pendingTaskIds={pendingTaskIds}
-            guides={guides}
-          />
-        </section>
-      )}
-      {[...floorGroups.entries()]
-        .sort(([, a], [, b]) => a[0].floorSort - b[0].floorSort)
-        .map(([key, floorTasks]) => (
-          <FloorGroup
-            key={key}
-            label={key.split("|")[1]}
-            tasks={floorTasks}
-            onComplete={onComplete}
-            onCompleteAll={onCompleteAll}
-            pendingTaskIds={pendingTaskIds}
-            guides={guides}
-          />
-        ))}
+      {[...buildings.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([building, buildingTasks]) => {
+        const common = buildingTasks.filter((task) => !task.roomId);
+        const floorGroups = new Map<string, Task[]>();
+        buildingTasks.filter((task) => task.roomId).forEach((task) => floorGroups.set(task.floor, [...(floorGroups.get(task.floor) ?? []), task]));
+        const done = buildingTasks.filter((task) => task.done).length;
+        return <section className="building-task-group" key={building}>
+          <header className="building-task-heading"><span><p className="eyebrow">PRACOVIŠTĚ</p><h2>{building}</h2></span><b>{done}/{buildingTasks.length}</b></header>
+          <ProgressBar value={done} total={buildingTasks.length} label={`Průběh: ${building}`} />
+          {common.length > 0 && <section className="shared-tasks"><h2>Společné úkoly</h2><TaskRows tasks={common} onComplete={onComplete} pendingTaskIds={pendingTaskIds} guides={guides} /></section>}
+          {[...floorGroups.entries()].sort(([, a], [, b]) => a[0].floorSort - b[0].floorSort).map(([floor, floorTasks]) => (
+            <FloorGroup key={`${building}|${floor}`} label={floor} tasks={floorTasks} onComplete={onComplete} onCompleteAll={onCompleteAll} pendingTaskIds={pendingTaskIds} guides={guides} />
+          ))}
+        </section>;
+      })}
       {finalChecks.length > 0 && (
         <section className="shared-tasks final-checks">
           <div className="section-heading">
@@ -2127,7 +2171,7 @@ function PlanManager({
               );
               return (
                 <details key={floor.id} className="admin-floor">
-                  <summary><b>{floor.name}</b><span>{floorTaskCount} úkolů</span></summary>
+                  <summary><b>{options.buildings.find((building) => building.id === floor.buildingId)?.name ?? "Pracoviště"} · {floor.name}</b><span>{floorTaskCount} úkolů</span></summary>
                   {rooms.map((room) => {
                     const roomTasks = tasks
                       .filter((task) => task.roomId === room.id && task.active)
@@ -2199,22 +2243,21 @@ function RoomManager({
   onSaveFloor: (floor: ManagedFloor) => Promise<void>;
   onSetActive: (roomId: string, active: boolean) => Promise<void>;
 }) {
-  const school =
-    options.buildings.find((building) => building.name === "Škola") ??
-    options.buildings[0];
-  const schoolFloors = options.floors
-    .filter((floor) => !school || floor.buildingId === school.id)
+  const [selectedBuildingId, setSelectedBuildingId] = useState(options.buildings.find((building) => building.name === "Škola")?.id ?? options.buildings[0]?.id ?? "");
+  const selectedBuilding = options.buildings.find((building) => building.id === selectedBuildingId) ?? options.buildings[0];
+  const buildingFloors = options.floors
+    .filter((floor) => !selectedBuilding || floor.buildingId === selectedBuilding.id)
     .sort((a, b) => a.sortOrder - b.sortOrder);
   const [editingRoom, setEditingRoom] = useState<ManagedRoom | null>(null);
   const [editingFloor, setEditingFloor] = useState<ManagedFloor | null>(null);
-  const inactiveRooms = options.rooms.filter((room) => !room.active);
+  const inactiveRooms = options.rooms.filter((room) => !room.active && (!selectedBuilding || room.buildingId === selectedBuilding.id));
   const addRoom = (floorId: string) => {
-    const floor = schoolFloors.find((item) => item.id === floorId);
-    if (!floor || !school) return;
+    const floor = buildingFloors.find((item) => item.id === floorId);
+    if (!floor || !selectedBuilding) return;
     const floorRooms = options.rooms.filter((room) => room.floorId === floor.id);
     setEditingRoom({
       id: "",
-      buildingId: school.id,
+      buildingId: selectedBuilding.id,
       floorId: floor.id,
       name: "",
       active: true,
@@ -2252,9 +2295,10 @@ function RoomManager({
         />
       ) : (
         <>
-          {school && <button className="add-task" onClick={() => setEditingFloor({ id: "", buildingId: school.id, name: "", sortOrder: Math.max(0, ...schoolFloors.map((floor) => floor.sortOrder)) + 10 })}>+ Přidat patro / sekci</button>}
+          <label className="admin-building-picker">Pracoviště<select value={selectedBuildingId} onChange={(event) => setSelectedBuildingId(event.target.value)}>{options.buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>
+          {selectedBuilding && <button className="add-task" onClick={() => setEditingFloor({ id: "", buildingId: selectedBuilding.id, name: "", sortOrder: Math.max(0, ...buildingFloors.map((floor) => floor.sortOrder)) + 10 })}>+ Přidat patro / sekci</button>}
           <div className="admin-tree">
-            {schoolFloors.map((floor) => {
+            {buildingFloors.map((floor) => {
               const rooms = options.rooms.filter((room) => room.floorId === floor.id && room.active)
                 .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "cs"));
               return (
@@ -2513,10 +2557,10 @@ function TaskEditor({
           value={draft.roomId ?? ""}
           onChange={(event) => setRoom(event.target.value)}
         >
-          <option value="">Společný úkol pro školu</option>
+          <option value="">Společný úkol</option>
           {options.rooms.filter((room) => room.active || room.id === draft.roomId).map((room) => (
             <option key={room.id} value={room.id}>
-              {room.floor} · {room.name}
+              {room.building} · {room.floor} · {room.name}
             </option>
           ))}
         </select>
@@ -2914,6 +2958,7 @@ function MoreScreen({
   appSettings,
   onSaveWorkplace,
   onSaveDppLimit,
+  onSaveDpcSettings,
 }: {
   profile: Profile;
   pendingCount: number;
@@ -2926,6 +2971,7 @@ function MoreScreen({
   appSettings: AppSettings;
   onSaveWorkplace: (workplace: Workplace) => Promise<void>;
   onSaveDppLimit: (value: number) => Promise<void>;
+  onSaveDpcSettings: (weeklyHours: number, referenceWeeks: number) => Promise<void>;
 }) {
   const admin = canManageOperations(profile);
   return (
@@ -2968,10 +3014,19 @@ function MoreScreen({
           available={appSettings.available}
           onSave={onSaveDppLimit}
         />
+        <DpcSettings value={appSettings.dpcWeeklyHoursReference} weeks={appSettings.dpcReferencePeriodWeeks} editable={admin && appSettings.contractsAvailable} onSave={onSaveDpcSettings} />
         <p className="hint">Přihlášen: {profile.full_name} · {roleLabel(accessRole(profile))}</p>
       </section>
     </div>
   );
+}
+
+function DpcSettings({ value, weeks, editable, onSave }: { value: number; weeks: number; editable: boolean; onSave: (value: number, weeks: number) => Promise<void> }) {
+  const [hours, setHours] = useState(value);
+  const [period, setPeriod] = useState(weeks);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setHours(value); setPeriod(weeks); }, [value, weeks]);
+  return <div className="dpp-setting"><label>Plánovací údaj DPČ<input type="number" min="1" max="80" step="0.5" value={hours} disabled={!editable} onChange={(event) => setHours(Number(event.target.value))} /></label><span>hodin týdně · celé týdny Po–Ne</span><label>Referenční období<input type="number" min="1" max="52" value={period} disabled={!editable} onChange={(event) => setPeriod(Number(event.target.value))} /></label><span>týdnů</span>{editable && <button disabled={saving || (hours === value && period === weeks)} onClick={async () => { setSaving(true); try { await onSave(hours, period); } finally { setSaving(false); } }}>{saving ? "Ukládám…" : "Uložit DPČ"}</button>}</div>;
 }
 
 function WorkplaceSettings({
@@ -3248,7 +3303,7 @@ function IncidentEditor({ item, rooms, onSave, onCancel }: { item?: Incident; ro
   return (
     <form className="operation-editor" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave({ id: item?.id, title, note, roomId: roomId || null }); } finally { setSaving(false); } }}>
       <label>Co je rozbité<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Např. Nefunguje světlo" required /></label>
-      <label>Místnost<select value={roomId} onChange={(event) => setRoomId(event.target.value)}><option value="">Místo neuvedeno</option>{rooms.map((room) => <option key={room.id} value={room.id}>{room.floor} · {room.name}</option>)}</select></label>
+      <label>Místnost<select value={roomId} onChange={(event) => setRoomId(event.target.value)}><option value="">Místo neuvedeno</option>{rooms.map((room) => <option key={room.id} value={room.id}>{room.building} · {room.floor} · {room.name}</option>)}</select></label>
       <label>Poznámka<textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="Volitelné upřesnění" /></label>
       <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
     </form>
@@ -3270,9 +3325,11 @@ function taskScheduleInput(task: Task) {
 }
 
 function dueTasksForDate(tasks: Task[], records: CleaningDayRecord[], date: string) {
-  const context = resolveCleaningDay(date, records);
   return tasks.filter((task) => task.active && task.roomActive !== false)
-    .filter((task) => isTaskDueForCleaningDay(taskScheduleInput(task), context));
+    .filter((task) => {
+      const context = resolveCleaningDay(date, records.filter((record) => !task.buildingId || record.buildingId === task.buildingId));
+      return isTaskDueForCleaningDay(taskScheduleInput(task), context);
+    });
 }
 
 function floorPictogram(floor: string) {
@@ -3281,24 +3338,25 @@ function floorPictogram(floor: string) {
 }
 
 function CalendarDayDetail({ date, tasks, context }: { date: string; tasks: Task[]; context: CleaningDayContext }) {
-  const floors = new Map<string, Map<string, Task[]>>();
+  const buildings = new Map<string, Map<string, Map<string, Task[]>>>();
   tasks.forEach((task) => {
+    const floors = buildings.get(task.building) ?? new Map<string, Map<string, Task[]>>();
     const rooms = floors.get(task.floor) ?? new Map<string, Task[]>();
     rooms.set(task.room, [...(rooms.get(task.room) ?? []), task]);
     floors.set(task.floor, rooms);
+    buildings.set(task.building, floors);
   });
   return (
     <section className="calendar-day-detail">
       <header><span><small>{context.kind === "extraordinary" ? "MIMOŘÁDNÝ ÚKLID" : context.kind === "rescheduled" ? "PŘESUNUTÝ ÚKLID" : "PLÁN DNE"}</small><b>{formatDate(date)}</b></span><strong>{tasks.length} úkolů</strong></header>
       {context.note && <p>{context.note}</p>}
-      {[...floors.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([floor, rooms]) => (
-        <details key={floor} open className="calendar-detail-floor">
-          <summary><b>{floor}</b><span>{[...rooms.values()].reduce((sum, items) => sum + items.length, 0)}</span></summary>
-          {[...rooms.entries()].map(([room, roomTasks]) => (
-            <article key={room} className="calendar-detail-room"><b>{room}</b><div>{roomTasks.sort((a, b) => a.sortOrder - b.sortOrder).map((task) => <span key={task.id}><i>{activityTypes[task.activityType]?.icon ?? "✓"}</i>{task.title}</span>)}</div></article>
-          ))}
-        </details>
-      ))}
+      {[...buildings.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([building, floors]) => <section className="calendar-detail-building" key={building}><h3>{building}</h3>
+        {[...floors.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([floor, rooms]) => (
+          <details key={floor} open className="calendar-detail-floor"><summary><b>{floor}</b><span>{[...rooms.values()].reduce((sum, items) => sum + items.length, 0)}</span></summary>
+            {[...rooms.entries()].map(([room, roomTasks]) => <article key={room} className="calendar-detail-room"><b>{room}</b><div>{roomTasks.sort((a, b) => a.sortOrder - b.sortOrder).map((task) => <span key={task.id}><i>{activityTypes[task.activityType]?.icon ?? "✓"}</i>{task.title}</span>)}</div></article>)}
+          </details>
+        ))}
+      </section>)}
       {!tasks.length && <p className="hint">V tento den není naplánovaný úklid.</p>}
     </section>
   );
@@ -3309,7 +3367,7 @@ function CleaningCalendar({
   available,
   taskSelectionAvailable,
   canManage,
-  buildingId,
+  buildings,
   tasks,
   onSave,
   onCancel,
@@ -3318,12 +3376,13 @@ function CleaningCalendar({
   available: boolean;
   taskSelectionAvailable: boolean;
   canManage: boolean;
-  buildingId: string;
+  buildings: PlanOptions["buildings"];
   tasks: Task[];
   onSave: (draft: CleaningDayDraft) => Promise<void>;
   onCancel: (id: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState<CleaningDayRecord | "new" | null>(null);
+  const [buildingId, setBuildingId] = useState(buildings.find((item) => item.name === "Škola")?.id ?? buildings[0]?.id ?? "");
   const today = localDateKey();
   const [month, setMonth] = useState(today.slice(0, 7));
   const [selectedDate, setSelectedDate] = useState(today);
@@ -3354,7 +3413,7 @@ function CleaningCalendar({
         <div className="notice">Správa skutečných mimořádných a přesunutých dnů bude dostupná po zkontrolování a aplikaci migrace 01300.</div>
       )}
       {available && canManage && !editing && (
-        <button className="primary-action" onClick={() => setEditing("new")}>+ Přidat úklidový den</button>
+        <><label className="calendar-building-picker">Pracoviště<select value={buildingId} onChange={(event) => setBuildingId(event.target.value)}>{buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label><button className="primary-action" onClick={() => setEditing("new")}>+ Přidat úklidový den</button></>
       )}
       {available && editing && (
         <CleaningDayEditor
@@ -3561,6 +3620,7 @@ function CleaningDayEditor({
   onCancel: () => void;
   onSave: (draft: CleaningDayDraft) => Promise<void>;
 }) {
+  const workplaceTasks = tasks.filter((task) => !task.buildingId || task.buildingId === buildingId);
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const [kind, setKind] = useState<"extraordinary" | "rescheduled">(record?.kind ?? "extraordinary");
@@ -3569,13 +3629,13 @@ function CleaningDayEditor({
   const [title, setTitle] = useState(record?.title ?? "");
   const [note, setNote] = useState(record?.note ?? "");
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
-    () => selectedTasksForExtraordinaryDay(tasks, record?.executionDate ?? localDateKey(tomorrow), record?.taskOverrides),
+    () => selectedTasksForExtraordinaryDay(workplaceTasks, record?.executionDate ?? localDateKey(tomorrow), record?.taskOverrides),
   );
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     if (kind !== "extraordinary") return;
-    setSelectedTaskIds(selectedTasksForExtraordinaryDay(tasks, executionDate, record?.taskOverrides));
-  }, [kind, executionDate, record?.id, record?.taskOverrides, tasks]);
+    setSelectedTaskIds(selectedTasksForExtraordinaryDay(workplaceTasks, executionDate, record?.taskOverrides));
+  }, [kind, executionDate, record?.id, record?.taskOverrides, tasks, buildingId]);
   return (
     <form className="task-editor cleaning-day-editor" onSubmit={async (event) => {
       event.preventDefault();
@@ -3606,7 +3666,7 @@ function CleaningDayEditor({
       <label>Rozsah<input value="Celá škola · běžný kompletní úklid" readOnly /></label>
       {kind === "extraordinary" && taskSelectionAvailable && (
         <ExtraordinaryTaskSelector
-          tasks={tasks}
+          tasks={workplaceTasks}
           executionDate={executionDate}
           selected={selectedTaskIds}
           onChange={setSelectedTaskIds}

@@ -51,8 +51,8 @@ export type CleaningDayDraft = {
   selectedTaskIds?: string[]
 }
 export type StockItem = { id: string; name: string; note: string; status: 'needed' | 'resolved'; createdBy?: string | null }
-export type Incident = { id: string; date: string; title: string; note: string; status: string; roomId?: string | null; room: string; floor: string; createdBy?: string | null }
-export type OperationRoom = { id: string; name: string; floor: string }
+export type Incident = { id: string; date: string; title: string; note: string; status: string; buildingId?: string | null; building: string; roomId?: string | null; room: string; floor: string; createdBy?: string | null }
+export type OperationRoom = { id: string; buildingId: string; building: string; name: string; floor: string }
 export type OperationsData = { stock: StockItem[]; incidents: Incident[]; rooms: OperationRoom[]; editable: boolean }
 export type ManagedRoom = { id: string; buildingId: string; floorId: string | null; name: string; active: boolean; sortOrder: number }
 export type ManagedFloor = { id: string; buildingId: string; name: string; sortOrder: number }
@@ -78,7 +78,9 @@ export type AttendanceAuditEntry = {
   changedAt: string
   changeKind: 'clock_out' | 'correction'
 }
-export type AppSettings = { dppAnnualLimitHours: number; available: boolean }
+export type ContractType = 'dpp' | 'dpc' | 'other'
+export type WorkerContract = { id: string; workerId: string; contractType: ContractType; validFrom: string; validTo?: string; note: string; active: boolean; createdAt?: string; updatedAt?: string }
+export type AppSettings = { dppAnnualLimitHours: number; dpcWeeklyHoursReference: number; dpcReferencePeriodWeeks: number; available: boolean; contractsAvailable: boolean }
 export type Workplace = { id: string; name: string; active: boolean }
 export type PlanOptions = {
   buildings: { id: string; name: string }[]
@@ -188,7 +190,8 @@ export const schoolRepository = {
     if (overrideResult.error && !missingRelation(overrideResult.error)) throw overrideResult.error
     const overrides = mapCleaningDayOverrides(overrideResult.data ?? [])
     const exceptions = (exceptionResult.data ?? []).map((row: any) => mapCleaningDay(row, overrides.get(row.id)))
-    const cleaningDay = resolveCleaningDay(date, exceptions, isTestCleaningDay)
+    const defaultBuildingId = (buildings ?? []).find((item: any) => item.name === 'Škola')?.id
+    const cleaningDay = resolveCleaningDay(date, exceptions.filter((item) => item.buildingId === defaultBuildingId), isTestCleaningDay)
     const roomById = new Map((rooms ?? []).map((room: any) => [room.id, room]))
     const floorById = new Map((floors ?? []).map((floor: any) => [floor.id, floor]))
     const buildingById = new Map((buildings ?? []).map((building: any) => [building.id, building]))
@@ -204,9 +207,9 @@ export const schoolRepository = {
       const scheduleDays = Array.isArray(row.schedule_days) ? row.schedule_days.map(Number) : []
       return {
         id: row.id, planKey: row.plan_key ?? null, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1,
-        building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
+        buildingId: building?.id ?? defaultBuildingId, building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
         assignedTo: 'Úklidový tým', done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile) && !isTestCleaningDay,
-        dueToday: room?.active !== false && isTaskDueForCleaningDay(row, cleaningDay), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
+        dueToday: room?.active !== false && isTaskDueForCleaningDay(row, resolveCleaningDay(date, exceptions.filter((item) => item.buildingId === (building?.id ?? defaultBuildingId)), isTestCleaningDay)), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
         active: row.active, roomActive: room?.active ?? true,
         cleaningCycleLength: row.cleaning_cycle_length, cleaningCycleOffset: row.cleaning_cycle_offset,
         periodMonths: row.period_months, periodWeek: row.period_week, periodAnchorMonth: row.period_anchor_month,
@@ -252,10 +255,21 @@ export const schoolRepository = {
     if (result.error) throw result.error
   },
   appSettings: async (): Promise<AppSettings> => {
-    const { data, error } = await client().from('app_settings').select('dpp_annual_limit_hours').eq('id', true).maybeSingle()
-    if (error && missingRelation(error)) return { dppAnnualLimitHours: 300, available: false }
+    const { data, error } = await client().from('app_settings').select('dpp_annual_limit_hours,dpc_weekly_hours_reference,dpc_reference_period_weeks').eq('id', true).maybeSingle()
+    if (error && error.code === '42703') {
+      const legacy = await client().from('app_settings').select('dpp_annual_limit_hours').eq('id', true).maybeSingle()
+      if (legacy.error) throw legacy.error
+      return { dppAnnualLimitHours: Number(legacy.data?.dpp_annual_limit_hours ?? 300), dpcWeeklyHoursReference: 20, dpcReferencePeriodWeeks: 26, available: true, contractsAvailable: false }
+    }
+    if (error && missingRelation(error)) return { dppAnnualLimitHours: 300, dpcWeeklyHoursReference: 20, dpcReferencePeriodWeeks: 26, available: false, contractsAvailable: false }
     if (error) throw error
-    return { dppAnnualLimitHours: Number(data?.dpp_annual_limit_hours ?? 300), available: true }
+    return {
+      dppAnnualLimitHours: Number(data?.dpp_annual_limit_hours ?? 300),
+      dpcWeeklyHoursReference: Number(data?.dpc_weekly_hours_reference ?? 20),
+      dpcReferencePeriodWeeks: Number(data?.dpc_reference_period_weeks ?? 26),
+      available: true,
+      contractsAvailable: true,
+    }
   },
   saveDppAnnualLimit: async (value: number) => {
     const { error } = await client().rpc('set_dpp_annual_limit', { value })
@@ -423,11 +437,12 @@ export const schoolRepository = {
   },
   operations: async (): Promise<OperationsData> => {
     const db = client()
-    const [stockResult, incidentResult, roomResult, floorResult] = await Promise.all([
+    const [stockResult, incidentResult, roomResult, floorResult, buildingResult] = await Promise.all([
       db.from('stock_items').select('id,name,note,status,created_by').eq('active', true).order('created_at', { ascending: false }),
       db.from('incidents').select('id,incident_date,title,note,status,room_id,worker_id').eq('active', true).order('incident_date', { ascending: false }).limit(100),
-      db.from('rooms').select('id,name,floor_id').eq('active', true).order('sort_order'),
+      db.from('rooms').select('id,name,floor_id,building_id').eq('active', true).order('sort_order'),
       db.from('floors').select('id,name,sort_order').order('sort_order'),
+      db.from('buildings').select('id,name').eq('active', true).order('name'),
     ])
     const schemaMissing = [stockResult.error, incidentResult.error].some((error) => error?.code === '42703' || error?.message.includes('column'))
     if (schemaMissing) {
@@ -438,19 +453,20 @@ export const schoolRepository = {
       if (legacyStock.error || legacyIncidents.error) throw legacyStock.error ?? legacyIncidents.error
       return {
         stock: (legacyStock.data ?? []).map((item: any) => ({ id: item.id, name: item.name, note: '', status: 'needed', createdBy: null })),
-        incidents: (legacyIncidents.data ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, title: item.description, note: '', status: item.status, roomId: item.room_id, room: '', floor: '', createdBy: item.worker_id })),
+        incidents: (legacyIncidents.data ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, title: item.description, note: '', status: item.status, building: '', roomId: item.room_id, room: '', floor: '', createdBy: item.worker_id })),
         rooms: [],
         editable: false,
       }
     }
-    const error = stockResult.error ?? incidentResult.error ?? roomResult.error ?? floorResult.error
+    const error = stockResult.error ?? incidentResult.error ?? roomResult.error ?? floorResult.error ?? buildingResult.error
     if (error) throw error
     const floors = new Map((floorResult.data ?? []).map((floor: any) => [floor.id, floor.name]))
-    const rooms = (roomResult.data ?? []).map((room: any) => ({ id: room.id, name: room.name, floor: floors.get(room.floor_id) ?? 'Společné' }))
+    const buildings = new Map((buildingResult.data ?? []).map((building: any) => [building.id, building.name]))
+    const rooms = (roomResult.data ?? []).map((room: any) => ({ id: room.id, buildingId: room.building_id, building: buildings.get(room.building_id) ?? 'Pracoviště', name: room.name, floor: floors.get(room.floor_id) ?? 'Společné' }))
     const roomMap = new Map(rooms.map((room) => [room.id, room]))
     return {
       stock: (stockResult.data ?? []).map((item: any) => ({ id: item.id, name: item.name, note: item.note ?? '', status: item.status, createdBy: item.created_by })),
-      incidents: (incidentResult.data ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, title: item.title, note: item.note ?? '', status: item.status, roomId: item.room_id, room: roomMap.get(item.room_id)?.name ?? '', floor: roomMap.get(item.room_id)?.floor ?? '', createdBy: item.worker_id })),
+      incidents: (incidentResult.data ?? []).map((item: any) => ({ id: item.id, date: item.incident_date, title: item.title, note: item.note ?? '', status: item.status, buildingId: roomMap.get(item.room_id)?.buildingId ?? null, building: roomMap.get(item.room_id)?.building ?? '', roomId: item.room_id, room: roomMap.get(item.room_id)?.name ?? '', floor: roomMap.get(item.room_id)?.floor ?? '', createdBy: item.worker_id })),
       rooms,
       editable: true,
     }
@@ -476,9 +492,12 @@ export const schoolRepository = {
       if (error) throw error
       return
     }
-    const { data: building, error: buildingError } = await client().from('buildings').select('id').eq('name', 'Škola').single()
-    if (buildingError) throw buildingError
-    const { error } = await client().from('incidents').insert({ worker_id: userId, building_id: building.id, title: item.title.trim(), description: item.title.trim(), note: item.note.trim() || null, room_id: item.roomId || null, status: 'reported', active: true })
+    const selectedRoom = item.roomId ? await client().from('rooms').select('building_id').eq('id', item.roomId).single() : null
+    if (selectedRoom?.error) throw selectedRoom.error
+    const fallback = selectedRoom?.data ? null : await client().from('buildings').select('id').eq('name', 'Škola').single()
+    if (fallback?.error) throw fallback.error
+    const buildingId = selectedRoom?.data?.building_id ?? fallback?.data?.id
+    const { error } = await client().from('incidents').insert({ worker_id: userId, building_id: buildingId, title: item.title.trim(), description: item.title.trim(), note: item.note.trim() || null, room_id: item.roomId || null, status: 'reported', active: true })
     if (error) throw error
   },
   setIncidentStatus: async (id: string, status: 'reported' | 'resolved') => {
@@ -494,6 +513,34 @@ export const schoolRepository = {
     const { data, error } = await client().from('attendance').select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').eq('worker_id', workerId).order('started_at', { ascending: false })
     if (error) throw error
     return (data ?? []).map(mapAttendance)
+  },
+  saveDpcSettings: async (weeklyHours: number, referenceWeeks: number) => {
+    const { error } = await client().rpc('set_dpc_settings', { weekly_hours: weeklyHours, period_weeks: referenceWeeks })
+    if (error) throw error
+  },
+  workerContracts: async (workerId: string): Promise<WorkerContract[]> => {
+    const { data, error } = await client().from('worker_contracts')
+      .select('id,worker_id,contract_type,valid_from,valid_to,note,active,created_at,updated_at')
+      .eq('worker_id', workerId).order('valid_from', { ascending: false })
+    if (error && missingRelation(error)) return []
+    if (error) throw error
+    return (data ?? []).map((row: any) => ({
+      id: row.id, workerId: row.worker_id, contractType: row.contract_type,
+      validFrom: row.valid_from, validTo: row.valid_to, note: row.note ?? '', active: row.active,
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    }))
+  },
+  saveWorkerContract: async (contract: Omit<WorkerContract, 'createdAt' | 'updatedAt'>) => {
+    const { error } = await client().rpc('admin_save_worker_contract', {
+      target_contract_id: contract.id || null,
+      target_worker_id: contract.workerId,
+      target_contract_type: contract.contractType,
+      target_valid_from: contract.validFrom,
+      target_valid_to: contract.validTo || null,
+      target_note: contract.note || '',
+      target_active: contract.active,
+    })
+    if (error) throw error
   },
   attendanceAudit: async (attendanceId: string): Promise<{ entries: AttendanceAuditEntry[]; available: boolean }> => {
     const { data, error } = await client()

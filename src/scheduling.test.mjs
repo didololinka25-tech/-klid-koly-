@@ -17,6 +17,13 @@ test('standardní pondělí, středa a pátek jsou splatné', () => {
   assert.equal(isTaskDueOnDate(everyCleaningDay, '2026-08-28'), true)
 })
 
+test('samostatný plán Školky je splatný v úterý a neovlivní školní Po/St/Pá', () => {
+  const kindergartenTuesday = { frequency: 'cleaning_day', schedule_days: [2] }
+  assert.equal(isTaskDueOnDate(kindergartenTuesday, '2026-09-01'), true)
+  assert.equal(isTaskDueOnDate(kindergartenTuesday, '2026-09-02'), false)
+  assert.equal(isTaskDueOnDate(everyCleaningDay, '2026-09-01'), false)
+})
+
 test('běžná sobota nemá standardní úkol', () => {
   const context = resolveCleaningDay('2026-08-29', [])
   assert.equal(isTaskDueForCleaningDay(everyCleaningDay, context), false)

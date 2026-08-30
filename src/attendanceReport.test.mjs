@@ -54,3 +54,14 @@ test('měsíční součet zahrne přesně DB řádky a zachová směnu předchoz
   assert.deepEqual(report.rows.map((row) => row.id), ['29', '30'])
   assert.equal(report.monthMs, (3 * 60 + 2 * 60 + 46) * 60 * 1000)
 })
+
+test('výkaz určí DPP nebo DPČ z historické platnosti smlouvy, ne ze jména', () => {
+  const contracts = [
+    { contractType: 'dpp', validFrom: '2026-01-01', validTo: '2026-08-31', active: true },
+    { contractType: 'dpc', validFrom: '2026-09-01', active: true },
+  ]
+  const august = buildAttendanceReport(records, 'Libovolné jméno', '2026-08', 300, new Date('2026-09-30T12:00:00Z'), contracts)
+  const september = buildAttendanceReport(records, 'Libovolné jméno', '2026-09', 300, new Date('2026-09-30T12:00:00Z'), contracts)
+  assert.equal(august.contractLabel, 'DPP')
+  assert.equal(september.contractLabel, 'DPČ')
+})

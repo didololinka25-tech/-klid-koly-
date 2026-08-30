@@ -19,6 +19,8 @@ const migration19 = readFileSync(new URL('../supabase/migrations/20260830001900_
 const migration20 = readFileSync(new URL('../supabase/migrations/20260830002000_cleaning_manual_and_staircase_windows.sql', import.meta.url), 'utf8')
 const migration21 = readFileSync(new URL('../supabase/migrations/20260830002100_attendance_integrity.sql', import.meta.url), 'utf8')
 const migration22 = readFileSync(new URL('../supabase/migrations/20260830002200_attendance_audit_history.sql', import.meta.url), 'utf8')
+const migration23 = readFileSync(new URL('../supabase/migrations/20260830002300_kindergarten_workplace_and_plan.sql', import.meta.url), 'utf8')
+const migration24 = readFileSync(new URL('../supabase/migrations/20260830002400_worker_contract_history.sql', import.meta.url), 'utf8')
 const attendanceRepair = readFileSync(new URL('../supabase/diagnostics/repair_attendance_d05aac53.sql', import.meta.url), 'utf8')
 
 test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
@@ -159,6 +161,29 @@ test('audit docházky ukládá neměnné původní i nové hodnoty a čte jej po
   assert.doesNotMatch(migration22, /grant (insert|update|delete)/i)
   assert.match(repository, /attendanceAudit:[\s\S]*from\('attendance_audit'\)/)
   assert.match(app, /Historie změn směny/)
+})
+
+test('Školka je nedestruktivní úterní plán bez A/B a dezinfekce', () => {
+  for (const room of ['Kuchyň', 'Vstup', 'Šatna', 'WC dívky', 'WC chlapci', 'WC dospělí', 'Úklidová místnost', 'Chodbička', 'Místnost 1', 'Místnost 2', 'Místnost 3 – spací']) assert.match(migration23, new RegExp(room, 'i'))
+  assert.match(migration23, /schedule_days[\s\S]*array\[2\]::smallint\[\]/i)
+  assert.match(migration23, /requires_task_id = vacuum\.id/i)
+  assert.match(migration23, /43 aktivních úkolů/i)
+  assert.doesNotMatch(migration23, /delete\s+from|truncate\s+|drop\s+table/i)
+  assert.match(migration23, /work_part_id=null/i)
+  assert.match(migration23, /activity_type='disinfect' or work_part_id is not null/i)
+  assert.doesNotMatch(migration23, /'disinfect'\s*,\s*\d+\s*,/i)
+})
+
+test('historie DPP/DPČ je bez seedu neznámých dat a zapisuje se jen admin RPC', () => {
+  assert.match(migration24, /create table if not exists public\.worker_contracts/i)
+  assert.match(migration24, /contract_type in \('dpp','dpc','other'\)/i)
+  assert.match(migration24, /valid_from date not null[\s\S]*valid_to date/i)
+  assert.match(migration24, /workers read own contracts[\s\S]*worker_id=auth\.uid\(\)/i)
+  assert.match(migration24, /if not public\.is_admin\(\)/i)
+  assert.match(migration24, /admin_save_worker_contract/i)
+  assert.match(migration24, /Pracovní vztah se překrývá/i)
+  assert.doesNotMatch(migration24, /insert into public\.worker_contracts[\s\S]*select[\s\S]*from public\.profiles/i)
+  assert.doesNotMatch(migration24, /delete\s+from|truncate\s+/i)
 })
 
 test('jednorázová oprava chrání přesný UUID a očekávaný stav v jednom atomickém bloku', () => {
