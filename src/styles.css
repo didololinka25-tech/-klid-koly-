@@ -1272,6 +1272,9 @@ nav button {
 .contract-row { width: 100%; min-height: 52px; display: flex; justify-content: space-between; align-items: center; text-align: left; border: 0; border-top: 1px solid #e0ebe7; background: #fff; color: #174d45; }
 .contract-row span { display: grid; gap: 3px; }
 .contract-row small { color: #6b817c; }
+.money-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.money-input span { color: #47655f; font-weight: 800; white-space: nowrap; }
+.money-input input { min-width: 0; width: 100%; }
 nav i {
   font-style: normal;
   font-size: 18px;

@@ -1535,7 +1535,7 @@ function WorkerContractsPanel({ workerId, contracts, onSave }: { workerId: strin
       <label>Typ<select value={editing.contractType} onChange={(event) => setEditing({ ...editing, contractType: event.target.value as WorkerContract["contractType"] })}><option value="dpp">DPP</option><option value="dpc">DPČ</option><option value="other">Jiný vztah</option></select></label>
       <label>Platí od<input type="date" required value={editing.validFrom} onChange={(event) => setEditing({ ...editing, validFrom: event.target.value })} /></label>
       <label>Platí do<input type="date" value={editing.validTo ?? ""} onChange={(event) => setEditing({ ...editing, validTo: event.target.value || undefined })} /></label>
-      <label>Hodinová sazba<input type="number" min="0.01" max="100000" step="0.01" required={editing.active} value={editing.hourlyRate ?? ""} onChange={(event) => setEditing({ ...editing, hourlyRate: event.target.value ? Number(event.target.value) : undefined })} /></label>
+      <label>Hodinová sazba<div className="money-input"><input type="number" inputMode="decimal" min="0.01" max="100000" step="0.01" required={editing.active} value={editing.hourlyRate ?? ""} onChange={(event) => setEditing({ ...editing, hourlyRate: event.target.value ? Number(event.target.value) : undefined })} /><span>Kč/h</span></div></label>
       <small>Sazba platí jen pro toto období. Při změně sazby vytvořte nové období.</small>
       <label>Poznámka<textarea rows={2} value={editing.note} onChange={(event) => setEditing({ ...editing, note: event.target.value })} /></label>
       <label className="switch"><input type="checkbox" checked={editing.active} onChange={(event) => setEditing({ ...editing, active: event.target.checked })} /> Aktivní</label>
