@@ -46,20 +46,23 @@ export function calculateDpcPace(input: {
     input.contractValidFrom,
     input.contractValidTo,
   )
-  const fullPeriodDays = relevantMonthDays(input.month, input.contractValidFrom, input.contractValidTo)
+  const contractPeriodDays = relevantMonthDays(input.month, input.contractValidFrom, input.contractValidTo)
+  const calendarMonthDays = relevantMonthDays(input.month, `${input.month}-01`)
   const daysRemaining = remainingCalendarDays(input.month, input.currentDateKey, input.contractValidFrom, input.contractValidTo)
-  const fullPeriodWeeks = fullPeriodDays / 7
+  const baselineWeeks = calendarMonthDays / 7
   const targetHours = input.hourlyRate ? input.monthlyThreshold / input.hourlyRate : undefined
   const remainingHours = input.hourlyRate ? remainingIncome / input.hourlyRate : undefined
-  const baselineWeeklyHours = targetHours !== undefined && fullPeriodWeeks > 0
-    ? targetHours / fullPeriodWeeks
+  // Měsíční hranice je celoměsíční údaj. Datum začátku smlouvy omezuje pouze
+  // skutečně zbývající období, nesmí ale vměstnat celý měsíční cíl do pár dnů.
+  const baselineWeeklyHours = targetHours !== undefined && baselineWeeks > 0
+    ? targetHours / baselineWeeks
     : undefined
   const remainingWeeklyHours = thresholdReached
     ? 0
     : remainingHours !== undefined && daysRemaining >= 7 && remainingWeeks > 0
       ? remainingHours / remainingWeeks
       : undefined
-  const elapsedDays = Math.max(0, fullPeriodDays - daysRemaining + 1)
+  const elapsedDays = Math.max(0, contractPeriodDays - daysRemaining + 1)
   const elapsedWeeks = elapsedDays / 7
   const averageWorkedWeeklyHours = elapsedWeeks > 0 ? input.workedHours / elapsedWeeks : 0
   const behindBaseline = !thresholdReached
@@ -78,6 +81,22 @@ export function calculateDpcPace(input: {
     averageWorkedWeeklyHours,
     behindBaseline,
     thresholdReached,
+  }
+}
+
+function formatPaceHours(hours?: number) {
+  if (hours === undefined) return undefined
+  const minutes = Math.max(0, Math.round(hours * 60))
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`
+}
+
+export function calculateDpcPaceCard(input: Parameters<typeof calculateDpcPace>[0]) {
+  const pace = calculateDpcPace(input)
+  return {
+    pace,
+    baselineWeeklyText: formatPaceHours(pace.baselineWeeklyHours),
+    remainingHoursText: formatPaceHours(pace.remainingHours),
+    remainingWeeklyText: formatPaceHours(pace.remainingWeeklyHours),
   }
 }
 

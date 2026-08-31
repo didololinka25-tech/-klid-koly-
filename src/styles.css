@@ -71,6 +71,53 @@ h1 {
 .hero > p { grid-column: 1 / -1; }
 .hero > p { margin: -6px 0 0; color: #165e56; font-weight: 900; }
 .hero.cleaning-complete { border-color: #78b9ad; background: #f1faf7; }
+.plan-state {
+  min-height: 150px;
+  margin-bottom: 20px;
+  padding: 26px 18px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  text-align: center;
+  background: #fff;
+  border: 1px solid #e0ebe7;
+  border-radius: 16px;
+}
+.plan-state h2, .plan-state p { margin: 0; }
+.plan-state p { color: #67817c; overflow-wrap: anywhere; }
+.plan-state button, .plan-stale-error button {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: #165e56;
+  color: #fff;
+  font-weight: 800;
+}
+.loading-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #d8e9e4;
+  border-top-color: #165e56;
+  border-radius: 50%;
+  animation: plan-spin .8s linear infinite;
+}
+@keyframes plan-spin { to { transform: rotate(360deg); } }
+.plan-refreshing { margin: 0 0 8px; color: #67817c; font-size: 12px; }
+.plan-stale-error {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #805000;
+  background: #fff0d9;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.plan-stale-error button { flex: none; min-height: 40px; }
 .hero strong {
   white-space: nowrap;
   color: #123d36;

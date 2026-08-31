@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { calculateDpcPace, calculateDppMonthlyBudget, remainingCalendarWeeks } from './workPace.ts'
+import { calculateDpcPace, calculateDpcPaceCard, calculateDppMonthlyBudget, remainingCalendarWeeks } from './workPace.ts'
 
 test('DPČ 4500 / 150 má měsíční cíl 30 hodin a používá skutečnou délku měsíce', () => {
   const pace = calculateDpcPace({ month: '2026-08', currentDateKey: '2026-08-01', monthlyThreshold: 4500, grossIncome: 0, workedHours: 0, hourlyRate: 150, contractValidFrom: '2026-08-01' })
@@ -49,11 +49,29 @@ test('na začátku, uprostřed a na konci měsíce zůstává baseline stejná',
   assert.deepEqual(paces.map((pace) => pace.baselineWeeklyHours), Array(3).fill(30 / (31 / 7)))
 })
 
-test('smlouva začínající nebo končící v půlce měsíce zkrátí relevantní baseline období', () => {
+test('začátek ani konec smlouvy nevměstná celoměsíční baseline do několika dnů', () => {
   const startsMidMonth = calculateDpcPace({ month: '2026-08', currentDateKey: '2026-08-15', monthlyThreshold: 4500, grossIncome: 0, workedHours: 0, hourlyRate: 150, contractValidFrom: '2026-08-15' })
   const endsMidMonth = calculateDpcPace({ month: '2026-08', currentDateKey: '2026-08-01', monthlyThreshold: 4500, grossIncome: 0, workedHours: 0, hourlyRate: 150, contractValidFrom: '2026-01-01', contractValidTo: '2026-08-15' })
-  assert.equal(startsMidMonth.baselineWeeklyHours, 30 / (17 / 7))
-  assert.equal(endsMidMonth.baselineWeeklyHours, 30 / (15 / 7))
+  assert.equal(startsMidMonth.baselineWeeklyHours, 30 / (31 / 7))
+  assert.equal(endsMidMonth.baselineWeeklyHours, 30 / (31 / 7))
+  assert.equal(startsMidMonth.remainingWeeks, 17 / 7)
+  assert.equal(endsMidMonth.remainingWeeks, 15 / 7)
+})
+
+test('produkční DPČ karta 31. srpna renderuje 6:46, nikoli 52:30 nebo 157 hodin', () => {
+  const workedHours = 7 + 35 / 60
+  const card = calculateDpcPaceCard({ month: '2026-08', currentDateKey: '2026-08-31', monthlyThreshold: 4500, grossIncome: workedHours * 150, workedHours, hourlyRate: 150, contractValidFrom: '2026-08-28', contractValidTo: '2027-07-31' })
+  assert.equal(card.baselineWeeklyText, '6 h 46 min')
+  assert.equal(card.remainingHoursText, '22 h 25 min')
+  assert.equal(card.remainingWeeklyText, undefined)
+  assert.notEqual(card.baselineWeeklyText, '52 h 30 min')
+})
+
+test('DPČ karta respektuje únor a 30/31denní měsíc bez závislosti na dnešním datu', () => {
+  const baseline = (month, currentDateKey) => calculateDpcPaceCard({ month, currentDateKey, monthlyThreshold: 4500, grossIncome: 0, workedHours: 0, hourlyRate: 150, contractValidFrom: `${month}-01` }).baselineWeeklyText
+  assert.equal(baseline('2026-02', '2026-02-28'), '7 h 30 min')
+  assert.equal(baseline('2026-04', '2026-04-30'), '7 h 00 min')
+  assert.equal(baseline('2026-08', '2026-08-31'), '6 h 46 min')
 })
 
 test('zbývající kalendář respektuje 28/29/30/31 dní a konec smlouvy', () => {

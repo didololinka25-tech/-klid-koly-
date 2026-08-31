@@ -45,7 +45,7 @@ export type BulkCompletionAction = {
   taskIds: string[]
   canUndo: boolean
 }
-export type TaskLoad = { tasks: Task[]; bulkActions: BulkCompletionAction[]; cleaningDay: CleaningDayContext; cleaningDaysAvailable: boolean }
+export type TaskLoad = { dateKey: string; tasks: Task[]; bulkActions: BulkCompletionAction[]; cleaningDay: CleaningDayContext; cleaningDaysAvailable: boolean }
 export type CleaningDayRecord = CleaningDayException & {
   buildingId: string
   scopeType: 'whole_school'
@@ -99,10 +99,7 @@ export type PlanOptions = {
   rooms: { id: string; buildingId: string; floorId: string | null; name: string; floor: string; floorSort: number; building: string; active: boolean; sortOrder: number }[]
 }
 
-const localToday = () => {
-  const date = new Date()
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
+const localToday = () => pragueDateKey(new Date())
 const missingRelation = (error: { code?: string; message?: string } | null) =>
   Boolean(error && ['42P01', 'PGRST205'].includes(error.code ?? ''))
 const missingColumn = (error: { code?: string; message?: string } | null) =>
@@ -178,9 +175,9 @@ export const schoolRepository = {
     const { error } = await client().rpc('owner_set_user_access', { target_user_id: userId, new_access_role: role, new_active: active })
     if (error) throw error
   },
-  tasks: async (profile: Profile, includeAll = false): Promise<TaskLoad> => {
+  tasks: async (profile: Profile, includeAll = false, requestedDate?: string): Promise<TaskLoad> => {
     const db = client()
-    const date = localToday()
+    const date = requestedDate ?? localToday()
     let taskResult: any = await db.from('cleaning_tasks').select('id,plan_key,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id,cleaning_cycle_length,cleaning_cycle_offset,period_months,period_week,period_anchor_month,bulk_completable').order('sort_order')
     if (missingColumn(taskResult.error)) {
       taskResult = await db.from('cleaning_tasks').select('id,plan_key,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id,cleaning_cycle_length,cleaning_cycle_offset,period_months,period_week,period_anchor_month').order('sort_order')
@@ -256,7 +253,7 @@ export const schoolRepository = {
       mapped.bulkCompletable = typeof row.bulk_completable === 'boolean' ? row.bulk_completable : inferredBulkCompletable(mapped)
       return mapped
     })
-    return { tasks, bulkActions, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
+    return { dateKey: date, tasks, bulkActions, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
   },
   planOptions: async (buildingId?: string): Promise<PlanOptions> => {
     const db = client()

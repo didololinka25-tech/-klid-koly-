@@ -37,11 +37,12 @@ import {
 } from "./attendanceReport";
 import { isSupabaseConfigured } from "./supabase";
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay, type CleaningDayContext } from "./scheduling";
-import { calculateDpcPace, calculateDppMonthlyBudget } from "./workPace";
+import { calculateDpcPaceCard, calculateDppMonthlyBudget } from "./workPace";
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
 import { attendanceEditorStartValue, pragueDateKey, pragueDateTimeInput } from "./attendanceTime";
 import { forBuilding, roomForBuilding } from "./buildingScope";
 import { applyBulkUndo, bulkTasks, findUndoableRoomAction, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
+import { createLatestRequestGate } from "./latestRequest";
 
 type Section =
   | "Dnes"
@@ -92,12 +93,12 @@ const activityTypes: Record<
 const weekdays = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
 const finalCheckPrefix = "v2026|school|common|final-";
 const isFinalCheckTask = (task: Task) => Boolean(task.planKey?.startsWith(finalCheckPrefix) || task.planKey?.startsWith("admin|final|"));
-const todayLabel = new Intl.DateTimeFormat("cs-CZ", {
+const todayLabel = (dateKey: string) => new Intl.DateTimeFormat("cs-CZ", {
   weekday: "long",
   day: "numeric",
   month: "long",
-}).format(new Date());
-
+  timeZone: "UTC",
+}).format(new Date(`${dateKey}T12:00:00Z`));
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -153,18 +154,35 @@ export default function App() {
   });
   const [editing, setEditing] = useState<Task | null>(null);
   const [managementView, setManagementView] = useState<"plan" | "rooms">("plan");
+  const [todayPlanStatus, setTodayPlanStatus] = useState<"loading" | "refreshing" | "ready" | "error">("loading");
+  const [todayPlanError, setTodayPlanError] = useState("");
+  const [todayPlanDate, setTodayPlanDate] = useState(() => localDateKey());
+  const todayPlanLoaded = useRef(false);
+  const todayPlanRequests = useRef(createLatestRequestGate());
+  const sessionUserId = useRef<string | null>(null);
   const load = useCallback(
     async (current: Session, knownProfile?: Profile | null) => {
+      const planRequestId = todayPlanRequests.current.begin();
+      setTodayPlanStatus(todayPlanLoaded.current ? "refreshing" : "loading");
+      setTodayPlanError("");
       const activeProfile =
         knownProfile ?? (await schoolRepository.profile(current.user.id));
       if (!activeProfile) {
+        if (todayPlanRequests.current.isLatest(planRequestId)) {
+          setTodayPlanStatus("error");
+          setTodayPlanError("Profil se zatím nepodařilo načíst.");
+        }
         setNotice("Profil se zatím nepodařilo načíst.");
         return;
       }
       setProfile(activeProfile);
       if (!activeProfile.active || !canViewSchool(activeProfile)) {
-        setTasks([]);
-        setBulkActions([]);
+        if (todayPlanRequests.current.isLatest(planRequestId)) {
+          setTasks([]);
+          setBulkActions([]);
+          todayPlanLoaded.current = true;
+          setTodayPlanStatus("ready");
+        }
         setAttendance([]);
         setAttendanceView([]);
         setAttendanceWorkers([]);
@@ -187,24 +205,27 @@ export default function App() {
           : { dppAnnualLimitHours: 300, dpcWeeklyHoursReference: 20, dpcReferencePeriodWeeks: 26, dpcMonthlyInsuranceThreshold: 4500, available: false, contractsAvailable: false, compensationAvailable: false },
       );
       const taskResult = await Promise.resolve(
-        schoolRepository.tasks(activeProfile, canManageOperations(activeProfile)),
+        schoolRepository.tasks(activeProfile, canManageOperations(activeProfile), localDateKey()),
       ).then(
         (value) => ({ status: "fulfilled" as const, value }),
         (reason) => ({ status: "rejected" as const, reason }),
       );
-      if (taskResult.status === "fulfilled") {
+      if (taskResult.status === "fulfilled" && todayPlanRequests.current.isLatest(planRequestId)) {
         setTasks(taskResult.value.tasks);
         setBulkActions(taskResult.value.bulkActions);
         setCleaningDay(taskResult.value.cleaningDay);
         setCleaningDaysAvailable(taskResult.value.cleaningDaysAvailable);
-      } else {
-        setTasks([]);
-        setBulkActions([]);
-        setNotice(
-          taskResult.reason instanceof Error
-            ? taskResult.reason.message
-            : "Úkoly se nepodařilo načíst.",
-        );
+        setTodayPlanDate(taskResult.value.dateKey);
+        todayPlanLoaded.current = true;
+        setTodayPlanStatus("ready");
+      } else if (taskResult.status === "rejected" && todayPlanRequests.current.isLatest(planRequestId)) {
+        const message = taskResult.reason instanceof Error
+          ? taskResult.reason.message
+          : "Úkoly se nepodařilo načíst.";
+        console.error("Dnešní plán se nepodařilo načíst:", taskResult.reason);
+        setTodayPlanStatus("error");
+        setTodayPlanError(message);
+        setNotice("Nepodařilo se načíst dnešní plán.");
       }
       if (canWork(activeProfile)) {
         const attendanceResult = await schoolRepository.attendance(activeProfile.id);
@@ -263,24 +284,34 @@ export default function App() {
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     schoolRepository.getSession().then((next) => {
+      sessionUserId.current = next?.user.id ?? null;
       setSession(next);
       if (next) load(next).catch((error) => setNotice(error.message));
     });
     const { data } = schoolRepository.onAuthChange((next) => {
+      const nextUserId = next?.user.id ?? null;
+      const identityChanged = sessionUserId.current !== nextUserId;
+      sessionUserId.current = nextUserId;
       setSession(next);
-      setProfile(null);
-      setTasks([]);
-      setBulkActions([]);
-      setUsers([]);
-      setCleaningDays([]);
-      setCleaningTaskSelectionAvailable(false);
-      setAttendance([]);
-      setAttendanceView([]);
-      setAttendanceWorkers([]);
-      setSelectedAttendanceWorker("");
-      setWorkplaces([]);
-      setManual({ entries: [], available: false, editable: false });
-      setAttendanceBuildingId("");
+      if (identityChanged) {
+        todayPlanRequests.current.invalidate();
+        todayPlanLoaded.current = false;
+        setTodayPlanStatus("loading");
+        setTodayPlanError("");
+        setProfile(null);
+        setTasks([]);
+        setBulkActions([]);
+        setUsers([]);
+        setCleaningDays([]);
+        setCleaningTaskSelectionAvailable(false);
+        setAttendance([]);
+        setAttendanceView([]);
+        setAttendanceWorkers([]);
+        setSelectedAttendanceWorker("");
+        setWorkplaces([]);
+        setManual({ entries: [], available: false, editable: false });
+        setAttendanceBuildingId("");
+      }
       if (next) load(next).catch((error) => setNotice(error.message));
     });
     return () => data.subscription.unsubscribe();
@@ -293,6 +324,22 @@ export default function App() {
     });
     return () => {
       channel.unsubscribe();
+    };
+  }, [session, profile, load]);
+  useEffect(() => {
+    if (!session || !profile || !canViewSchool(profile)) return;
+    const refreshToday = () => {
+      if (document.visibilityState === "hidden") return;
+      load(session, profile).catch((error) => {
+        console.error("Aktualizace po návratu do aplikace selhala:", error);
+        setNotice("Nepodařilo se aktualizovat data aplikace.");
+      });
+    };
+    window.addEventListener("focus", refreshToday);
+    document.addEventListener("visibilitychange", refreshToday);
+    return () => {
+      window.removeEventListener("focus", refreshToday);
+      document.removeEventListener("visibilitychange", refreshToday);
     };
   }, [session, profile, load]);
   useEffect(() => {
@@ -828,15 +875,19 @@ export default function App() {
   const visibleDone = visible.filter((task) => task.done).length;
   const todayBuildingIds = [...new Set(visible.map((task) => task.buildingId).filter((id): id is string => Boolean(id)))];
   const todayContexts = todayBuildingIds.map((buildingId) => resolveCleaningDay(
-    localDateKey(),
+    todayPlanDate,
     cleaningDays.filter((record) => record.buildingId === buildingId),
     isTestCleaningDay,
   ));
   const displayCleaningDay: CleaningDayContext = todayContexts.length === 1
     ? todayContexts[0]
     : todayContexts.length > 1
-      ? { kind: "standard", executionDate: localDateKey(), scheduleDate: localDateKey(), title: "Úklid více pracovišť" }
+      ? { kind: "standard", executionDate: todayPlanDate, scheduleDate: todayPlanDate, title: "Úklid více pracovišť" }
       : cleaningDay;
+  const retryTodayPlan = () => load(session, profile).catch((error) => {
+    console.error("Opakované načtení dnešního plánu selhalo:", error);
+    setNotice("Nepodařilo se načíst dnešní plán.");
+  });
   const navigation = sections.filter((item) => {
     if (item === "Docházka") return canWork(profile);
     return true;
@@ -847,7 +898,7 @@ export default function App() {
         <div>
           <p className="eyebrow">ÚKLID ŠKOLY</p>
           <h1>{section}</h1>
-          <p className="date">{todayLabel}</p>
+          <p className="date">{todayLabel(todayPlanDate)}</p>
         </div>
         <div className="profile-menu-wrap">
           <button
@@ -888,6 +939,13 @@ export default function App() {
               onBuildingChange={setAttendanceBuildingId}
             />
           )}
+          {!todayPlanLoaded.current && todayPlanStatus === "loading" ? (
+            <section className="plan-state" aria-live="polite"><span className="loading-spinner" /><h2>Načítám dnešní plán…</h2></section>
+          ) : !todayPlanLoaded.current && todayPlanStatus === "error" ? (
+            <section className="plan-state error" role="alert"><h2>Nepodařilo se načíst dnešní plán.</h2><p>{todayPlanError}</p><button onClick={retryTodayPlan}>Zkusit znovu</button></section>
+          ) : <>
+          {todayPlanStatus === "refreshing" && <p className="plan-refreshing" aria-live="polite">Aktualizuji dnešní plán…</p>}
+          {todayPlanStatus === "error" && <section className="plan-stale-error" role="alert"><span>Aktualizace plánu se nezdařila. Zobrazuji poslední načtený stav.</span><button onClick={retryTodayPlan}>Zkusit znovu</button></section>}
           <section className={visible.length > 0 && visibleDone === visible.length ? "hero cleaning-complete" : "hero"}>
             <span className="hero-copy">
               <b>{cleaningDayHeading(displayCleaningDay, visible.length)}</b>
@@ -917,6 +975,7 @@ export default function App() {
             pendingTaskIds={pendingTaskIds}
             guides={manual.entries.filter((entry) => entry.entryType === "guide" && entry.active)}
           />
+          </>}
         </>
       )}
       {section === "Správa" && canManageOperations(profile) && (
@@ -1532,7 +1591,7 @@ function DpcMonthlySummary({ report, appSettings, contract, currentDateKey }: { 
   const progress = report.dpcGrossEstimate === undefined
     ? 0
     : Math.min(100, report.dpcGrossEstimate / appSettings.dpcMonthlyInsuranceThreshold * 100);
-  const pace = calculateDpcPace({
+  const paceCard = calculateDpcPaceCard({
     month: report.month,
     currentDateKey,
     monthlyThreshold: appSettings.dpcMonthlyInsuranceThreshold,
@@ -1542,6 +1601,7 @@ function DpcMonthlySummary({ report, appSettings, contract, currentDateKey }: { 
     contractValidFrom: contract.validFrom,
     contractValidTo: contract.validTo,
   });
+  const pace = paceCard.pace;
   return <section className="pace-card dpc-month-card">
     <p className="eyebrow">DPČ – {report.monthLabel.toLocaleUpperCase("cs-CZ")}</p>
     <div className="pace-primary"><span>Odpracováno</span><strong>{reportDuration(report.dpcMonthMs)}</strong></div>
@@ -1552,13 +1612,13 @@ function DpcMonthlySummary({ report, appSettings, contract, currentDateKey }: { 
       : <>
         <p>Zbývá: <b>{pace.remainingHours === undefined ? "nelze určit" : formatPlanningHours(pace.remainingHours)} / {reportMoney(pace.remainingIncome)}</b></p>
         <div className="dpp-progress" aria-label="Postup k nastavenému rozhodnému příjmu DPČ"><span style={{ width: `${progress}%` }} /></div>
-        <div className="pace-highlight"><span>Běžné tempo pro tento měsíc</span><strong>{pace.baselineWeeklyHours === undefined ? "nelze určit" : `≈ ${formatPlanningHours(pace.baselineWeeklyHours)} týdně`}</strong></div>
+        <div className="pace-highlight"><span>Běžné tempo pro tento měsíc</span><strong>{paceCard.baselineWeeklyText === undefined ? "nelze určit" : `≈ ${paceCard.baselineWeeklyText} týdně`}</strong></div>
         {pace.elapsedWeeks >= 1 && <p>Dosavadní průměr: <b>≈ {formatPlanningHours(pace.averageWorkedWeeklyHours)} týdně</b></p>}
         {pace.thresholdReached
           ? <p><b>Nastavená hranice dosažena podle evidované docházky.</b></p>
           : pace.remainingWeeklyHours !== undefined
-            ? <><div className="pace-highlight secondary"><span>Potřebné tempo ve zbývajících týdnech</span><strong>≈ {formatPlanningHours(pace.remainingWeeklyHours)} týdně</strong></div>{pace.behindBaseline && <p className="attendance-alert">Pro dosažení měsíčního cíle je nyní potřeba tempo zvýšit.</p>}</>
-            : <><p>Do konce měsíce zbývá: <b>{pace.remainingHours === undefined ? "nelze určit" : formatPlanningHours(pace.remainingHours)}</b></p><small>Do konce měsíce už nezbývá celý pracovní týden, proto týdenní tempo nyní neuvádíme.</small></>}
+            ? <><div className="pace-highlight secondary"><span>Potřebné tempo ve zbývajících týdnech</span><strong>≈ {paceCard.remainingWeeklyText} týdně</strong></div>{pace.behindBaseline && <p className="attendance-alert">Pro dosažení měsíčního cíle je nyní potřeba tempo zvýšit.</p>}</>
+            : <><p>Do konce měsíce zbývá: <b>{paceCard.remainingHoursText ?? "nelze určit"}</b></p><small>Do konce měsíce už nezbývá celý pracovní týden, proto týdenní tempo nyní neuvádíme.</small></>}
       </>}
     {contract.hourlyRate && pace.targetHours !== undefined && <small>Při sazbě {reportMoney(contract.hourlyRate)}/h potřebujete pro nastavenou měsíční hranici {reportMoney(appSettings.dpcMonthlyInsuranceThreshold)} přibližně {formatPlanningHours(pace.targetHours)} za měsíc. Týdenní tempo je orientační rozložení měsíčního cíle a během měsíce se upravuje podle odpracovaného času.</small>}
   </section>;
