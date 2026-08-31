@@ -16,11 +16,24 @@ export function remainingCalendarWeeks(month: string, currentDateKey: string, va
   return (Math.floor((dateValue(end) - dateValue(start)) / DAY_MS) + 1) / 7
 }
 
+function relevantMonthDays(month: string, validFrom: string, validTo?: string) {
+  const start = maxDateKey(`${month}-01`, validFrom)
+  const end = minDateKey(monthEndKey(month), validTo ?? '9999-12-31')
+  return start > end ? 0 : Math.floor((dateValue(end) - dateValue(start)) / DAY_MS) + 1
+}
+
+function remainingCalendarDays(month: string, currentDateKey: string, validFrom: string, validTo?: string) {
+  const start = maxDateKey(`${month}-01`, currentDateKey, validFrom)
+  const end = minDateKey(monthEndKey(month), validTo ?? '9999-12-31')
+  return start > end ? 0 : Math.floor((dateValue(end) - dateValue(start)) / DAY_MS) + 1
+}
+
 export function calculateDpcPace(input: {
   month: string
   currentDateKey: string
   monthlyThreshold: number
   grossIncome: number
+  workedHours: number
   hourlyRate?: number
   contractValidFrom: string
   contractValidTo?: string
@@ -33,14 +46,39 @@ export function calculateDpcPace(input: {
     input.contractValidFrom,
     input.contractValidTo,
   )
+  const fullPeriodDays = relevantMonthDays(input.month, input.contractValidFrom, input.contractValidTo)
+  const daysRemaining = remainingCalendarDays(input.month, input.currentDateKey, input.contractValidFrom, input.contractValidTo)
+  const fullPeriodWeeks = fullPeriodDays / 7
   const targetHours = input.hourlyRate ? input.monthlyThreshold / input.hourlyRate : undefined
   const remainingHours = input.hourlyRate ? remainingIncome / input.hourlyRate : undefined
-  const weeklyHours = thresholdReached
+  const baselineWeeklyHours = targetHours !== undefined && fullPeriodWeeks > 0
+    ? targetHours / fullPeriodWeeks
+    : undefined
+  const remainingWeeklyHours = thresholdReached
     ? 0
-    : remainingHours !== undefined && remainingWeeks > 0
+    : remainingHours !== undefined && daysRemaining >= 7 && remainingWeeks > 0
       ? remainingHours / remainingWeeks
       : undefined
-  return { targetHours, remainingHours, remainingIncome, remainingWeeks, weeklyHours, thresholdReached }
+  const elapsedDays = Math.max(0, fullPeriodDays - daysRemaining + 1)
+  const elapsedWeeks = elapsedDays / 7
+  const averageWorkedWeeklyHours = elapsedWeeks > 0 ? input.workedHours / elapsedWeeks : 0
+  const behindBaseline = !thresholdReached
+    && baselineWeeklyHours !== undefined
+    && elapsedWeeks >= 1
+    && averageWorkedWeeklyHours + 0.01 < baselineWeeklyHours
+  return {
+    targetHours,
+    remainingHours,
+    remainingIncome,
+    remainingWeeks,
+    daysRemaining,
+    baselineWeeklyHours,
+    remainingWeeklyHours,
+    elapsedWeeks,
+    averageWorkedWeeklyHours,
+    behindBaseline,
+    thresholdReached,
+  }
 }
 
 const monthIndex = (month: string) => {

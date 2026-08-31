@@ -1537,6 +1537,7 @@ function DpcMonthlySummary({ report, appSettings, contract, currentDateKey }: { 
     currentDateKey,
     monthlyThreshold: appSettings.dpcMonthlyInsuranceThreshold,
     grossIncome: report.dpcGrossEstimate ?? 0,
+    workedHours: report.dpcMonthMs / HOUR_MS,
     hourlyRate: contract.hourlyRate,
     contractValidFrom: contract.validFrom,
     contractValidTo: contract.validTo,
@@ -1551,11 +1552,15 @@ function DpcMonthlySummary({ report, appSettings, contract, currentDateKey }: { 
       : <>
         <p>Zbývá: <b>{pace.remainingHours === undefined ? "nelze určit" : formatPlanningHours(pace.remainingHours)} / {reportMoney(pace.remainingIncome)}</b></p>
         <div className="dpp-progress" aria-label="Postup k nastavenému rozhodnému příjmu DPČ"><span style={{ width: `${progress}%` }} /></div>
+        <div className="pace-highlight"><span>Běžné tempo pro tento měsíc</span><strong>{pace.baselineWeeklyHours === undefined ? "nelze určit" : `≈ ${formatPlanningHours(pace.baselineWeeklyHours)} týdně`}</strong></div>
+        {pace.elapsedWeeks >= 1 && <p>Dosavadní průměr: <b>≈ {formatPlanningHours(pace.averageWorkedWeeklyHours)} týdně</b></p>}
         {pace.thresholdReached
           ? <p><b>Nastavená hranice dosažena podle evidované docházky.</b></p>
-          : <div className="pace-highlight"><span>Orientační potřebné tempo do konce měsíce</span><strong>{pace.weeklyHours === undefined ? "nelze určit" : `≈ ${formatPlanningHours(pace.weeklyHours)} týdně`}</strong></div>}
+          : pace.remainingWeeklyHours !== undefined
+            ? <><div className="pace-highlight secondary"><span>Potřebné tempo ve zbývajících týdnech</span><strong>≈ {formatPlanningHours(pace.remainingWeeklyHours)} týdně</strong></div>{pace.behindBaseline && <p className="attendance-alert">Pro dosažení měsíčního cíle je nyní potřeba tempo zvýšit.</p>}</>
+            : <><p>Do konce měsíce zbývá: <b>{pace.remainingHours === undefined ? "nelze určit" : formatPlanningHours(pace.remainingHours)}</b></p><small>Do konce měsíce už nezbývá celý pracovní týden, proto týdenní tempo nyní neuvádíme.</small></>}
       </>}
-    <small>Tempo se průběžně přepočítává podle přesně odpracovaného času a zbývající kalendářní části měsíce. Bez osobního rozvrhu jde o orientační tempo.</small>
+    {contract.hourlyRate && pace.targetHours !== undefined && <small>Při sazbě {reportMoney(contract.hourlyRate)}/h potřebujete pro nastavenou měsíční hranici {reportMoney(appSettings.dpcMonthlyInsuranceThreshold)} přibližně {formatPlanningHours(pace.targetHours)} za měsíc. Týdenní tempo je orientační rozložení měsíčního cíle a během měsíce se upravuje podle odpracovaného času.</small>}
   </section>;
 }
 
