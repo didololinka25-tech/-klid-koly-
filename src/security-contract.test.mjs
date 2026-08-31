@@ -25,6 +25,7 @@ const migration25 = readFileSync(new URL('../supabase/migrations/20260830002500_
 const migration26 = readFileSync(new URL('../supabase/migrations/20260830002600_multi_building_operations.sql', import.meta.url), 'utf8')
 const migration27 = readFileSync(new URL('../supabase/migrations/20260831002700_fast_room_completion.sql', import.meta.url), 'utf8')
 const migration28 = readFileSync(new URL('../supabase/migrations/20260831002800_reversible_bulk_completion.sql', import.meta.url), 'utf8')
+const migration30 = readFileSync(new URL('../supabase/migrations/20260831003000_contract_rates_and_dpc_threshold.sql', import.meta.url), 'utf8')
 const settingsDiagnostics = readFileSync(new URL('../supabase/diagnostics/verify_02300_02400_state.sql', import.meta.url), 'utf8')
 const attendanceRepair = readFileSync(new URL('../supabase/diagnostics/repair_attendance_d05aac53.sql', import.meta.url), 'utf8')
 
@@ -229,6 +230,25 @@ test('historie DPP/DPČ je bez seedu neznámých dat a zapisuje se jen admin RPC
   assert.match(migration24, /Pracovní vztah se překrývá/i)
   assert.doesNotMatch(migration24, /insert into public\.worker_contracts[\s\S]*select[\s\S]*from public\.profiles/i)
   assert.doesNotMatch(migration24, /delete\s+from|truncate\s+/i)
+})
+
+test('historické sazby a DPČ hranice jsou bezpečně spravované pouze admin RPC', () => {
+  assert.match(migration30, /add column if not exists hourly_rate numeric\(10,2\)/i)
+  assert.match(migration30, /add column if not exists dpc_monthly_insurance_threshold numeric\(10,2\) not null default 4500/i)
+  assert.match(migration30, /if not public\.is_admin\(\)/i)
+  assert.match(migration30, /target_hourly_rate numeric/i)
+  assert.match(migration30, /worker_id = target_worker_id/i)
+  assert.match(migration30, /revoke all on function public\.admin_save_worker_contract\(uuid,uuid,text,date,date,text,boolean\)/i)
+  assert.match(migration30, /revoke insert, update, delete on public\.worker_contracts, public\.worker_contract_audit/i)
+  assert.doesNotMatch(migration30, /delete\s+from|truncate\s+/i)
+  assert.match(repository, /target_hourly_rate: contract\.hourlyRate/i)
+  assert.match(repository, /monthly_threshold: monthlyThreshold/i)
+})
+
+test('DPČ UI označuje 20 hodin jako referenční rozsah, nikoli zákonné minimum', () => {
+  assert.match(app, /Referenční průměrný týdenní rozsah DPČ/i)
+  assert.match(app, /Rozhodný měsíční příjem DPČ/i)
+  assert.doesNotMatch(app, /(?:zákonné|povinné)\s+(?:minimum|maximum)\s+20\s*h/i)
 })
 
 test('jednorázová oprava chrání přesný UUID a očekávaný stav v jednom atomickém bloku', () => {

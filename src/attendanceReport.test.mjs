@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildAttendanceReport, pdfFromJpegs } from './attendanceReport.ts'
+import { buildAttendanceReport, pdfFromJpegs, reportDurationCeil } from './attendanceReport.ts'
 
 const records = [
   { id: '1', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-09-01', start: '2026-09-01T07:00:00Z', end: '2026-09-01T08:00:00Z' },
@@ -64,4 +64,78 @@ test('výkaz určí DPP nebo DPČ z historické platnosti smlouvy, ne ze jména'
   const september = buildAttendanceReport(records, 'Libovolné jméno', '2026-09', 300, new Date('2026-09-30T12:00:00Z'), contracts)
   assert.equal(august.contractLabel, 'DPP')
   assert.equal(september.contractLabel, 'DPČ')
+})
+
+test('DPČ hranice používá přesnou dobu a sazbu, nikoli zaokrouhlený počet hodin', () => {
+  const contracts = [{ id: 'dpc', contractType: 'dpc', validFrom: '2026-09-01', active: true, hourlyRate: 150 }]
+  const shifts = [
+    { id: 'exact', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-09-01', start: '2026-09-01T08:00:00Z', end: '2026-09-02T02:00:30Z' },
+  ]
+  const report = buildAttendanceReport(shifts, 'Dana', '2026-09', 300, new Date('2026-09-30T12:00:00Z'), contracts, 4500)
+  assert.equal(report.dpcMonthMs, (18 * 60 * 60 + 30) * 1000)
+  assert.equal(report.dpcGrossEstimate, (18 + 30 / 3600) * 150)
+  assert.equal(report.dpcRemainingIncome, 4500 - (18 + 30 / 3600) * 150)
+  assert.equal(report.dpcRequiredMsAtCurrentRate, 30 * 60 * 60 * 1000)
+  assert.equal(reportDurationCeil(report.dpcRemainingMsAtCurrentRate), '12 h 00 min')
+  assert.equal(report.dpcThresholdReached, false)
+})
+
+test('DPČ 18 hodin při 150 Kč vykáže 2700 Kč a zbývajících 1800 Kč / 12 hodin', () => {
+  const contracts = [{ id: 'dpc', contractType: 'dpc', validFrom: '2026-09-01', active: true, hourlyRate: 150 }]
+  const shifts = [{ id: '1', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-09-01', start: '2026-09-01T06:00:00Z', end: '2026-09-02T00:00:00Z' }]
+  const report = buildAttendanceReport(shifts, 'Dana', '2026-09', 300, new Date('2026-09-30T12:00:00Z'), contracts, 4500)
+  assert.equal(report.dpcGrossEstimate, 2700)
+  assert.equal(report.dpcRemainingIncome, 1800)
+  assert.equal(report.dpcRemainingMsAtCurrentRate, 12 * 60 * 60 * 1000)
+})
+
+test('sazba se vybírá historicky podle dne směny i při změně uprostřed měsíce', () => {
+  const contracts = [
+    { id: 'old', contractType: 'dpc', validFrom: '2026-09-01', validTo: '2026-09-15', active: true, hourlyRate: 150 },
+    { id: 'new', contractType: 'dpc', validFrom: '2026-09-16', active: true, hourlyRate: 170 },
+  ]
+  const shifts = [
+    { id: 'old-shift', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-09-10', start: '2026-09-10T08:00:00Z', end: '2026-09-10T10:00:00Z' },
+    { id: 'new-shift', workerId: 'worker', buildingId: 'nursery', buildingName: 'Školka', date: '2026-09-20', start: '2026-09-20T08:00:00Z', end: '2026-09-20T11:00:00Z' },
+  ]
+  const report = buildAttendanceReport(shifts, 'Dana', '2026-09', 300, new Date('2026-09-30T12:00:00Z'), contracts, 4500)
+  assert.equal(report.grossEstimate, 2 * 150 + 3 * 170)
+  assert.deepEqual(report.rows.map((row) => row.hourlyRate), [150, 170])
+  assert.deepEqual(report.workplaceTotals.map((item) => item.name), ['Škola', 'Školka'])
+  assert.equal(report.contractSegments.length, 2)
+})
+
+test('pozdější sazba nepřepočítá uzavřené historické období', () => {
+  const shift = [{ id: 'historic', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-10-10', start: '2026-10-10T08:00:00Z', end: '2026-10-10T10:00:00Z' }]
+  const contracts = [
+    { id: 'historic-rate', contractType: 'dpc', validFrom: '2026-10-01', validTo: '2026-12-31', active: true, hourlyRate: 150 },
+    { id: 'future-rate', contractType: 'dpc', validFrom: '2027-01-01', active: true, hourlyRate: 170 },
+  ]
+  const report = buildAttendanceReport(shift, 'Dana', '2026-10', 300, new Date('2027-02-01T12:00:00Z'), contracts, 4500)
+  assert.equal(report.grossEstimate, 300)
+  assert.equal(report.rows[0].hourlyRate, 150)
+})
+
+test('přechod DPP na DPČ oddělí roční DPP hodiny a měsíční DPČ příjem', () => {
+  const contracts = [
+    { id: 'dpp', contractType: 'dpp', validFrom: '2026-01-01', validTo: '2026-08-31', active: true, hourlyRate: 140 },
+    { id: 'dpc', contractType: 'dpc', validFrom: '2026-09-01', active: true, hourlyRate: 160 },
+  ]
+  const shifts = [
+    { id: 'aug', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-08-31', start: '2026-08-31T08:00:00Z', end: '2026-08-31T10:00:00Z' },
+    { id: 'sep', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-09-01', start: '2026-09-01T08:00:00Z', end: '2026-09-01T11:00:00Z' },
+  ]
+  const report = buildAttendanceReport(shifts, 'Dana', '2026-09', 300, new Date('2026-09-30T12:00:00Z'), contracts, 4500)
+  assert.equal(report.dppYearMs, 2 * 60 * 60 * 1000)
+  assert.equal(report.dpcMonthMs, 3 * 60 * 60 * 1000)
+  assert.equal(report.dpcGrossEstimate, 480)
+})
+
+test('bez smlouvy nebo sazby se mzda nevymýšlí', () => {
+  const noContract = buildAttendanceReport(records, 'Dana', '2026-09', 300, new Date('2026-09-30T12:00:00Z'), [], 4500)
+  assert.equal(noContract.grossEstimate, undefined)
+  assert.equal(noContract.missingContractMs, 3 * 60 * 60 * 1000)
+  const missingRate = buildAttendanceReport(records, 'Dana', '2026-09', 300, new Date('2026-09-30T12:00:00Z'), [{ contractType: 'dpc', validFrom: '2026-01-01', active: true }], 4500)
+  assert.equal(missingRate.dpcGrossEstimate, undefined)
+  assert.equal(missingRate.missingRateMs, 3 * 60 * 60 * 1000)
 })

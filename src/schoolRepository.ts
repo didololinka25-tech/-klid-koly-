@@ -90,8 +90,8 @@ export type AttendanceAuditEntry = {
   changeKind: 'clock_out' | 'correction'
 }
 export type ContractType = 'dpp' | 'dpc' | 'other'
-export type WorkerContract = { id: string; workerId: string; contractType: ContractType; validFrom: string; validTo?: string; note: string; active: boolean; createdAt?: string; updatedAt?: string }
-export type AppSettings = { dppAnnualLimitHours: number; dpcWeeklyHoursReference: number; dpcReferencePeriodWeeks: number; available: boolean; contractsAvailable: boolean }
+export type WorkerContract = { id: string; workerId: string; contractType: ContractType; validFrom: string; validTo?: string; hourlyRate?: number; note: string; active: boolean; createdAt?: string; updatedAt?: string }
+export type AppSettings = { dppAnnualLimitHours: number; dpcWeeklyHoursReference: number; dpcReferencePeriodWeeks: number; dpcMonthlyInsuranceThreshold: number; available: boolean; contractsAvailable: boolean; compensationAvailable: boolean }
 export type Workplace = { id: string; name: string; active: boolean }
 export type PlanOptions = {
   buildings: { id: string; name: string }[]
@@ -302,20 +302,22 @@ export const schoolRepository = {
     if (result.error) throw result.error
   },
   appSettings: async (): Promise<AppSettings> => {
-    const { data, error } = await client().from('app_settings').select('dpp_annual_limit_hours,dpc_weekly_hours_reference,dpc_reference_period_weeks').eq('id', true).maybeSingle()
-    if (error && error.code === '42703') {
+    const { data, error } = await client().from('app_settings').select('dpp_annual_limit_hours,dpc_weekly_hours_reference,dpc_reference_period_weeks,dpc_monthly_insurance_threshold').eq('id', true).maybeSingle()
+    if (error && missingColumn(error)) {
       const legacy = await client().from('app_settings').select('dpp_annual_limit_hours').eq('id', true).maybeSingle()
       if (legacy.error) throw legacy.error
-      return { dppAnnualLimitHours: Number(legacy.data?.dpp_annual_limit_hours ?? 300), dpcWeeklyHoursReference: 20, dpcReferencePeriodWeeks: 26, available: true, contractsAvailable: false }
+      return { dppAnnualLimitHours: Number(legacy.data?.dpp_annual_limit_hours ?? 300), dpcWeeklyHoursReference: 20, dpcReferencePeriodWeeks: 26, dpcMonthlyInsuranceThreshold: 4500, available: true, contractsAvailable: false, compensationAvailable: false }
     }
-    if (error && missingRelation(error)) return { dppAnnualLimitHours: 300, dpcWeeklyHoursReference: 20, dpcReferencePeriodWeeks: 26, available: false, contractsAvailable: false }
+    if (error && missingRelation(error)) return { dppAnnualLimitHours: 300, dpcWeeklyHoursReference: 20, dpcReferencePeriodWeeks: 26, dpcMonthlyInsuranceThreshold: 4500, available: false, contractsAvailable: false, compensationAvailable: false }
     if (error) throw error
     return {
       dppAnnualLimitHours: Number(data?.dpp_annual_limit_hours ?? 300),
       dpcWeeklyHoursReference: Number(data?.dpc_weekly_hours_reference ?? 20),
       dpcReferencePeriodWeeks: Number(data?.dpc_reference_period_weeks ?? 26),
+      dpcMonthlyInsuranceThreshold: Number(data?.dpc_monthly_insurance_threshold ?? 4500),
       available: true,
       contractsAvailable: true,
+      compensationAvailable: true,
     }
   },
   saveDppAnnualLimit: async (value: number) => {
@@ -583,19 +585,30 @@ export const schoolRepository = {
     if (error) throw error
     return (data ?? []).map(mapAttendance)
   },
-  saveDpcSettings: async (weeklyHours: number, referenceWeeks: number) => {
-    const { error } = await client().rpc('set_dpc_settings', { weekly_hours: weeklyHours, period_weeks: referenceWeeks })
+  saveDpcSettings: async (weeklyHours: number, referenceWeeks: number, monthlyThreshold: number) => {
+    const { error } = await client().rpc('set_dpc_settings', { weekly_hours: weeklyHours, period_weeks: referenceWeeks, monthly_threshold: monthlyThreshold })
     if (error) throw error
   },
   workerContracts: async (workerId: string): Promise<WorkerContract[]> => {
     const { data, error } = await client().from('worker_contracts')
-      .select('id,worker_id,contract_type,valid_from,valid_to,note,active,created_at,updated_at')
+      .select('id,worker_id,contract_type,valid_from,valid_to,hourly_rate,note,active,created_at,updated_at')
       .eq('worker_id', workerId).order('valid_from', { ascending: false })
+    if (error && missingColumn(error)) {
+      const legacy = await client().from('worker_contracts')
+        .select('id,worker_id,contract_type,valid_from,valid_to,note,active,created_at,updated_at')
+        .eq('worker_id', workerId).order('valid_from', { ascending: false })
+      if (legacy.error) throw legacy.error
+      return (legacy.data ?? []).map((row: any) => ({
+        id: row.id, workerId: row.worker_id, contractType: row.contract_type,
+        validFrom: row.valid_from, validTo: row.valid_to, hourlyRate: undefined, note: row.note ?? '', active: row.active,
+        createdAt: row.created_at, updatedAt: row.updated_at,
+      }))
+    }
     if (error && missingRelation(error)) return []
     if (error) throw error
     return (data ?? []).map((row: any) => ({
       id: row.id, workerId: row.worker_id, contractType: row.contract_type,
-      validFrom: row.valid_from, validTo: row.valid_to, note: row.note ?? '', active: row.active,
+      validFrom: row.valid_from, validTo: row.valid_to, hourlyRate: row.hourly_rate === null ? undefined : Number(row.hourly_rate), note: row.note ?? '', active: row.active,
       createdAt: row.created_at, updatedAt: row.updated_at,
     }))
   },
@@ -606,9 +619,11 @@ export const schoolRepository = {
       target_contract_type: contract.contractType,
       target_valid_from: contract.validFrom,
       target_valid_to: contract.validTo || null,
+      target_hourly_rate: contract.hourlyRate ?? null,
       target_note: contract.note || '',
       target_active: contract.active,
     })
+    if (missingFunction(error)) throw new Error('Historické sazby ještě nejsou v databázi aktivní. Aplikujte migraci 03000.')
     if (error) throw error
   },
   attendanceAudit: async (attendanceId: string): Promise<{ entries: AttendanceAuditEntry[]; available: boolean }> => {

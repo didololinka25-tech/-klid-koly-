@@ -32,6 +32,8 @@ import {
   buildAttendanceReport,
   downloadAttendanceReportPdf,
   reportDuration,
+  reportDurationCeil,
+  reportMoney,
 } from "./attendanceReport";
 import { isSupabaseConfigured } from "./supabase";
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay, type CleaningDayContext } from "./scheduling";
@@ -125,8 +127,10 @@ export default function App() {
     dppAnnualLimitHours: 300,
     dpcWeeklyHoursReference: 20,
     dpcReferencePeriodWeeks: 26,
+    dpcMonthlyInsuranceThreshold: 4500,
     available: false,
     contractsAvailable: false,
+    compensationAvailable: false,
   });
   const [workplaces, setWorkplaces] = useState<Workplace[]>([]);
   const [attendanceBuildingId, setAttendanceBuildingId] = useState("");
@@ -179,7 +183,7 @@ export default function App() {
       setAppSettings(
         appSettingsResult.status === "fulfilled"
           ? appSettingsResult.value
-          : { dppAnnualLimitHours: 300, dpcWeeklyHoursReference: 20, dpcReferencePeriodWeeks: 26, available: false, contractsAvailable: false },
+          : { dppAnnualLimitHours: 300, dpcWeeklyHoursReference: 20, dpcReferencePeriodWeeks: 26, dpcMonthlyInsuranceThreshold: 4500, available: false, contractsAvailable: false, compensationAvailable: false },
       );
       const taskResult = await Promise.resolve(
         schoolRepository.tasks(activeProfile, canManageOperations(activeProfile)),
@@ -667,10 +671,10 @@ export default function App() {
       throw error;
     }
   };
-  const saveDpcSettings = async (weeklyHours: number, referenceWeeks: number) => {
+  const saveDpcSettings = async (weeklyHours: number, referenceWeeks: number, monthlyThreshold: number) => {
     try {
       setNotice("");
-      await schoolRepository.saveDpcSettings(weeklyHours, referenceWeeks);
+      await schoolRepository.saveDpcSettings(weeklyHours, referenceWeeks, monthlyThreshold);
       setAppSettings(await schoolRepository.appSettings());
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Nastavení DPČ se nepodařilo uložit.");
@@ -1314,22 +1318,35 @@ function AttendanceDashboard({
   const currentContract = contracts.find((contract) => contract.active && contract.validFrom <= todayKey && (!contract.validTo || contract.validTo >= todayKey));
   const isDpp = currentContract?.contractType === "dpp";
   const isDpc = currentContract?.contractType === "dpc";
-  const progress = Math.min(
-    100,
-    (metrics.yearHours / dppAnnualLimitHours) * 100,
-  );
   const selectedName =
     workers.find((worker) => worker.id === selectedWorkerId)?.name ?? "Pracovník";
+  const currentMonthReport = useMemo(() => buildAttendanceReport(
+    records,
+    selectedName,
+    todayKey.slice(0, 7),
+    dppAnnualLimitHours,
+    now,
+    contracts,
+    appSettings.dpcMonthlyInsuranceThreshold,
+  ), [records, selectedName, todayKey, dppAnnualLimitHours, now, contracts, appSettings.dpcMonthlyInsuranceThreshold]);
+  const dppYearHours = currentMonthReport.dppYearMs / HOUR_MS;
+  const dppRemainingHours = Math.max(0, dppAnnualLimitHours - dppYearHours);
+  const dppRecommendedWeeklyHours = dppRemainingHours / metrics.weeksRemaining;
+  const dppRecommendedShiftHours = dppRecommendedWeeklyHours / Math.max(1, settings.plannedShiftsPerWeek);
+  const progress = Math.min(
+    100,
+    (dppYearHours / dppAnnualLimitHours) * 100,
+  );
   const yearWarning =
-    metrics.yearHours >= dppAnnualLimitHours
+    dppYearHours >= dppAnnualLimitHours
       ? "Roční limit DPP vyčerpán. Evidence dále zaznamenává skutečnou práci."
-      : metrics.yearHours >= dppAnnualLimitHours * (280 / 300)
+      : dppYearHours >= dppAnnualLimitHours * (280 / 300)
         ? "Pozor, roční fond DPP je téměř vyčerpán."
-        : metrics.yearHours >= dppAnnualLimitHours * (250 / 300)
+        : dppYearHours >= dppAnnualLimitHours * (250 / 300)
           ? `Roční fond DPP se blíží limitu ${dppAnnualLimitHours} hodin.`
           : "";
   const weeklyDifference =
-    metrics.weekMs / HOUR_MS - metrics.recommendedWeeklyHours;
+    metrics.weekMs / HOUR_MS - dppRecommendedWeeklyHours;
   return (
     <section className="attendance-dashboard">
       {isCaretaker && (
@@ -1376,8 +1393,8 @@ function AttendanceDashboard({
           <small>TENTO MĚSÍC</small>
           <strong>{formatDuration(metrics.monthMs)}</strong>
         </article>
-        {isDpp ? <article><small>ROK – DPP</small><strong>{metrics.yearHours.toFixed(1)} / {dppAnnualLimitHours} h</strong><span>Zbývá {metrics.remainingHours.toFixed(1)} h</span></article>
-          : isDpc ? <article><small>TÝDEN – DPČ</small><strong>{(metrics.weekMs / HOUR_MS).toFixed(1)} h</strong><span>plánovací údaj {appSettings.dpcWeeklyHoursReference} h / týden</span></article>
+        {isDpp ? <article><small>ROK – DPP</small><strong>{dppYearHours.toFixed(1)} / {dppAnnualLimitHours} h</strong><span>Zbývá {dppRemainingHours.toFixed(1)} h</span></article>
+          : isDpc ? <article><small>MĚSÍC – DPČ</small><strong>{reportDuration(currentMonthReport.dpcMonthMs)}</strong><span>{currentMonthReport.dpcGrossEstimate === undefined ? "Doplňte hodinovou sazbu" : `${reportMoney(currentMonthReport.dpcGrossEstimate)} z ${reportMoney(appSettings.dpcMonthlyInsuranceThreshold)}`}</span></article>
           : <article><small>PRACOVNÍ VZTAH</small><strong>Není nastaven</strong><span>Správce doplní platnost smlouvy.</span></article>}
       </div>
       {isDpp && <div className="dpp-progress" aria-label="Čerpání ročního limitu DPP">
@@ -1393,16 +1410,16 @@ function AttendanceDashboard({
       {isDpp && <section className="pace-card">
         <p className="eyebrow">DOPORUČENÉ TEMPO</p>
         <strong>
-          Průměr do konce roku: cca {metrics.recommendedWeeklyHours.toFixed(1)} h
+          Průměr do konce roku: cca {dppRecommendedWeeklyHours.toFixed(1)} h
           týdně
         </strong>
         <p>
-          Zbývá {metrics.remainingHours.toFixed(1)} h a přibližně {metrics.weeksRemaining}{" "}
+          Zbývá {dppRemainingHours.toFixed(1)} h a přibližně {metrics.weeksRemaining}{" "}
           plánovatelných týdnů do 31. 12.
         </p>
         <p>
           Při {settings.plannedShiftsPerWeek} směnách týdně: cca{" "}
-          {metrics.recommendedShiftHours.toFixed(1)} h / směnu.
+          {dppRecommendedShiftHours.toFixed(1)} h / směnu.
         </p>
         <b>Zákonné maximum jedné směny: 12 h.</b>
         <small>
@@ -1431,7 +1448,7 @@ function AttendanceDashboard({
           <small>Nastavení bude dostupné po aplikaci připravené migrace.</small>
         )}
       </section>}
-      {isDpc && <section className="pace-card"><p className="eyebrow">DPČ</p><strong>Týden Po–Ne: {formatDuration(metrics.weekMs)}</strong><p>Měsíc: {formatDuration(metrics.monthMs)}</p><small>{appSettings.dpcWeeklyHoursReference} hodin týdně je plánovací údaj, nikoli automatický zákaz evidence skutečné práce. Referenční období: {appSettings.dpcReferencePeriodWeeks} týdnů.</small></section>}
+      {isDpc && <DpcMonthlySummary report={currentMonthReport} appSettings={appSettings} />}
       <ShiftWarnings records={records} now={now} />
       <section className="week-detail">
         <h2>Aktuální týden</h2>
@@ -1452,13 +1469,15 @@ function AttendanceDashboard({
             Celkem tento týden <b>{formatClockDuration(metrics.weekMs)}</b>
           </span>
           <span>
-            Doporučené tempo{" "}
-            <b>{formatClockDuration(metrics.recommendedWeeklyHours * HOUR_MS)}</b>
+            {isDpp ? "Doporučené tempo" : isDpc ? "Referenční průměrný rozsah DPČ" : "Pracovní vztah"}{" "}
+            <b>{isDpp ? formatClockDuration(dppRecommendedWeeklyHours * HOUR_MS) : isDpc ? formatClockDuration(appSettings.dpcWeeklyHoursReference * HOUR_MS) : "není nastaven"}</b>
           </span>
           <p>
-            {weeklyDifference > 0
-              ? `Tento týden jsi o ${formatDuration(weeklyDifference * HOUR_MS)} nad rovnoměrným tempem.`
-              : `Do doporučeného tempa zbývá ${formatDuration(-weeklyDifference * HOUR_MS)}.`}
+            {isDpp
+              ? weeklyDifference > 0
+                ? `Tento týden jsi o ${formatDuration(weeklyDifference * HOUR_MS)} nad rovnoměrným tempem.`
+                : `Do doporučeného tempa zbývá ${formatDuration(-weeklyDifference * HOUR_MS)}.`
+              : isDpc ? `${appSettings.dpcWeeklyHoursReference} h týdně je pouze referenční průměr, nikoli potřebné minimum.` : "Správce doplní pracovní vztah pro toto období."}
           </p>
         </footer>
       </section>
@@ -1466,7 +1485,7 @@ function AttendanceDashboard({
         records={records}
         now={now}
         workerName={selectedName}
-        dppAnnualLimitHours={dppAnnualLimitHours}
+        appSettings={appSettings}
         contracts={contracts}
       />
       {isCaretaker && <WorkerContractsPanel workerId={selectedWorkerId} contracts={contracts} onSave={onSaveContract} />}
@@ -1509,13 +1528,15 @@ function WorkerContractsPanel({ workerId, contracts, onSave }: { workerId: strin
   const [editing, setEditing] = useState<WorkerContract | null>(null);
   const [saving, setSaving] = useState(false);
   const label = (value: WorkerContract["contractType"]) => value === "dpp" ? "DPP" : value === "dpc" ? "DPČ" : "Jiný vztah";
-  return <section className="worker-contracts panel"><div className="section-heading"><span><p className="eyebrow">PRACOVNÍ VZTAHY</p><h2>Historie smluv</h2></span><button onClick={() => setEditing({ id: "", workerId, contractType: "dpp", validFrom: localDateKey(), validTo: undefined, note: "", active: true })}>+ Přidat</button></div>
-    {contracts.map((contract) => <button className="contract-row" key={contract.id} onClick={() => setEditing(contract)}><span><b>{label(contract.contractType)}</b><small>{formatDate(contract.validFrom)} – {contract.validTo ? formatDate(contract.validTo) : "dosud"}{contract.active ? "" : " · neaktivní"}</small></span><i>Upravit</i></button>)}
+  return <section className="worker-contracts panel"><div className="section-heading"><span><p className="eyebrow">PRACOVNÍ VZTAHY</p><h2>Historie smluv</h2></span><button onClick={() => setEditing({ id: "", workerId, contractType: "dpp", validFrom: localDateKey(), validTo: undefined, hourlyRate: undefined, note: "", active: true })}>+ Přidat období</button></div>
+    {contracts.map((contract) => <button className="contract-row" key={contract.id} onClick={() => setEditing(contract)}><span><b>{label(contract.contractType)} · {contract.hourlyRate ? `${reportMoney(contract.hourlyRate)}/h` : "sazba chybí"}</b><small>{formatDate(contract.validFrom)} – {contract.validTo ? formatDate(contract.validTo) : "dosud"}{contract.active ? "" : " · neaktivní"}</small></span><i>Upravit</i></button>)}
     {!contracts.length && <p className="hint">Pracovní vztah zatím není nastaven. Datum zahájení se úmyslně nehádá.</p>}
     {editing && <div className="confirmation-backdrop" role="dialog" aria-modal="true"><form className="confirmation-dialog" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave(editing); setEditing(null); } finally { setSaving(false); } }}><h2>{editing.id ? "Upravit pracovní vztah" : "Nový pracovní vztah"}</h2>
       <label>Typ<select value={editing.contractType} onChange={(event) => setEditing({ ...editing, contractType: event.target.value as WorkerContract["contractType"] })}><option value="dpp">DPP</option><option value="dpc">DPČ</option><option value="other">Jiný vztah</option></select></label>
       <label>Platí od<input type="date" required value={editing.validFrom} onChange={(event) => setEditing({ ...editing, validFrom: event.target.value })} /></label>
       <label>Platí do<input type="date" value={editing.validTo ?? ""} onChange={(event) => setEditing({ ...editing, validTo: event.target.value || undefined })} /></label>
+      <label>Hodinová sazba<input type="number" min="0.01" max="100000" step="0.01" required={editing.active} value={editing.hourlyRate ?? ""} onChange={(event) => setEditing({ ...editing, hourlyRate: event.target.value ? Number(event.target.value) : undefined })} /></label>
+      <small>Sazba platí jen pro toto období. Při změně sazby vytvořte nové období.</small>
       <label>Poznámka<textarea rows={2} value={editing.note} onChange={(event) => setEditing({ ...editing, note: event.target.value })} /></label>
       <label className="switch"><input type="checkbox" checked={editing.active} onChange={(event) => setEditing({ ...editing, active: event.target.checked })} /> Aktivní</label>
       <div className="editor-actions"><button type="button" onClick={() => setEditing(null)} disabled={saving}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
@@ -1523,17 +1544,41 @@ function WorkerContractsPanel({ workerId, contracts, onSave }: { workerId: strin
   </section>;
 }
 
+function DpcMonthlySummary({ report, appSettings }: { report: ReturnType<typeof buildAttendanceReport>; appSettings: AppSettings }) {
+  const progress = report.dpcGrossEstimate === undefined
+    ? 0
+    : Math.min(100, report.dpcGrossEstimate / appSettings.dpcMonthlyInsuranceThreshold * 100);
+  return <section className="pace-card dpc-month-card">
+    <p className="eyebrow">DPČ – {report.monthLabel.toLocaleUpperCase("cs-CZ")}</p>
+    <strong>Odpracováno: {reportDuration(report.dpcMonthMs)}</strong>
+    <p>Hodinová sazba: {report.hourlyRateLabel}</p>
+    {report.dpcGrossEstimate === undefined
+      ? <p className="attendance-alert">Pro výpočet odměny a potřebného rozsahu doplňte hodinovou sazbu.</p>
+      : <>
+        <p>Odhad hrubého příjmu: <b>{reportMoney(report.dpcGrossEstimate)}</b></p>
+        <p>Rozhodný příjem podle nastavení: <b>{reportMoney(appSettings.dpcMonthlyInsuranceThreshold)}</b></p>
+        <div className="dpp-progress" aria-label="Postup k nastavenému rozhodnému příjmu DPČ"><span style={{ width: `${progress}%` }} /></div>
+        {report.dpcThresholdReached
+          ? <p><b>Nastavená hranice dosažena podle evidované docházky.</b></p>
+          : <p>Zbývá přibližně: <b>{report.dpcRemainingMsAtCurrentRate === undefined ? "nelze určit" : reportDurationCeil(report.dpcRemainingMsAtCurrentRate)} / {reportMoney(report.dpcRemainingIncome ?? 0)}</b></p>}
+        {report.dpcRequiredMsAtCurrentRate !== undefined && <p>Potřebný rozsah při aktuální sazbě: přibližně {reportDurationCeil(report.dpcRequiredMsAtCurrentRate)}.</p>}
+      </>}
+    <small>Výpočet vychází z přesné délky evidovaných směn. Jde o evidenční odhad, nikoli právní posouzení.</small>
+    <small>Referenční průměrný týdenní rozsah: {appSettings.dpcWeeklyHoursReference} h po dobu {appSettings.dpcReferencePeriodWeeks} týdnů. Nejde o měsíční minimum.</small>
+  </section>;
+}
+
 function MonthlyAttendanceReport({
   records,
   now,
   workerName,
-  dppAnnualLimitHours,
+  appSettings,
   contracts,
 }: {
   records: Attendance[];
   now: Date;
   workerName: string;
-  dppAnnualLimitHours: number;
+  appSettings: AppSettings;
   contracts: WorkerContract[];
 }) {
   const [month, setMonth] = useState(localDateKey(now).slice(0, 7));
@@ -1544,11 +1589,12 @@ function MonthlyAttendanceReport({
         records,
         workerName,
         month,
-        dppAnnualLimitHours,
+        appSettings.dppAnnualLimitHours,
         now,
         contracts,
+        appSettings.dpcMonthlyInsuranceThreshold,
       ),
-    [records, workerName, month, dppAnnualLimitHours, now, contracts],
+    [records, workerName, month, appSettings.dppAnnualLimitHours, appSettings.dpcMonthlyInsuranceThreshold, now, contracts],
   );
   return (
     <section className="monthly-report">
@@ -1564,7 +1610,8 @@ function MonthlyAttendanceReport({
       <div className="monthly-report-summary">
         <span>Celkem za měsíc <b>{reportDuration(report.monthMs)}</b></span>
         <span>Celkem za rok <b>{reportDuration(report.yearMs)}</b></span>
-        <span className="report-dpp">{report.contractLabel}{report.contractLabel === "DPP" && <b> {reportDuration(report.yearMs)} / {dppAnnualLimitHours} h</b>}</span>
+        <span className="report-dpp">{report.contractLabel}{report.dppYearMs > 0 && <b> · DPP rok {reportDuration(report.dppYearMs)} / {appSettings.dppAnnualLimitHours} h</b>}</span>
+        <span className="report-dpp">Odhad hrubé odměny <b>{report.grossEstimate === undefined ? "nelze určit" : reportMoney(report.grossEstimate)}</b></span>
       </div>
       <div className="report-actions">
         <button onClick={() => setPreview((value) => !value)}>
@@ -1593,6 +1640,7 @@ function AttendanceReportPreview({
         <span>Pracovník: {report.workerName}</span>
         <span>Pracoviště: {report.workplaces.join(", ") || "—"}</span>
         <span>Typ: {report.contractLabel}</span>
+        <span>Hodinová sazba: {report.hourlyRateLabel}</span>
       </header>
       <div className="report-rows">
         {report.rows.map((row) => (
@@ -1611,7 +1659,10 @@ function AttendanceReportPreview({
           <span key={total.name}>{total.name}: {reportDuration(total.durationMs)}</span>
         ))}
         <b>Celkem za rok: {reportDuration(report.yearMs)}</b>
-        {report.contractLabel === "DPP" && <b>DPP: {reportDuration(report.yearMs)} / {report.annualLimitHours} h</b>}
+        {report.contractSegments.map((segment) => <span key={segment.key}>{segment.contractType.toUpperCase()} · {formatDate(segment.validFrom)}–{segment.validTo ? formatDate(segment.validTo) : "dosud"} · {segment.hourlyRate ? `${reportMoney(segment.hourlyRate)}/h` : "sazba chybí"} · {reportDuration(segment.durationMs)}</span>)}
+        {report.grossEstimate !== undefined ? <b>Odhad hrubé odměny: {reportMoney(report.grossEstimate)}</b> : report.rows.length > 0 && <b>Pro výpočet odměny doplňte pracovní vztah a hodinovou sazbu.</b>}
+        {report.dppYearMs > 0 && <b>DPP: {reportDuration(report.dppYearMs)} / {report.annualLimitHours} h</b>}
+        {report.dpcMonthMs > 0 && <><span>DPČ · rozhodný příjem podle nastavení: {reportMoney(report.dpcMonthlyThreshold)}</span>{report.dpcThresholdReached ? <b>Nastavená hranice dosažena podle evidované docházky.</b> : report.dpcRemainingIncome !== undefined && <b>Do nastavené hranice zbývá: {reportMoney(report.dpcRemainingIncome)}{report.dpcRemainingMsAtCurrentRate !== undefined ? ` / ${reportDurationCeil(report.dpcRemainingMsAtCurrentRate)}` : ""}</b>}</>}
         <small>Vygenerováno z evidence docházky Klid Koly</small>
       </footer>
     </div>
@@ -3132,7 +3183,7 @@ function MoreScreen({
   appSettings: AppSettings;
   onSaveWorkplace: (workplace: Workplace) => Promise<void>;
   onSaveDppLimit: (value: number) => Promise<void>;
-  onSaveDpcSettings: (weeklyHours: number, referenceWeeks: number) => Promise<void>;
+  onSaveDpcSettings: (weeklyHours: number, referenceWeeks: number, monthlyThreshold: number) => Promise<void>;
 }) {
   const admin = canManageOperations(profile);
   return (
@@ -3175,19 +3226,26 @@ function MoreScreen({
           available={appSettings.available}
           onSave={onSaveDppLimit}
         />
-        <DpcSettings value={appSettings.dpcWeeklyHoursReference} weeks={appSettings.dpcReferencePeriodWeeks} editable={admin && appSettings.contractsAvailable} onSave={onSaveDpcSettings} />
+        <DpcSettings
+          value={appSettings.dpcWeeklyHoursReference}
+          weeks={appSettings.dpcReferencePeriodWeeks}
+          threshold={appSettings.dpcMonthlyInsuranceThreshold}
+          editable={admin && appSettings.compensationAvailable}
+          onSave={onSaveDpcSettings}
+        />
         <p className="hint">Přihlášen: {profile.full_name} · {roleLabel(accessRole(profile))}</p>
       </section>
     </div>
   );
 }
 
-function DpcSettings({ value, weeks, editable, onSave }: { value: number; weeks: number; editable: boolean; onSave: (value: number, weeks: number) => Promise<void> }) {
+function DpcSettings({ value, weeks, threshold, editable, onSave }: { value: number; weeks: number; threshold: number; editable: boolean; onSave: (value: number, weeks: number, threshold: number) => Promise<void> }) {
   const [hours, setHours] = useState(value);
   const [period, setPeriod] = useState(weeks);
+  const [monthlyThreshold, setMonthlyThreshold] = useState(threshold);
   const [saving, setSaving] = useState(false);
-  useEffect(() => { setHours(value); setPeriod(weeks); }, [value, weeks]);
-  return <div className="dpp-setting"><label>Plánovací údaj DPČ<input type="number" min="1" max="80" step="0.5" value={hours} disabled={!editable} onChange={(event) => setHours(Number(event.target.value))} /></label><span>hodin týdně · celé týdny Po–Ne</span><label>Referenční období<input type="number" min="1" max="52" value={period} disabled={!editable} onChange={(event) => setPeriod(Number(event.target.value))} /></label><span>týdnů</span>{editable && <button disabled={saving || (hours === value && period === weeks)} onClick={async () => { setSaving(true); try { await onSave(hours, period); } finally { setSaving(false); } }}>{saving ? "Ukládám…" : "Uložit DPČ"}</button>}</div>;
+  useEffect(() => { setHours(value); setPeriod(weeks); setMonthlyThreshold(threshold); }, [value, weeks, threshold]);
+  return <div className="dpp-setting"><label>Rozhodný měsíční příjem DPČ<input type="number" min="1" max="1000000" step="1" value={monthlyThreshold} disabled={!editable} onChange={(event) => setMonthlyThreshold(Number(event.target.value))} /></label><span>Kč · evidenční hranice pro měsíční odhad</span><label>Referenční průměrný týdenní rozsah DPČ<input type="number" min="1" max="80" step="0.5" value={hours} disabled={!editable} onChange={(event) => setHours(Number(event.target.value))} /></label><span>hodin týdně · není to potřebné minimum</span><label>Referenční období<input type="number" min="1" max="52" value={period} disabled={!editable} onChange={(event) => setPeriod(Number(event.target.value))} /></label><span>týdnů</span>{editable && <button disabled={saving || (hours === value && period === weeks && monthlyThreshold === threshold)} onClick={async () => { setSaving(true); try { await onSave(hours, period, monthlyThreshold); } finally { setSaving(false); } }}>{saving ? "Ukládám…" : "Uložit DPČ"}</button>}</div>;
 }
 
 function WorkplaceSettings({

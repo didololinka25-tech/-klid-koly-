@@ -10,6 +10,28 @@ export type AttendanceReportRow = {
   start: string
   end: string
   durationMs: number
+  contractType?: 'dpp' | 'dpc' | 'other'
+  hourlyRate?: number
+  grossEstimate?: number
+}
+
+export type AttendanceContract = {
+  id?: string
+  contractType: 'dpp' | 'dpc' | 'other'
+  validFrom: string
+  validTo?: string
+  active: boolean
+  hourlyRate?: number
+}
+
+export type AttendanceContractSegment = {
+  key: string
+  contractType: 'dpp' | 'dpc' | 'other'
+  validFrom: string
+  validTo?: string
+  hourlyRate?: number
+  durationMs: number
+  grossEstimate?: number
 }
 
 export type AttendanceReport = {
@@ -21,8 +43,21 @@ export type AttendanceReport = {
   workplaceTotals: { name: string; durationMs: number }[]
   monthMs: number
   yearMs: number
+  dppYearMs: number
   annualLimitHours: number
   contractLabel: string
+  hourlyRateLabel: string
+  contractSegments: AttendanceContractSegment[]
+  grossEstimate?: number
+  missingContractMs: number
+  missingRateMs: number
+  dpcMonthMs: number
+  dpcGrossEstimate?: number
+  dpcMonthlyThreshold: number
+  dpcRemainingIncome?: number
+  dpcRemainingMsAtCurrentRate?: number
+  dpcRequiredMsAtCurrentRate?: number
+  dpcThresholdReached: boolean
   generatedAt: Date
 }
 
@@ -34,35 +69,119 @@ export function reportDuration(value: number) {
   return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`
 }
 
+export function reportMoney(value: number) {
+  return new Intl.NumberFormat('cs-CZ', {
+    style: 'currency',
+    currency: 'CZK',
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
+export function reportDurationCeil(value: number) {
+  const minutes = Math.ceil(Math.max(0, value) / 60000)
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`
+}
+
+const contractForDate = (contracts: AttendanceContract[], date: string) =>
+  contracts.find((contract) =>
+    contract.active && contract.validFrom <= date && (!contract.validTo || contract.validTo >= date),
+  )
+
+const contractOverlapsMonth = (contract: AttendanceContract, month: string) => {
+  const monthStart = `${month}-01`
+  const monthEnd = new Date(`${monthStart}T12:00:00`)
+  monthEnd.setMonth(monthEnd.getMonth() + 1)
+  monthEnd.setDate(0)
+  const endKey = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`
+  return contract.active && contract.validFrom <= endKey && (!contract.validTo || contract.validTo >= monthStart)
+}
+
 export function buildAttendanceReport(
   records: Attendance[],
   workerName: string,
   month: string,
   annualLimitHours: number,
   now = new Date(),
-  contracts: { contractType: 'dpp' | 'dpc' | 'other'; validFrom: string; validTo?: string; active: boolean }[] = [],
+  contracts: AttendanceContract[] = [],
+  dpcMonthlyThreshold = 4500,
 ): AttendanceReport {
   const year = month.slice(0, 4)
   const monthRecords = records
     .filter((record) => record.date.startsWith(month))
     .sort((a, b) => a.start.localeCompare(b.start))
-  const rows = monthRecords.map((record) => ({
-    id: record.id,
-    date: record.date,
-    day: new Intl.DateTimeFormat('cs-CZ', { weekday: 'short' })
-      .format(new Date(`${record.date}T12:00:00`))
-      .replace('.', ''),
-    workplace: record.buildingName || 'Škola',
-    start: new Intl.DateTimeFormat('cs-CZ', { hour: '2-digit', minute: '2-digit' }).format(new Date(record.start)),
-    end: record.end
-      ? new Intl.DateTimeFormat('cs-CZ', { hour: '2-digit', minute: '2-digit' }).format(new Date(record.end))
-      : 'probíhá',
-    durationMs: duration(record, now),
-  }))
+  const rows = monthRecords.map((record) => {
+    const contract = contractForDate(contracts, record.date)
+    const durationMs = duration(record, now)
+    const hourlyRate = contract?.hourlyRate
+    return {
+      id: record.id,
+      date: record.date,
+      day: new Intl.DateTimeFormat('cs-CZ', { weekday: 'short' })
+        .format(new Date(`${record.date}T12:00:00`))
+        .replace('.', ''),
+      workplace: record.buildingName || 'Škola',
+      start: new Intl.DateTimeFormat('cs-CZ', { hour: '2-digit', minute: '2-digit' }).format(new Date(record.start)),
+      end: record.end
+        ? new Intl.DateTimeFormat('cs-CZ', { hour: '2-digit', minute: '2-digit' }).format(new Date(record.end))
+        : 'probíhá',
+      durationMs,
+      contractType: contract?.contractType,
+      hourlyRate,
+      grossEstimate: hourlyRate ? durationMs / HOUR_MS * hourlyRate : undefined,
+    }
+  })
   const totals = new Map<string, number>()
-  const contractTypes = new Set(monthRecords.map((record) => contracts.find((contract) => contract.active && contract.validFrom <= record.date && (!contract.validTo || contract.validTo >= record.date))?.contractType).filter(Boolean))
+  const monthContracts = contracts.filter((contract) => contractOverlapsMonth(contract, month))
+  const contractTypes = new Set([
+    ...monthContracts.map((contract) => contract.contractType),
+    ...rows.map((row) => row.contractType).filter(Boolean),
+  ])
   const contractLabel = contractTypes.size > 1 ? 'Více pracovních vztahů' : contractTypes.has('dpc') ? 'DPČ' : contractTypes.has('other') ? 'Jiný pracovní vztah' : contractTypes.has('dpp') ? 'DPP' : 'Neuvedeno'
   rows.forEach((row) => totals.set(row.workplace, (totals.get(row.workplace) ?? 0) + row.durationMs))
+  const segmentMap = new Map<string, AttendanceContractSegment>()
+  rows.forEach((row) => {
+    const contract = contractForDate(contracts, row.date)
+    if (!contract) return
+    const key = contract.id ?? `${contract.contractType}|${contract.validFrom}|${contract.validTo ?? ''}|${contract.hourlyRate ?? ''}`
+    const existing = segmentMap.get(key) ?? {
+      key,
+      contractType: contract.contractType,
+      validFrom: contract.validFrom,
+      validTo: contract.validTo,
+      hourlyRate: contract.hourlyRate,
+      durationMs: 0,
+      grossEstimate: contract.hourlyRate ? 0 : undefined,
+    }
+    existing.durationMs += row.durationMs
+    if (existing.grossEstimate !== undefined && row.grossEstimate !== undefined) existing.grossEstimate += row.grossEstimate
+    segmentMap.set(key, existing)
+  })
+  const contractSegments = [...segmentMap.values()].sort((a, b) => a.validFrom.localeCompare(b.validFrom))
+  const missingContractMs = rows.filter((row) => !row.contractType).reduce((sum, row) => sum + row.durationMs, 0)
+  const missingRateMs = rows.filter((row) => row.contractType && !row.hourlyRate).reduce((sum, row) => sum + row.durationMs, 0)
+  const grossEstimate = missingContractMs || missingRateMs
+    ? undefined
+    : rows.reduce((sum, row) => sum + (row.grossEstimate ?? 0), 0)
+  const dpcRows = rows.filter((row) => row.contractType === 'dpc')
+  const dpcMonthMs = dpcRows.reduce((sum, row) => sum + row.durationMs, 0)
+  const dpcGrossEstimate = dpcRows.some((row) => !row.hourlyRate)
+    ? undefined
+    : dpcRows.reduce((sum, row) => sum + (row.grossEstimate ?? 0), 0)
+  const latestDpcRate = monthContracts
+    .filter((contract) => contract.contractType === 'dpc' && contract.hourlyRate)
+    .sort((a, b) => b.validFrom.localeCompare(a.validFrom))[0]?.hourlyRate
+  const dpcThresholdReached = dpcGrossEstimate !== undefined && dpcGrossEstimate >= dpcMonthlyThreshold
+  const dpcRemainingIncome = dpcGrossEstimate === undefined
+    ? undefined
+    : Math.max(0, dpcMonthlyThreshold - dpcGrossEstimate)
+  const dpcRemainingMsAtCurrentRate = latestDpcRate && dpcRemainingIncome !== undefined
+    ? dpcRemainingIncome / latestDpcRate * HOUR_MS
+    : undefined
+  const dpcRequiredMsAtCurrentRate = latestDpcRate
+    ? dpcMonthlyThreshold / latestDpcRate * HOUR_MS
+    : undefined
+  const rates = [...new Set(monthContracts.map((contract) => contract.hourlyRate).filter((rate): rate is number => Boolean(rate)))]
+  const hourlyRateLabel = rates.length === 1 ? `${reportMoney(rates[0])}/h` : rates.length > 1 ? 'Více historických sazeb' : 'Nenastavena'
   return {
     workerName,
     month,
@@ -77,8 +196,23 @@ export function buildAttendanceReport(
     yearMs: records
       .filter((record) => record.date.startsWith(year))
       .reduce((sum, record) => sum + duration(record, now), 0),
+    dppYearMs: records
+      .filter((record) => record.date.startsWith(year) && contractForDate(contracts, record.date)?.contractType === 'dpp')
+      .reduce((sum, record) => sum + duration(record, now), 0),
     annualLimitHours,
     contractLabel,
+    hourlyRateLabel,
+    contractSegments,
+    grossEstimate,
+    missingContractMs,
+    missingRateMs,
+    dpcMonthMs,
+    dpcGrossEstimate,
+    dpcMonthlyThreshold,
+    dpcRemainingIncome,
+    dpcRemainingMsAtCurrentRate,
+    dpcRequiredMsAtCurrentRate,
+    dpcThresholdReached,
     generatedAt: now,
   }
 }
@@ -102,6 +236,7 @@ function drawPage(report: AttendanceReport, rows: AttendanceReportRow[], page: n
   context.fillText(`Pracovník: ${report.workerName}`, 74, 233)
   context.fillText(`Pracoviště: ${workplaces}`, 74, 271)
   context.fillText(`Typ: ${report.contractLabel}`, 74, 309)
+  context.fillText(`Hodinová sazba: ${report.hourlyRateLabel}`, 620, 309)
 
   const columns = [74, 235, 325, 650, 805, 960]
   let y = 372
@@ -139,7 +274,22 @@ function drawPage(report: AttendanceReport, rows: AttendanceReportRow[], page: n
     context.font = '700 24px Arial, sans-serif'
     context.fillText(`Celkem za rok: ${reportDuration(report.yearMs)}`, 74, y)
     y += 38
-    if (report.contractLabel === 'DPP') context.fillText(`DPP: ${reportDuration(report.yearMs)} / ${report.annualLimitHours} h`, 74, y)
+    if (report.grossEstimate !== undefined) {
+      context.fillText(`Odhad hrubé odměny: ${reportMoney(report.grossEstimate)}`, 74, y)
+      y += 38
+    } else if (report.rows.length) {
+      context.fillText('Odměnu nelze dopočítat: chybí pracovní vztah nebo sazba.', 74, y)
+      y += 38
+    }
+    if (report.contractLabel === 'DPP') {
+      context.fillText(`DPP: ${reportDuration(report.dppYearMs)} / ${report.annualLimitHours} h`, 74, y)
+    }
+    if (report.contractLabel === 'DPČ') {
+      context.fillText(`Rozhodný příjem podle nastavení: ${reportMoney(report.dpcMonthlyThreshold)}`, 74, y)
+      y += 38
+      if (report.dpcThresholdReached) context.fillText('Nastavená hranice dosažena podle evidované docházky.', 74, y)
+      else if (report.dpcRemainingIncome !== undefined) context.fillText(`Do nastavené hranice zbývá: ${reportMoney(report.dpcRemainingIncome)}`, 74, y)
+    }
   }
   context.fillStyle = '#617772'
   context.font = '18px Arial, sans-serif'
