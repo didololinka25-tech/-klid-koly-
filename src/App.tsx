@@ -43,6 +43,14 @@ import { attendanceEditorStartValue, pragueDateKey, pragueDateTimeInput } from "
 import { forBuilding, roomForBuilding } from "./buildingScope";
 import { applyBulkUndo, bulkTasks, findUndoableRoomAction, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
 import { createLatestRequestGate } from "./latestRequest";
+import {
+  extraActivityTypes,
+  floorKindLabel,
+  isExtraCleaningTask,
+  isStandardCleaningTask,
+  roomIsComplete,
+  summarizeCleaningDay,
+} from "./cleaningPresentation";
 
 type Section =
   | "Dnes"
@@ -873,6 +881,11 @@ export default function App() {
       ? tasks.filter((task) => task.active && task.dueToday)
       : tasks;
   const visibleDone = visible.filter((task) => task.done).length;
+  const todaySummary = summarizeCleaningDay(visible.filter((task) => !isFinalCheckTask(task)));
+  const todayRooms = todaySummary.reduce((sum, building) => sum + building.roomCount, 0);
+  const todayRoomsDone = todaySummary.reduce((sum, building) => sum + building.completedRoomCount, 0);
+  const todayExtras = visible.filter((task) => !isFinalCheckTask(task) && isExtraCleaningTask(task));
+  const todayExtrasDone = todayExtras.filter((task) => task.done).length;
   const todayBuildingIds = [...new Set(visible.map((task) => task.buildingId).filter((id): id is string => Boolean(id)))];
   const todayContexts = todayBuildingIds.map((buildingId) => resolveCleaningDay(
     todayPlanDate,
@@ -946,15 +959,20 @@ export default function App() {
           ) : <>
           {todayPlanStatus === "refreshing" && <p className="plan-refreshing" aria-live="polite">Aktualizuji dnešní plán…</p>}
           {todayPlanStatus === "error" && <section className="plan-stale-error" role="alert"><span>Aktualizace plánu se nezdařila. Zobrazuji poslední načtený stav.</span><button onClick={retryTodayPlan}>Zkusit znovu</button></section>}
-          <section className={visible.length > 0 && visibleDone === visible.length ? "hero cleaning-complete" : "hero"}>
+          <section className={visible.length > 0 && visibleDone === visible.length ? "hero today-overview cleaning-complete" : "hero today-overview"}>
             <span className="hero-copy">
               <b>{cleaningDayHeading(displayCleaningDay, visible.length)}</b>
               <small>{cleaningDayDescription(displayCleaningDay)}</small>
             </span>
-            <strong>
-              {visibleDone} / {visible.length} hotovo
-            </strong>
-            <ProgressBar value={visibleDone} total={visible.length} label="Celkový průběh úklidu" />
+            <strong>{todayRoomsDone} / {todayRooms} místností</strong>
+            <ProgressBar value={todayRoomsDone} total={todayRooms} label="Dokončené místnosti" />
+            <div className="today-plan-summary">
+              {todaySummary.map((building) => <section key={building.name}>
+                <h2>{building.name === "Školka" ? "🌱" : "🏫"} {building.name}</h2>
+                <div>{building.floors.map((floor) => <span className={`plan-floor ${floor.kind}`} key={floor.name}><b>{floor.name}</b><small>{floorKindLabel(floor.kind)}</small></span>)}</div>
+              </section>)}
+              {todayExtras.length > 0 ? <p><b>DNES NAVÍC</b><span>{extraActivityTypes(todayExtras).map((type) => `${activityTypes[type]?.icon ?? "✓"} ${activityTypes[type]?.label ?? type}`).join(" · ")}</span><small>{todayExtrasDone}/{todayExtras.length} hotovo</small></p> : visible.length > 0 ? <p><b>DNES NAVÍC</b><span>Dnes bez dalších periodických prací.</span></p> : null}
+            </div>
             {visible.length > 0 && visibleDone === visible.length && <p>Všechno hotovo – můžete odejít.</p>}
           </section>
           {displayCleaningDay.kind !== "preview" && visible.length > 0 && (
@@ -2004,26 +2022,34 @@ function TaskHierarchy({
     <>
       {[...buildings.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([building, buildingTasks]) => {
         const common = buildingTasks.filter((task) => !task.roomId);
+        const commonStandard = common.filter(isStandardCleaningTask);
+        const commonExtra = common.filter(isExtraCleaningTask);
         const floorGroups = new Map<string, Task[]>();
         buildingTasks.filter((task) => task.roomId).forEach((task) => floorGroups.set(task.floor, [...(floorGroups.get(task.floor) ?? []), task]));
-        const done = buildingTasks.filter((task) => task.done).length;
+        const rooms = new Map<string, Task[]>();
+        buildingTasks.filter((task) => task.roomId).forEach((task) => {
+          const key = task.roomId ?? task.room;
+          rooms.set(key, [...(rooms.get(key) ?? []), task]);
+        });
+        const doneRooms = [...rooms.values()].filter(roomIsComplete).length;
         return <section className="building-task-group" key={building}>
-          <header className="building-task-heading"><span><p className="eyebrow">PRACOVIŠTĚ</p><h2>{building}</h2></span><b>{done}/{buildingTasks.length}</b></header>
-          <ProgressBar value={done} total={buildingTasks.length} label={`Průběh: ${building}`} />
-          {common.length > 0 && <section className="shared-tasks"><h2>Společné úkoly</h2><TaskRows tasks={common} onComplete={onComplete} pendingTaskIds={pendingTaskIds} guides={guides} /></section>}
+          <header className="building-task-heading"><span><p className="eyebrow">PRACOVIŠTĚ</p><h2>{building}</h2></span><b>{doneRooms}/{rooms.size} místností</b></header>
+          <ProgressBar value={doneRooms} total={rooms.size} label={`Dokončené místnosti: ${building}`} />
+          {commonStandard.length > 0 && <section className="shared-tasks compact-shared"><p className="eyebrow">PŘED ÚKLIDEM</p><TaskRows tasks={commonStandard} onComplete={onComplete} pendingTaskIds={pendingTaskIds} guides={guides} /></section>}
+          {commonExtra.length > 0 && <section className="shared-tasks compact-shared today-extra-shared"><p className="eyebrow">DNES NAVÍC</p><TaskRows tasks={commonExtra} onComplete={onComplete} pendingTaskIds={pendingTaskIds} guides={guides} /></section>}
           {[...floorGroups.entries()].sort(([, a], [, b]) => a[0].floorSort - b[0].floorSort).map(([floor, floorTasks]) => (
             <FloorGroup key={`${building}|${floor}`} label={floor} tasks={floorTasks} bulkActions={bulkActions} onComplete={onComplete} onCompleteAll={onCompleteAll} onUndoBulk={onUndoBulk} pendingTaskIds={pendingTaskIds} guides={guides} />
           ))}
         </section>;
       })}
       {finalChecks.length > 0 && (
-        <section className="shared-tasks final-checks">
-          <div className="section-heading">
+        <details className="shared-tasks final-checks" open={workTasks.length > 0 && workTasks.every((task) => task.done)}>
+          <summary className="section-heading">
             <span><h2>Před odchodem ze školy</h2><small>Povinná společná kontrola</small></span>
             <b>{finalChecks.filter((task) => task.done).length}/{finalChecks.length}</b>
-          </div>
+          </summary>
           <TaskRows tasks={finalChecks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} />
-        </section>
+        </details>
       )}
       {tasks.length === 0 && (
         <section className="empty">
@@ -2058,7 +2084,6 @@ function FloorGroup({
   tasks.forEach((task) =>
     rooms.set(task.room, [...(rooms.get(task.room) ?? []), task]),
   );
-  const complete = tasks.filter((task) => task.done).length;
   return (
     <section className="floor-group">
       <button
@@ -2069,11 +2094,11 @@ function FloorGroup({
         <span>
           <b>{label}</b>
           <small>
-            {complete} / {tasks.length} hotovo
+            {[...rooms.values()].filter(roomIsComplete).length} / {rooms.size} místností · {floorKindLabel(tasks.some((task) => (task.cleaningCycleLength ?? 0) > 1) ? "rotation" : tasks.some(isStandardCleaningTask) ? "standard" : "additional")}
           </small>
         </span>
         <i>{open ? "⌃" : "⌄"}</i>
-        <ProgressBar value={complete} total={tasks.length} label={`Průběh: ${label}`} />
+        <ProgressBar value={[...rooms.values()].filter(roomIsComplete).length} total={rooms.size} label={`Dokončené místnosti: ${label}`} />
       </button>
       {open && (
         <div className="room-list">
@@ -2120,18 +2145,19 @@ function RoomActivityGroup({
   const routine = bulkTasks(tasks);
   const completed = routine.filter((task) => task.done).length;
   const allRoutineDone = routine.length > 0 && completed === routine.length;
-  const specialCount = tasks.length - routine.length;
+  const allRequiredDone = roomIsComplete(tasks);
+  const extraTasks = tasks.filter(isExtraCleaningTask);
+  const extraRemaining = extraTasks.filter((task) => !task.done);
   const completion = allRoutineDone ? routine.find((task) => task.completedBy) : undefined;
   const completedBy = bulkAction?.workerName ?? completion?.completedBy;
   const completedAt = bulkAction?.createdAt ?? completion?.completedAt;
   return (
-    <section className={`room-group${allRoutineDone ? " room-done" : ""}`}>
+    <section className={`room-group${allRequiredDone ? " room-done" : allRoutineDone ? " room-routine-done" : ""}`}>
       <header className="room-heading">
         <span>
           <h3>{room}</h3>
           <small>
-            {routine.length ? `${completed}/${routine.length} běžných` : "Pouze speciální úkoly"}
-            {specialCount > 0 ? ` · ${specialCount} speciální` : ""}
+            {allRequiredDone ? "Všechny dnešní činnosti hotové" : routine.length ? `${completed}/${routine.length} běžných hotovo` : "Pouze práce navíc"}
           </small>
           {completedBy && <small className="room-author">✓ {completedBy}{completedAt ? ` · ${new Date(completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
         </span>
@@ -2145,6 +2171,7 @@ function RoomActivityGroup({
           }}
         >{saving ? "Vracím…" : "Vrátit dokončení místnosti"}</button> : <button
           className="complete-room"
+          aria-label={`Označit vše jako hotové: ${room}`}
           disabled={
             saving ||
             allRoutineDone ||
@@ -2160,9 +2187,10 @@ function RoomActivityGroup({
             }
           }}
         >
-          {saving ? "Ukládám…" : allRoutineDone ? "✓ Hotovo" : "Označit vše jako hotové"}
+          {saving ? "Ukládám…" : allRoutineDone ? "✓ Běžný úklid hotový" : "✓ Hotová místnost"}
         </button>}
       </header>
+      {extraTasks.length > 0 && <div className="room-today-extra"><b>{extraTasks.some((task) => task.frequency === "mimořádně") ? "⚠ MIMOŘÁDNĚ" : "DNES NAVÍC"}</b><div>{extraTasks.map((task) => <span className={task.done ? "done" : ""} key={task.id}>{activityTypes[task.activityType]?.icon ?? "✓"} {task.title}</span>)}</div>{allRoutineDone && extraRemaining.length > 0 && <small>Běžný úklid je hotový, zbývá {extraRemaining.length} práce navíc.</small>}</div>}
       <button className="room-detail-toggle" onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen}>
         {detailsOpen ? "Skrýt jednotlivé úkoly" : "Zobrazit jednotlivé úkoly"}
       </button>
@@ -3611,8 +3639,13 @@ function dueTasksForDate(tasks: Task[], records: CleaningDayRecord[], date: stri
 }
 
 function calendarContextForDate(tasks: Task[], records: CleaningDayRecord[], date: string) {
+  const active = records.filter((record) => record.status === "active");
+  const executing = active.find((record) => record.executionDate === date);
+  if (executing) return resolveCleaningDay(date, [executing]);
+  const moved = active.find((record) => record.kind === "rescheduled" && record.sourceDate === date);
+  if (moved) return resolveCleaningDay(date, [moved]);
   const buildingIds = [...new Set(tasks.map((task) => task.buildingId).filter((id): id is string => Boolean(id)))];
-  if (buildingIds.length === 1) return resolveCleaningDay(date, records.filter((record) => record.buildingId === buildingIds[0]));
+  if (buildingIds.length === 1) return resolveCleaningDay(date, active.filter((record) => record.buildingId === buildingIds[0]));
   return resolveCleaningDay(date, []);
 }
 
@@ -3622,6 +3655,7 @@ function floorPictogram(floor: string) {
 }
 
 function CalendarDayDetail({ date, tasks, context }: { date: string; tasks: Task[]; context: CleaningDayContext }) {
+  const summary = summarizeCleaningDay(tasks.filter((task) => !isFinalCheckTask(task)));
   const buildings = new Map<string, Map<string, Map<string, Task[]>>>();
   tasks.forEach((task) => {
     const floors = buildings.get(task.building) ?? new Map<string, Map<string, Task[]>>();
@@ -3632,15 +3666,24 @@ function CalendarDayDetail({ date, tasks, context }: { date: string; tasks: Task
   });
   return (
     <section className="calendar-day-detail">
-      <header><span><small>{context.kind === "extraordinary" ? "MIMOŘÁDNÝ ÚKLID" : context.kind === "rescheduled" ? "PŘESUNUTÝ ÚKLID" : "PLÁN DNE"}</small><b>{formatDate(date)}</b></span><strong>{tasks.length} úkolů</strong></header>
+      <header><span><small>{context.kind === "extraordinary" ? "MIMOŘÁDNÝ ÚKLID" : context.kind === "rescheduled" ? "PŘESUNUTÝ ÚKLID" : "PLÁN DNE"}</small><b>{todayLabel(date)}</b></span><strong>{summary.reduce((sum, building) => sum + building.roomCount, 0)} místností</strong></header>
       {context.note && <p>{context.note}</p>}
-      {[...buildings.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([building, floors]) => <section className="calendar-detail-building" key={building}><h3>{building}</h3>
-        {[...floors.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([floor, rooms]) => (
-          <details key={floor} open className="calendar-detail-floor"><summary><b>{floor}</b><span>{[...rooms.values()].reduce((sum, items) => sum + items.length, 0)}</span></summary>
-            {[...rooms.entries()].map(([room, roomTasks]) => <article key={room} className="calendar-detail-room"><b>{room}</b><div>{roomTasks.sort((a, b) => a.sortOrder - b.sortOrder).map((task) => <span key={task.id}><i>{activityTypes[task.activityType]?.icon ?? "✓"}</i>{task.title}</span>)}</div></article>)}
-          </details>
-        ))}
+      {summary.map((building) => <section className="calendar-day-summary" key={building.name}>
+        <h3>{building.name === "Školka" ? "🌱" : "🏫"} {building.name}</h3>
+        <div className="calendar-plan-lines">
+          {building.floors.map((floor) => <span key={floor.name}><b>{floor.kind === "standard" ? "STANDARD" : floor.kind === "rotation" ? "ROTACE" : "DALŠÍ"}</b><i>{floor.name}</i></span>)}
+        </div>
+        <div className="calendar-extra-summary"><b>DNES NAVÍC</b>{building.extraTasks.length ? <span>{extraActivityTypes(building.extraTasks).map((type) => `${activityTypes[type]?.icon ?? "✓"} ${activityTypes[type]?.label ?? type}`).join(" · ")}</span> : <span>Bez dalších periodických prací.</span>}</div>
       </section>)}
+      {tasks.length > 0 && <details className="calendar-full-plan"><summary>Zobrazit celý plán dne</summary>
+        {[...buildings.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([building, floors]) => <section className="calendar-detail-building" key={building}><h3>{building}</h3>
+          {[...floors.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([floor, rooms]) => (
+            <details key={floor} className="calendar-detail-floor"><summary><b>{floor}</b><span>{[...rooms.values()].reduce((sum, items) => sum + items.length, 0)} činností</span></summary>
+              {[...rooms.entries()].map(([room, roomTasks]) => <article key={room} className="calendar-detail-room"><b>{room}</b><div>{roomTasks.sort((a, b) => a.sortOrder - b.sortOrder).map((task) => <span key={task.id}><i>{activityTypes[task.activityType]?.icon ?? "✓"}</i>{task.title}</span>)}</div></article>)}
+            </details>
+          ))}
+        </section>)}
+      </details>}
       {!tasks.length && <p className="hint">V tento den není naplánovaný úklid.</p>}
     </section>
   );
@@ -3669,13 +3712,15 @@ function CleaningCalendar({
   const today = localDateKey();
   const [month, setMonth] = useState(today.slice(0, 7));
   const [selectedDate, setSelectedDate] = useState(today);
+  const [buildingFilter, setBuildingFilter] = useState("all");
+  const calendarTasks = buildingFilter === "all" ? tasks : tasks.filter((task) => task.buildingId === buildingFilter);
   const future = records.filter((item) => item.executionDate >= today).sort((a, b) => a.executionDate.localeCompare(b.executionDate));
   const calendarDays = useMemo(() => monthGridDates(month).map((date) => {
-    const due = dueTasksForDate(tasks, records, date);
+    const due = dueTasksForDate(calendarTasks, records, date);
     return { date, tasks: due, context: calendarContextForDate(due, records, date) };
-  }), [month, records, tasks]);
+  }), [month, records, calendarTasks]);
   const selected = calendarDays.find((item) => item.date === selectedDate)
-    ?? (() => { const due = dueTasksForDate(tasks, records, selectedDate); return { date: selectedDate, tasks: due, context: calendarContextForDate(due, records, selectedDate) }; })();
+    ?? (() => { const due = dueTasksForDate(calendarTasks, records, selectedDate); return { date: selectedDate, tasks: due, context: calendarContextForDate(due, records, selectedDate) }; })();
   const moveMonth = (amount: number) => {
     const [year, monthNumber] = month.split("-").map(Number);
     const next = new Date(Date.UTC(year, monthNumber - 1 + amount, 1));
@@ -3687,10 +3732,11 @@ function CleaningCalendar({
   return (
     <div className="cleaning-calendar">
       <section className="panel calendar-intro">
-        <p className="eyebrow">PRAVIDELNÝ PLÁN</p>
-        <b>Škola: Po · St · Pá &nbsp;|&nbsp; Školka: Út</b>
-        <small>Výjimky níže jsou uložené samostatně. Google Calendar zatím není připojený.</small>
+        <p className="eyebrow">KALENDÁŘ ÚKLIDU</p>
+        <b>Stručně ukazuje pracoviště, prostory na řadě a práci navíc.</b>
+        <small>Po otevření dne lze zobrazit celý detail. Plán vychází ze stejného resolveru jako obrazovka Dnes.</small>
       </section>
+      <div className="calendar-filter" role="group" aria-label="Filtrovat pracoviště"><button className={buildingFilter === "all" ? "active" : ""} onClick={() => setBuildingFilter("all")}>Vše</button>{buildings.map((building) => <button className={buildingFilter === building.id ? "active" : ""} key={building.id} onClick={() => setBuildingFilter(building.id)}>{building.name}</button>)}</div>
       {!available && (
         <div className="notice">Správa skutečných mimořádných a přesunutých dnů bude dostupná po zkontrolování a aplikaci migrace 01300.</div>
       )}
@@ -3710,8 +3756,9 @@ function CleaningCalendar({
         <div className="calendar-weekdays">{weekdays.map((day) => <b key={day}>{day}</b>)}</div>
         <div className="calendar-grid">
           {calendarDays.map((item) => {
-            const floors = [...new Set(item.tasks.map((task) => task.floor).filter((floor) => floor !== "Společné úkoly"))];
-            const activities = [...new Set(item.tasks.map((task) => task.activityType))];
+            const daySummary = summarizeCleaningDay(item.tasks.filter((task) => !isFinalCheckTask(task)));
+            const floors = daySummary.flatMap((building) => building.floors.map((floor) => ({ ...floor, key: `${building.name}|${floor.name}` })));
+            const activities = extraActivityTypes(item.tasks.filter((task) => !isFinalCheckTask(task)));
             const dayBuildings = [...new Set(item.tasks.map((task) => task.building))];
             return (
               <button
@@ -3722,7 +3769,7 @@ function CleaningCalendar({
               >
                 <strong>{Number(item.date.slice(8, 10))}</strong>
                 <span className="building-pictograms">{dayBuildings.map((building) => <i key={building}>{building === "Školka" ? "MŠ" : "Š"}</i>)}</span>
-                <span className="floor-pictograms">{floors.slice(0, 4).map((floor) => <i key={floor}>{floorPictogram(floor)}</i>)}</span>
+                <span className="floor-pictograms">{floors.slice(0, 4).map((floor) => <i className={floor.kind} key={floor.key}>{floor.kind === "rotation" ? "↻" : ""}{floorPictogram(floor.name)}</i>)}</span>
                 <span className="activity-pictograms">{activities.slice(0, 4).map((activity) => <i key={activity}>{activityTypes[activity]?.icon ?? "✓"}</i>)}</span>
                 {item.context.kind === "extraordinary" && <em>M</em>}
                 {item.context.kind === "rescheduled" && <em>P</em>}
@@ -3730,7 +3777,7 @@ function CleaningCalendar({
             );
           })}
         </div>
-        <div className="calendar-legend"><span><i>1F–4F</i> patro</span><span><i>SCH</i> schodiště</span>{(["vacuum","mop","toilet","trash","tables","windows","doors","tiles","surfaces","laundry","deep_clean"] as ActivityType[]).map((type) => <span key={type}><i>{activityTypes[type].icon}</i>{activityTypes[type].label}</span>)}</div>
+        <div className="calendar-legend"><span><i>Š / MŠ</i> pracoviště</span><span><i>1F–4F</i> patro</span><span><i>↻</i> rotace</span><span><i>SCH</i> schodiště</span><span><i>ikona</i> práce navíc</span></div>
       </section>
       <CalendarDayDetail date={selected.date} tasks={selected.tasks} context={selected.context} />
       <section className="calendar-list">
