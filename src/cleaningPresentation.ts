@@ -42,6 +42,26 @@ export function roomIsComplete(tasks: Task[]) {
   return tasks.length > 0 && tasks.every((task) => task.done)
 }
 
+export type RoomPresentationState = 'pending' | 'partial' | 'done' | 'extra-only'
+
+/**
+ * Stav karty místnosti je záměrně lidský: pracovník potřebuje vědět, zda je
+ * místnost hotová, ne kolik interních definic úkolů už bylo odškrtnuto.
+ */
+export function roomPresentationState(tasks: Task[], routineTasks: Task[]): RoomPresentationState {
+  if (roomIsComplete(tasks)) return 'done'
+  if (routineTasks.length === 0) return 'extra-only'
+  if (tasks.some((task) => task.done)) return 'partial'
+  return 'pending'
+}
+
+export function roomPresentationLabel(state: RoomPresentationState) {
+  if (state === 'done') return 'Hotovo'
+  if (state === 'partial') return 'Běžný úklid · část hotová'
+  if (state === 'extra-only') return 'Práce navíc'
+  return 'Běžný úklid'
+}
+
 export function floorPresentationKind(tasks: Task[]): FloorPresentationKind {
   if (tasks.some((task) => (task.cleaningCycleLength ?? 0) > 1)) return 'rotation'
   if (tasks.some(isStandardCleaningTask)) return 'standard'

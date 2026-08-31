@@ -49,6 +49,8 @@ import {
   isExtraCleaningTask,
   isStandardCleaningTask,
   roomIsComplete,
+  roomPresentationLabel,
+  roomPresentationState,
   summarizeCleaningDay,
 } from "./cleaningPresentation";
 
@@ -2106,6 +2108,7 @@ function FloorGroup({
             <RoomActivityGroup
               key={room}
               room={room}
+              floor={label}
               tasks={roomTasks}
               bulkAction={findUndoableRoomAction(roomTasks, bulkActions)}
               onComplete={onComplete}
@@ -2123,6 +2126,7 @@ function FloorGroup({
 
 function RoomActivityGroup({
   room,
+  floor,
   tasks,
   bulkAction,
   onComplete,
@@ -2132,6 +2136,7 @@ function RoomActivityGroup({
   guides,
 }: {
   room: string;
+  floor: string;
   tasks: Task[];
   bulkAction?: BulkCompletionAction;
   onComplete: (id: string) => Promise<void>;
@@ -2146,6 +2151,7 @@ function RoomActivityGroup({
   const completed = routine.filter((task) => task.done).length;
   const allRoutineDone = routine.length > 0 && completed === routine.length;
   const allRequiredDone = roomIsComplete(tasks);
+  const presentationState = roomPresentationState(tasks, routine);
   const extraTasks = tasks.filter(isExtraCleaningTask);
   const extraRemaining = extraTasks.filter((task) => !task.done);
   const completion = allRoutineDone ? routine.find((task) => task.completedBy) : undefined;
@@ -2154,13 +2160,13 @@ function RoomActivityGroup({
   return (
     <section className={`room-group${allRequiredDone ? " room-done" : allRoutineDone ? " room-routine-done" : ""}`}>
       <header className="room-heading">
-        <span>
-          <h3>{room}</h3>
-          <small>
-            {allRequiredDone ? "Všechny dnešní činnosti hotové" : routine.length ? `${completed}/${routine.length} běžných hotovo` : "Pouze práce navíc"}
-          </small>
-          {completedBy && <small className="room-author">✓ {completedBy}{completedAt ? ` · ${new Date(completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
-        </span>
+        <h3>{allRequiredDone && <span aria-hidden="true">✓ </span>}{room}</h3>
+        <small className="room-floor">{floor}</small>
+        <b className="room-status">{roomPresentationLabel(presentationState)}</b>
+        {completedBy && <small className="room-author">{completedBy}{completedAt ? ` · ${new Date(completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
+      </header>
+      {extraTasks.length > 0 && <div className="room-today-extra"><b>{extraTasks.some((task) => task.frequency === "mimořádně") ? "⚠ MIMOŘÁDNĚ" : "DNES NAVÍC"}</b><div>{extraTasks.map((task) => <span className={task.done ? "done" : ""} key={task.id}>{activityTypes[task.activityType]?.icon ?? "✓"} {task.title}</span>)}</div>{allRoutineDone && extraRemaining.length > 0 && <small>Běžný úklid je hotový, zbývá {extraRemaining.length} práce navíc.</small>}</div>}
+      <div className="room-primary-action">
         {bulkAction?.canUndo && allRoutineDone ? <button
           className="undo-room"
           disabled={saving}
@@ -2189,12 +2195,11 @@ function RoomActivityGroup({
         >
           {saving ? "Ukládám…" : allRoutineDone ? "✓ Běžný úklid hotový" : "✓ Hotová místnost"}
         </button>}
-      </header>
-      {extraTasks.length > 0 && <div className="room-today-extra"><b>{extraTasks.some((task) => task.frequency === "mimořádně") ? "⚠ MIMOŘÁDNĚ" : "DNES NAVÍC"}</b><div>{extraTasks.map((task) => <span className={task.done ? "done" : ""} key={task.id}>{activityTypes[task.activityType]?.icon ?? "✓"} {task.title}</span>)}</div>{allRoutineDone && extraRemaining.length > 0 && <small>Běžný úklid je hotový, zbývá {extraRemaining.length} práce navíc.</small>}</div>}
+      </div>
       <button className="room-detail-toggle" onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen}>
-        {detailsOpen ? "Skrýt jednotlivé úkoly" : "Zobrazit jednotlivé úkoly"}
+        {detailsOpen ? "Skrýt podrobnosti" : "Podrobnosti ›"}
       </button>
-      {detailsOpen && <TaskRows tasks={tasks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} />}
+      {detailsOpen && <TaskRows tasks={tasks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} compact />}
     </section>
   );
 }
@@ -2251,28 +2256,32 @@ function TaskRows({
   pendingTaskIds,
   allTasks = tasks,
   guides = [],
+  compact = false,
 }: {
   tasks: Task[];
   onComplete: (id: string) => Promise<void>;
   pendingTaskIds: Set<string>;
   allTasks?: Task[];
   guides?: ManualEntry[];
+  compact?: boolean;
 }) {
   const [openGuide, setOpenGuide] = useState<ManualEntry | null>(null);
   return (
-    <div className="activity-grid">
+    <div className={`activity-grid${compact ? " compact-task-list" : ""}`}>
       {[...tasks]
         .sort((a, b) => a.sortOrder - b.sortOrder)
         .map((task) => {
           const activity = activityTypes[task.activityType] ?? activityTypes.other;
-          const blocked = Boolean(task.prerequisite && !allTasks.find((item) => item.id === task.prerequisite)?.done);
+          const prerequisiteTask = task.prerequisite ? allTasks.find((item) => item.id === task.prerequisite) : undefined;
+          const blocked = Boolean(task.prerequisite && !prerequisiteTask?.done);
+          const dependencyLabel = prerequisiteTask ? `Nejdřív ${prerequisiteTask.title.toLocaleLowerCase("cs-CZ")}` : "Nejdřív dokončit požadovanou činnost";
           const pending = pendingTaskIds.has(task.id);
           const guide = guides.find((item) => item.activityTypes.includes(task.activityType));
           return (
             <article className={`activity-card${task.done ? " done" : ""}${blocked ? " blocked" : ""}`} key={task.id}>
               <button className="activity-check" disabled={!task.canComplete || pending} onClick={() => void onComplete(task.id)} aria-pressed={task.done} aria-label={`${task.done ? "Zrušit dokončení" : "Dokončit"}: ${task.title}`} title={`${task.title}${task.prerequisite ? " – nejdříve zamést nebo vysát" : ""}`}>
                 <span className="activity-icon" aria-hidden="true">{pending ? "…" : task.done ? "✓" : blocked ? "🔒" : activity.icon}</span>
-                <span className="activity-copy"><b>{task.title}</b><small>{pending ? "Ukládám…" : blocked ? "Nejdříve předchozí činnost" : task.done ? "Hotovo" : activity.label}</small></span>
+                <span className="activity-copy"><b>{task.title}</b><small>{pending ? "Ukládám…" : blocked ? dependencyLabel : task.done ? "Hotovo" : activity.label}</small></span>
               </button>
               {guide && <button className="task-guide-link" onClick={() => setOpenGuide(guide)}>ⓘ Návod</button>}
             </article>

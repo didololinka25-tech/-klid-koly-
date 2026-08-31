@@ -7,6 +7,8 @@ import {
   isExtraCleaningTask,
   isStandardCleaningTask,
   roomIsComplete,
+  roomPresentationLabel,
+  roomPresentationState,
   summarizeCleaningDay,
 } from './cleaningPresentation.ts'
 import { isTaskDueForCleaningDay, resolveCleaningDay } from './scheduling.ts'
@@ -63,6 +65,17 @@ test('místnost je hotová až po dokončení všech dnešních relevantních ú
   assert.equal(roomIsComplete([task({ done: true }), task({ frequency: 'měsíčně', activityType: 'windows', done: true })]), true)
 })
 
+test('karta místnosti rozlišuje nedokončený, částečný, hotový a pouze extra stav bez taskových počtů', () => {
+  const routine = [task({ id: 'routine-a' }), task({ id: 'routine-b' })]
+  assert.equal(roomPresentationLabel(roomPresentationState(routine, routine)), 'Běžný úklid')
+  const partial = [task({ id: 'routine-a', done: true }), task({ id: 'routine-b' })]
+  assert.equal(roomPresentationLabel(roomPresentationState(partial, partial)), 'Běžný úklid · část hotová')
+  const done = routine.map((item) => ({ ...item, done: true }))
+  assert.equal(roomPresentationLabel(roomPresentationState(done, done)), 'Hotovo')
+  const extra = [task({ frequency: 'měsíčně', activityType: 'windows' })]
+  assert.equal(roomPresentationLabel(roomPresentationState(extra, [])), 'Práce navíc')
+})
+
 test('souhrn stejného resolveru ukáže 1F + střídající se 2F/3F a páteční 4F se schodištěm', () => {
   const plan = [
     task({ id: '1f', floor: '1. patro', roomId: '1f-room' }),
@@ -86,10 +99,18 @@ test('úterní souhrn ukáže Školku a výjimka je odvozena stejným resolverem
 test('UI používá místnost jako hlavní jednotku a jednotlivé úkoly nechává sbalené', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   assert.match(source, /✓ Hotová místnost/)
-  assert.match(source, /Zobrazit jednotlivé úkoly/)
+  assert.match(source, /Podrobnosti ›/)
   assert.match(source, /Vrátit dokončení místnosti/)
   assert.match(source, /room-today-extra/)
   assert.match(source, /DNES NAVÍC/)
+  assert.match(source, /compact-task-list/)
+  assert.doesNotMatch(source, /běžných hotovo/)
+})
+
+test('detail používá skutečný název prerequisite a nikoli technickou obecnou hlášku', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  assert.match(source, /`Nejdřív \$\{prerequisiteTask\.title\.toLocaleLowerCase\("cs-CZ"\)\}`/)
+  assert.doesNotMatch(source, /Nejdříve předchozí činnost/)
 })
 
 test('kalendář a Dnes sdílejí scheduling resolver a kalendář defaultně nesype celý checklist', () => {
@@ -104,7 +125,8 @@ test('kalendář a Dnes sdílejí scheduling resolver a kalendář defaultně ne
 test('mobilní redesign drží touch targety a na desktopu rozšíří měsíční mřížku', () => {
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
   assert.match(css, /@media \(max-width: 430px\)/)
-  assert.match(css, /\.room-heading \.complete-room,[\s\S]*min-height: 48px/)
+  assert.match(css, /\.room-primary-action \.complete-room,[\s\S]*min-height: 50px/)
+  assert.match(css, /\.compact-task-list[\s\S]*grid-template-columns: minmax\(0, 1fr\)/)
   assert.match(css, /@media \(min-width: 800px\)[\s\S]*\.app:has\(\.cleaning-calendar\)/)
   assert.match(css, /overflow-x: hidden/)
 })

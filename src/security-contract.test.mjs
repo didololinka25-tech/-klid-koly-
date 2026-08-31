@@ -413,7 +413,7 @@ test('Dnes ukazuje názvy činností, progress a stav dependency', () => {
   assert.match(app, /role="progressbar"/)
   assert.match(app, /Všechno hotovo – můžete odejít/)
   assert.match(app, /<b>\{task\.title\}<\/b>/)
-  assert.match(app, /Nejdříve předchozí činnost/)
+  assert.match(app, /Nejdřív \$\{prerequisiteTask\.title/)
   assert.match(app, /await schoolRepository\.setCompletion[\s\S]*setTasks/)
 })
 
