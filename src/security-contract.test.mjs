@@ -249,6 +249,9 @@ test('DPČ UI označuje 20 hodin jako referenční rozsah, nikoli zákonné mini
   assert.match(app, /Referenční průměrný týdenní rozsah DPČ/i)
   assert.match(app, /Rozhodný měsíční příjem DPČ/i)
   assert.doesNotMatch(app, /(?:zákonné|povinné)\s+(?:minimum|maximum)\s+20\s*h/i)
+  const mainDpcCard = app.match(/function DpcMonthlySummary[\s\S]*?function formatPlanningHours/)?.[0] ?? ''
+  assert.match(mainDpcCard, /Orientační potřebné tempo do konce měsíce/i)
+  assert.doesNotMatch(mainDpcCard, /dpcWeeklyHoursReference|20 h/i)
 })
 
 test('jednorázová oprava chrání přesný UUID a očekávaný stav v jednom atomickém bloku', () => {

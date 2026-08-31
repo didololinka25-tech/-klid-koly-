@@ -44,6 +44,7 @@ export type AttendanceReport = {
   monthMs: number
   yearMs: number
   dppYearMs: number
+  dppMonthMs: number
   annualLimitHours: number
   contractLabel: string
   hourlyRateLabel: string
@@ -199,6 +200,9 @@ export function buildAttendanceReport(
     dppYearMs: records
       .filter((record) => record.date.startsWith(year) && contractForDate(contracts, record.date)?.contractType === 'dpp')
       .reduce((sum, record) => sum + duration(record, now), 0),
+    dppMonthMs: rows
+      .filter((row) => row.contractType === 'dpp')
+      .reduce((sum, row) => sum + row.durationMs, 0),
     annualLimitHours,
     contractLabel,
     hourlyRateLabel,

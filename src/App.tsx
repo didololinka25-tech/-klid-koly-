@@ -37,6 +37,7 @@ import {
 } from "./attendanceReport";
 import { isSupabaseConfigured } from "./supabase";
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay, type CleaningDayContext } from "./scheduling";
+import { calculateDpcPace, calculateDppMonthlyBudget } from "./workPace";
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
 import { attendanceEditorStartValue, pragueDateKey, pragueDateTimeInput } from "./attendanceTime";
 import { forBuilding, roomForBuilding } from "./buildingScope";
@@ -1330,9 +1331,16 @@ function AttendanceDashboard({
     appSettings.dpcMonthlyInsuranceThreshold,
   ), [records, selectedName, todayKey, dppAnnualLimitHours, now, contracts, appSettings.dpcMonthlyInsuranceThreshold]);
   const dppYearHours = currentMonthReport.dppYearMs / HOUR_MS;
+  const dppMonthHours = currentMonthReport.dppMonthMs / HOUR_MS;
   const dppRemainingHours = Math.max(0, dppAnnualLimitHours - dppYearHours);
-  const dppRecommendedWeeklyHours = dppRemainingHours / metrics.weeksRemaining;
-  const dppRecommendedShiftHours = dppRecommendedWeeklyHours / Math.max(1, settings.plannedShiftsPerWeek);
+  const dppBudget = currentContract && isDpp ? calculateDppMonthlyBudget({
+    month: todayKey.slice(0, 7),
+    annualLimitHours: dppAnnualLimitHours,
+    dppYearHours,
+    dppMonthHours,
+    contractValidFrom: currentContract.validFrom,
+    contractValidTo: currentContract.validTo,
+  }) : undefined;
   const progress = Math.min(
     100,
     (dppYearHours / dppAnnualLimitHours) * 100,
@@ -1345,8 +1353,6 @@ function AttendanceDashboard({
         : dppYearHours >= dppAnnualLimitHours * (250 / 300)
           ? `Roční fond DPP se blíží limitu ${dppAnnualLimitHours} hodin.`
           : "";
-  const weeklyDifference =
-    metrics.weekMs / HOUR_MS - dppRecommendedWeeklyHours;
   return (
     <section className="attendance-dashboard">
       {isCaretaker && (
@@ -1385,9 +1391,7 @@ function AttendanceDashboard({
         <article>
           <small>TENTO TÝDEN</small>
           <strong>{formatDuration(metrics.weekMs)}</strong>
-          <span>
-            plán {formatDuration(metrics.recommendedWeeklyHours * HOUR_MS)}
-          </span>
+          <span>všechna pracoviště</span>
         </article>
         <article>
           <small>TENTO MĚSÍC</small>
@@ -1402,29 +1406,19 @@ function AttendanceDashboard({
       </div>}
       {isDpp && yearWarning && (
         <div
-          className={`attendance-alert ${metrics.yearHours >= dppAnnualLimitHours * (280 / 300) ? "danger" : ""}`}
+          className={`attendance-alert ${dppYearHours >= dppAnnualLimitHours * (280 / 300) ? "danger" : ""}`}
         >
           {yearWarning}
         </div>
       )}
-      {isDpp && <section className="pace-card">
-        <p className="eyebrow">DOPORUČENÉ TEMPO</p>
-        <strong>
-          Průměr do konce roku: cca {dppRecommendedWeeklyHours.toFixed(1)} h
-          týdně
-        </strong>
-        <p>
-          Zbývá {dppRemainingHours.toFixed(1)} h a přibližně {metrics.weeksRemaining}{" "}
-          plánovatelných týdnů do 31. 12.
-        </p>
-        <p>
-          Při {settings.plannedShiftsPerWeek} směnách týdně: cca{" "}
-          {dppRecommendedShiftHours.toFixed(1)} h / směnu.
-        </p>
-        <b>Zákonné maximum jedné směny: 12 h.</b>
-        <small>
-          Jde o rovnoměrné plánovací tempo, nikoli o zákonné týdenní maximum.
-        </small>
+      {isDpp && dppBudget && <section className="pace-card dpp-budget-card">
+        <p className="eyebrow">DPP – {todayKey.slice(0, 4)}</p>
+        <strong>Odpracováno: {reportDuration(currentMonthReport.dppYearMs)} / {dppAnnualLimitHours} h</strong>
+        <p>Roční fond zbývá: <b>{formatPlanningHours(dppBudget.annualRemainingHours)}</b></p>
+        <p>Pro rovnoměrné rozložení do konce smluvního období:</p>
+        <strong>≈ {formatPlanningHours(dppBudget.monthlyBudgetHours)} / měsíc</strong>
+        <p>Pro tento měsíc zbývá z orientačního rozpočtu: <b>≈ {formatPlanningHours(dppBudget.monthlyBudgetRemainingHours)}</b></p>
+        <small>Jde o plánovací rozpočet z ročního fondu, nikoli zákonné měsíční maximum. Počítá se do konce roku nebo aktuálního smluvního období.</small>
         <div className="shift-setting">
           <label>
             Směn týdně
@@ -1448,7 +1442,7 @@ function AttendanceDashboard({
           <small>Nastavení bude dostupné po aplikaci připravené migrace.</small>
         )}
       </section>}
-      {isDpc && <DpcMonthlySummary report={currentMonthReport} appSettings={appSettings} />}
+      {isDpc && currentContract && <DpcMonthlySummary report={currentMonthReport} appSettings={appSettings} contract={currentContract} currentDateKey={todayKey} />}
       <ShiftWarnings records={records} now={now} />
       <section className="week-detail">
         <h2>Aktuální týden</h2>
@@ -1468,17 +1462,7 @@ function AttendanceDashboard({
           <span>
             Celkem tento týden <b>{formatClockDuration(metrics.weekMs)}</b>
           </span>
-          <span>
-            {isDpp ? "Doporučené tempo" : isDpc ? "Referenční průměrný rozsah DPČ" : "Pracovní vztah"}{" "}
-            <b>{isDpp ? formatClockDuration(dppRecommendedWeeklyHours * HOUR_MS) : isDpc ? formatClockDuration(appSettings.dpcWeeklyHoursReference * HOUR_MS) : "není nastaven"}</b>
-          </span>
-          <p>
-            {isDpp
-              ? weeklyDifference > 0
-                ? `Tento týden jsi o ${formatDuration(weeklyDifference * HOUR_MS)} nad rovnoměrným tempem.`
-                : `Do doporučeného tempa zbývá ${formatDuration(-weeklyDifference * HOUR_MS)}.`
-              : isDpc ? `${appSettings.dpcWeeklyHoursReference} h týdně je pouze referenční průměr, nikoli potřebné minimum.` : "Správce doplní pracovní vztah pro toto období."}
-          </p>
+          {!currentContract && <p>Správce doplní pracovní vztah pro toto období.</p>}
         </footer>
       </section>
       <MonthlyAttendanceReport
@@ -1544,28 +1528,39 @@ function WorkerContractsPanel({ workerId, contracts, onSave }: { workerId: strin
   </section>;
 }
 
-function DpcMonthlySummary({ report, appSettings }: { report: ReturnType<typeof buildAttendanceReport>; appSettings: AppSettings }) {
+function DpcMonthlySummary({ report, appSettings, contract, currentDateKey }: { report: ReturnType<typeof buildAttendanceReport>; appSettings: AppSettings; contract: WorkerContract; currentDateKey: string }) {
   const progress = report.dpcGrossEstimate === undefined
     ? 0
     : Math.min(100, report.dpcGrossEstimate / appSettings.dpcMonthlyInsuranceThreshold * 100);
+  const pace = calculateDpcPace({
+    month: report.month,
+    currentDateKey,
+    monthlyThreshold: appSettings.dpcMonthlyInsuranceThreshold,
+    grossIncome: report.dpcGrossEstimate ?? 0,
+    hourlyRate: contract.hourlyRate,
+    contractValidFrom: contract.validFrom,
+    contractValidTo: contract.validTo,
+  });
   return <section className="pace-card dpc-month-card">
     <p className="eyebrow">DPČ – {report.monthLabel.toLocaleUpperCase("cs-CZ")}</p>
-    <strong>Odpracováno: {reportDuration(report.dpcMonthMs)}</strong>
-    <p>Hodinová sazba: {report.hourlyRateLabel}</p>
+    <div className="pace-primary"><span>Odpracováno</span><strong>{reportDuration(report.dpcMonthMs)}</strong></div>
+    <p>Odhad příjmu: <b>{report.dpcGrossEstimate === undefined ? "nelze určit" : reportMoney(report.dpcGrossEstimate)}</b></p>
+    <p>Měsíční cíl: <b>{pace.targetHours === undefined ? "nelze určit" : formatPlanningHours(pace.targetHours)} / {reportMoney(appSettings.dpcMonthlyInsuranceThreshold)}</b></p>
     {report.dpcGrossEstimate === undefined
       ? <p className="attendance-alert">Pro výpočet odměny a potřebného rozsahu doplňte hodinovou sazbu.</p>
       : <>
-        <p>Odhad hrubého příjmu: <b>{reportMoney(report.dpcGrossEstimate)}</b></p>
-        <p>Rozhodný příjem podle nastavení: <b>{reportMoney(appSettings.dpcMonthlyInsuranceThreshold)}</b></p>
+        <p>Zbývá: <b>{pace.remainingHours === undefined ? "nelze určit" : formatPlanningHours(pace.remainingHours)} / {reportMoney(pace.remainingIncome)}</b></p>
         <div className="dpp-progress" aria-label="Postup k nastavenému rozhodnému příjmu DPČ"><span style={{ width: `${progress}%` }} /></div>
-        {report.dpcThresholdReached
+        {pace.thresholdReached
           ? <p><b>Nastavená hranice dosažena podle evidované docházky.</b></p>
-          : <p>Zbývá přibližně: <b>{report.dpcRemainingMsAtCurrentRate === undefined ? "nelze určit" : reportDurationCeil(report.dpcRemainingMsAtCurrentRate)} / {reportMoney(report.dpcRemainingIncome ?? 0)}</b></p>}
-        {report.dpcRequiredMsAtCurrentRate !== undefined && <p>Potřebný rozsah při aktuální sazbě: přibližně {reportDurationCeil(report.dpcRequiredMsAtCurrentRate)}.</p>}
+          : <div className="pace-highlight"><span>Orientační potřebné tempo do konce měsíce</span><strong>{pace.weeklyHours === undefined ? "nelze určit" : `≈ ${formatPlanningHours(pace.weeklyHours)} týdně`}</strong></div>}
       </>}
-    <small>Výpočet vychází z přesné délky evidovaných směn. Jde o evidenční odhad, nikoli právní posouzení.</small>
-    <small>Referenční průměrný týdenní rozsah: {appSettings.dpcWeeklyHoursReference} h po dobu {appSettings.dpcReferencePeriodWeeks} týdnů. Nejde o měsíční minimum.</small>
+    <small>Tempo se průběžně přepočítává podle přesně odpracovaného času a zbývající kalendářní části měsíce. Bez osobního rozvrhu jde o orientační tempo.</small>
   </section>;
+}
+
+function formatPlanningHours(hours: number) {
+  return reportDurationCeil(hours * HOUR_MS);
 }
 
 function MonthlyAttendanceReport({

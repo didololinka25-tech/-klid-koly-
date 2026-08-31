@@ -1275,6 +1275,11 @@ nav button {
 .money-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .money-input span { color: #47655f; font-weight: 800; white-space: nowrap; }
 .money-input input { min-width: 0; width: 100%; }
+.pace-primary, .pace-highlight { display: grid; gap: 3px; }
+.pace-primary span, .pace-highlight span { color: #56716b; font-size: 12px; font-weight: 800; }
+.pace-primary strong { font-size: 24px; }
+.pace-highlight { padding: 12px; border-radius: 12px; background: #e7f4ef; }
+.pace-highlight strong { color: #155d53; font-size: 19px; }
 nav i {
   font-style: normal;
   font-size: 18px;

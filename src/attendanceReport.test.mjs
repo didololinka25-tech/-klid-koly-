@@ -131,6 +131,22 @@ test('přechod DPP na DPČ oddělí roční DPP hodiny a měsíční DPČ příj
   assert.equal(report.dpcGrossEstimate, 480)
 })
 
+test('roční DPP sčítá více DPP období a obě pracoviště, ale vynechá DPČ', () => {
+  const contracts = [
+    { id: 'dpp-one', contractType: 'dpp', validFrom: '2026-01-01', validTo: '2026-03-31', active: true, hourlyRate: 140 },
+    { id: 'dpp-two', contractType: 'dpp', validFrom: '2026-06-01', validTo: '2026-08-31', active: true, hourlyRate: 145 },
+    { id: 'dpc', contractType: 'dpc', validFrom: '2026-09-01', active: true, hourlyRate: 160 },
+  ]
+  const shifts = [
+    { id: 'school-dpp', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-02-01', start: '2026-02-01T08:00:00Z', end: '2026-02-01T10:00:00Z' },
+    { id: 'nursery-dpp', workerId: 'worker', buildingId: 'nursery', buildingName: 'Školka', date: '2026-07-01', start: '2026-07-01T08:00:00Z', end: '2026-07-01T11:00:00Z' },
+    { id: 'dpc-shift', workerId: 'worker', buildingId: 'school', buildingName: 'Škola', date: '2026-09-01', start: '2026-09-01T08:00:00Z', end: '2026-09-01T12:00:00Z' },
+  ]
+  const report = buildAttendanceReport(shifts, 'Dana', '2026-09', 300, new Date('2026-09-30T12:00:00Z'), contracts, 4500)
+  assert.equal(report.dppYearMs, 5 * 60 * 60 * 1000)
+  assert.equal(report.dpcMonthMs, 4 * 60 * 60 * 1000)
+})
+
 test('bez smlouvy nebo sazby se mzda nevymýšlí', () => {
   const noContract = buildAttendanceReport(records, 'Dana', '2026-09', 300, new Date('2026-09-30T12:00:00Z'), [], 4500)
   assert.equal(noContract.grossEstimate, undefined)
