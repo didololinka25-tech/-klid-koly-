@@ -47,3 +47,30 @@ export function applyBulkUndo(tasks: Task[], taskIds: string[]) {
     ? { ...task, done: false, completedBy: null, completedById: null, completedAt: null }
     : task)
 }
+
+type BulkActionLike = {
+  id: string
+  roomId: string
+  taskIds: string[]
+  canUndo: boolean
+}
+
+export function findUndoableRoomAction<T extends BulkActionLike>(tasks: Task[], actions: T[]): T | undefined {
+  const roomId = tasks.find((task) => task.roomId)?.roomId
+  const routine = bulkTasks(tasks)
+  if (!roomId || !routine.length || routine.some((task) => !task.done)) return undefined
+
+  const taskById = new Map(tasks.map((task) => [task.id, task]))
+  const candidates = actions.filter((action) =>
+    action.roomId === roomId
+    && action.canUndo
+    && action.taskIds.length > 0
+    && action.taskIds.every((taskId) => {
+      const task = taskById.get(taskId)
+      return Boolean(task?.done && isBulkCompletableTask(task))
+    }),
+  )
+
+  // Při více současně vratných akcích není bezpečné hádat, kterou uživatel zamýšlí.
+  return candidates.length === 1 ? candidates[0] : undefined
+}

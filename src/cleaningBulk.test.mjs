@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyBulkUndo, bulkTasks, isBulkCompletableTask, orderTasksByDependency } from './cleaningBulk.ts'
+import { applyBulkUndo, bulkTasks, findUndoableRoomAction, isBulkCompletableTask, orderTasksByDependency } from './cleaningBulk.ts'
 
 const task = (id, overrides = {}) => ({
   id, roomId: 'room-1', room: 'Jídelna', floor: '1. patro', floorSort: 1,
@@ -54,4 +54,23 @@ test('progress místnosti po undo odpovídá pouze zbývajícím completion', ()
   const bulk = [task('vacuum', { done: true }), task('mop', { done: true, prerequisite: 'vacuum' })]
   const result = applyBulkUndo([prior, ...bulk], ['vacuum', 'mop'])
   assert.equal(result.filter((item) => item.done).length, 1)
+})
+
+test('dokončená místnost s jednou auditovanou bulk akcí nabídne správné undo', () => {
+  const tasks = [task('prior', { done: true }), task('bulk-1', { done: true }), task('bulk-2', { done: true })]
+  const action = { id: 'action-028', roomId: 'room-1', taskIds: ['bulk-1', 'bulk-2'], canUndo: true }
+  assert.equal(findUndoableRoomAction(tasks, [action])?.id, 'action-028')
+})
+
+test('stará bulk completion bez identity nenabídne undo', () => {
+  assert.equal(findUndoableRoomAction([task('old', { done: true })], []), undefined)
+})
+
+test('při více vratných akcích stejné místnosti UI žádnou akci nehádá', () => {
+  const tasks = [task('one', { done: true }), task('two', { done: true })]
+  const actions = [
+    { id: 'first', roomId: 'room-1', taskIds: ['one'], canUndo: true },
+    { id: 'second', roomId: 'room-1', taskIds: ['two'], canUndo: true },
+  ]
+  assert.equal(findUndoableRoomAction(tasks, actions), undefined)
 })

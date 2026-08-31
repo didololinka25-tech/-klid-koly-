@@ -38,7 +38,7 @@ import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay, type Clean
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
 import { attendanceEditorStartValue, pragueDateKey, pragueDateTimeInput } from "./attendanceTime";
 import { forBuilding, roomForBuilding } from "./buildingScope";
-import { applyBulkUndo, bulkTasks, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
+import { applyBulkUndo, bulkTasks, findUndoableRoomAction, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
 
 type Section =
   | "Dnes"
@@ -1958,7 +1958,7 @@ function FloorGroup({
               key={room}
               room={room}
               tasks={roomTasks}
-              bulkAction={bulkActions.find((action) => action.roomId === roomTasks[0]?.roomId)}
+              bulkAction={findUndoableRoomAction(roomTasks, bulkActions)}
               onComplete={onComplete}
               onCompleteAll={onCompleteAll}
               onUndoBulk={onUndoBulk}
@@ -2015,11 +2015,11 @@ function RoomActivityGroup({
           className="undo-room"
           disabled={saving}
           onClick={async () => {
-            if (!window.confirm("Vrátit hromadné dokončení této místnosti?")) return;
+            if (!window.confirm("Opravdu chcete vrátit dokončení této místnosti?")) return;
             setSaving(true);
             try { await onUndoBulk(bulkAction); } finally { setSaving(false); }
           }}
-        >{saving ? "Vracím…" : "Vrátit dokončení"}</button> : <button
+        >{saving ? "Vracím…" : "Vrátit dokončení místnosti"}</button> : <button
           className="complete-room"
           disabled={
             saving ||

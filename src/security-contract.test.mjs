@@ -192,7 +192,8 @@ test('bulk undo smí provést autor nebo admin a audit není přímo zapisovatel
   assert.match(migration28, /Cizí dokončení může vrátit pouze administrátor/i)
   assert.match(repository, /rpc\('undo_cleaning_tasks_bulk'/)
   assert.match(repository, /table: 'cleaning_completions'/, 'undo se ostatním načte přes existující realtime completion subscription')
-  assert.match(app, /Vrátit hromadné dokončení této místnosti\?/)
+  assert.match(app, /Opravdu chcete vrátit dokončení této místnosti\?/)
+  assert.match(app, /Vrátit dokončení místnosti/)
 })
 
 test('audit docházky ukládá neměnné původní i nové hodnoty a čte jej pouze admin', () => {
