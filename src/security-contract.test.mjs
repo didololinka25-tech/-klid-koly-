@@ -23,6 +23,7 @@ const migration23 = readFileSync(new URL('../supabase/migrations/20260830002300_
 const migration24 = readFileSync(new URL('../supabase/migrations/20260830002400_worker_contract_history.sql', import.meta.url), 'utf8')
 const migration25 = readFileSync(new URL('../supabase/migrations/20260830002500_restore_missing_app_settings.sql', import.meta.url), 'utf8')
 const migration26 = readFileSync(new URL('../supabase/migrations/20260830002600_multi_building_operations.sql', import.meta.url), 'utf8')
+const migration27 = readFileSync(new URL('../supabase/migrations/20260831002700_fast_room_completion.sql', import.meta.url), 'utf8')
 const settingsDiagnostics = readFileSync(new URL('../supabase/diagnostics/verify_02300_02400_state.sql', import.meta.url), 'utf8')
 const attendanceRepair = readFileSync(new URL('../supabase/diagnostics/repair_attendance_d05aac53.sql', import.meta.url), 'utf8')
 
@@ -152,6 +153,25 @@ test('databáze odvozuje pracovní datum v Praze a odmítá překryv bez změny 
   assert.match(migration21, /pg_advisory_xact_lock/)
   assert.match(migration21, /errcode = '23P01'/)
   assert.doesNotMatch(migration21, /delete\s+from|update\s+public\.attendance/i)
+})
+
+test('rychlé dokončení místností je serverově atomické a nevztahuje se na speciální úkoly', () => {
+  assert.match(migration27, /add column if not exists bulk_completable boolean/i)
+  assert.match(migration27, /create or replace function public\.complete_cleaning_tasks_bulk/i)
+  assert.match(migration27, /auth\.uid\(\).*can_work_in_app/s)
+  assert.match(migration27, /target_completion_date is distinct from public\.app_current_date\(\)/i)
+  assert.match(migration27, /activity_type not in \('windows', 'deep_clean', 'laundry', 'disinfect'\)/i)
+  assert.match(migration27, /perform public\.set_cleaning_task_completion/i)
+  assert.match(repository, /rpc\('complete_cleaning_tasks_bulk'/)
+  assert.match(app, /Co jsem dnes udělal\/a/)
+  assert.match(app, /Označit vše jako hotové/)
+})
+
+test('autor dokončení je čten bezpečně bez rozšíření RLS profilů', () => {
+  assert.match(migration27, /function public\.get_cleaning_completion_status/i)
+  assert.match(migration27, /not public\.can_view_school_data\(\)/i)
+  assert.match(migration27, /join public\.profiles profile on profile\.id = completion\.worker_id/i)
+  assert.match(repository, /completedBy: completionByTask\.get\(row\.id\)\?\.worker_name/)
 })
 
 test('audit docházky ukládá neměnné původní i nové hodnoty a čte jej pouze admin', () => {

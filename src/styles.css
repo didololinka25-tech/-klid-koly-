@@ -500,6 +500,7 @@ h2 {
 .room-group:last-child {
   border-bottom: 0;
 }
+.room-group.room-done { background: #f0faf6; border-radius: 12px; padding: 10px; }
 .room-group h3 {
   font-size: 14px;
   margin: 0;
@@ -514,10 +515,10 @@ h2 {
 }
 .room-heading > span {
   min-width: 0;
-  display: flex;
-  align-items: baseline;
+  display: grid;
   gap: 7px;
 }
+.room-author { color: #1f725f !important; }
 .room-heading small {
   color: #6d827d;
   font-size: 11px;
@@ -528,12 +529,29 @@ h2 {
   min-height: 44px;
   border: 1px solid #b9d6cf;
   border-radius: 9px;
-  padding: 0 10px;
+  padding: 0 14px;
   background: #fff;
   color: #165e56;
   font-size: 12px;
   font-weight: 900;
 }
+.room-detail-toggle { border: 0; background: transparent; color: #376c63; min-height: 42px; padding: 4px 0; font-weight: 800; text-decoration: underline; }
+.room-detail-toggle + .activity-grid { margin-top: 7px; }
+.shift-room-completion { margin: 12px 0; border: 1px solid #b9d6cf; border-radius: 15px; background: #fff; overflow: hidden; }
+.shift-room-trigger { width: 100%; min-height: 64px; border: 0; padding: 12px 14px; background: #e9f6f2; color: #174d45; display: flex; justify-content: space-between; align-items: center; text-align: left; }
+.shift-room-trigger span { display: grid; gap: 3px; }
+.shift-room-trigger small { color: #568078; }
+.shift-room-trigger i { font-style: normal; font-size: 20px; }
+.shift-room-body { padding: 10px; display: grid; gap: 8px; }
+.shift-room-option { min-height: 58px; border: 1px solid #d5e6e1; border-radius: 11px; padding: 9px; display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 8px; }
+.shift-room-option input { width: 24px; height: 24px; }
+.shift-room-option span { display: grid; gap: 2px; min-width: 0; }
+.shift-room-option b { overflow-wrap: anywhere; }
+.shift-room-option small { color: #607b75; }
+.shift-room-body .primary-action { min-height: 52px; }
+.bulk-setting { display: grid !important; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 8px; }
+.bulk-setting input { width: 22px; height: 22px; }
+.bulk-setting span { display: grid; gap: 3px; }
 .complete-room:disabled {
   opacity: 0.45;
 }

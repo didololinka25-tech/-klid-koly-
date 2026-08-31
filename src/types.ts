@@ -9,6 +9,9 @@ export type Task = {
   roomActive?: boolean
   cleaningCycleLength?: number | null; cleaningCycleOffset?: number | null
   periodMonths?: number | null; periodWeek?: number | null; periodAnchorMonth?: string | null
+  bulkCompletable?: boolean
+  completedBy?: string | null
+  completedAt?: string | null
 }
 export type Shift = { worker: Worker; start: string; end: string }
 export type Attendance = {

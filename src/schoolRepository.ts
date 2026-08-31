@@ -10,6 +10,7 @@ import {
 import { isSameTaskDefinition } from './taskValidation'
 import { pragueDateKey, validateAttendanceInterval } from './attendanceTime'
 import { attendanceStartValues } from './buildingScope'
+import { inferredBulkCompletable, isBulkCompletableTask } from './cleaningBulk'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -97,6 +98,8 @@ const missingRelation = (error: { code?: string; message?: string } | null) =>
   Boolean(error && ['42P01', 'PGRST205'].includes(error.code ?? ''))
 const missingColumn = (error: { code?: string; message?: string } | null) =>
   Boolean(error && ['42703', 'PGRST204'].includes(error.code ?? ''))
+const missingFunction = (error: { code?: string; message?: string } | null) =>
+  Boolean(error && ['42883', 'PGRST202'].includes(error.code ?? ''))
 const frequency: Record<string, Task['frequency']> = { cleaning_day: 'denně', weekly: 'týdně', once_or_twice_weekly: '1–2× týdně', monthly: 'měsíčně', extraordinary: 'mimořádně' }
 export const isTestCleaningDay = new URLSearchParams(window.location.search).get('testCleaningDay') === '1'
 
@@ -165,7 +168,10 @@ export const schoolRepository = {
   tasks: async (profile: Profile, includeAll = false): Promise<TaskLoad> => {
     const db = client()
     const date = localToday()
-    let taskResult: any = await db.from('cleaning_tasks').select('id,plan_key,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id,cleaning_cycle_length,cleaning_cycle_offset,period_months,period_week,period_anchor_month').order('sort_order')
+    let taskResult: any = await db.from('cleaning_tasks').select('id,plan_key,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id,cleaning_cycle_length,cleaning_cycle_offset,period_months,period_week,period_anchor_month,bulk_completable').order('sort_order')
+    if (missingColumn(taskResult.error)) {
+      taskResult = await db.from('cleaning_tasks').select('id,plan_key,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id,cleaning_cycle_length,cleaning_cycle_offset,period_months,period_week,period_anchor_month').order('sort_order')
+    }
     if (missingColumn(taskResult.error)) {
       taskResult = await db.from('cleaning_tasks').select('id,name,activity_type,frequency,active,sort_order,requires_task_id,schedule_days,monthly_day,room_id').order('sort_order')
     }
@@ -173,7 +179,7 @@ export const schoolRepository = {
       db.from('rooms').select('id,name,active,floor_id,building_id'),
       db.from('floors').select('id,name,sort_order,building_id'),
       db.from('buildings').select('id,name'),
-      db.from('cleaning_completions').select('task_id,completed').eq('completion_date', date),
+      db.from('cleaning_completions').select('task_id,completed,completed_at,worker_id').eq('completion_date', date),
     ])
     const rows = taskResult.data
     if (taskResult.error || roomsError || floorsError || buildingsError || completionError) throw taskResult.error ?? roomsError ?? floorsError ?? buildingsError ?? completionError
@@ -196,7 +202,11 @@ export const schoolRepository = {
     const roomById = new Map((rooms ?? []).map((room: any) => [room.id, room]))
     const floorById = new Map((floors ?? []).map((floor: any) => [floor.id, floor]))
     const buildingById = new Map((buildings ?? []).map((building: any) => [building.id, building]))
-    const done = new Map((completions ?? []).map((completion: { task_id: string; completed: boolean }) => [completion.task_id, completion.completed]))
+    let completionRows: any[] = completions ?? []
+    const completionStatus = await db.rpc('get_cleaning_completion_status', { target_date: date })
+    if (!completionStatus.error) completionRows = completionStatus.data ?? []
+    else if (!missingFunction(completionStatus.error)) throw completionStatus.error
+    const completionByTask = new Map(completionRows.map((completion: any) => [completion.task_id, completion]))
     const tasks = (rows ?? []).filter((row: any) => {
       if (row.activity_type === 'disinfect') return false
       const room: any = row.room_id ? roomById.get(row.room_id) : null
@@ -206,15 +216,19 @@ export const schoolRepository = {
       const floor: any = room?.floor_id ? floorById.get(room.floor_id) : null
       const building: any = room?.building_id ? buildingById.get(room.building_id) : null
       const scheduleDays = Array.isArray(row.schedule_days) ? row.schedule_days.map(Number) : []
-      return {
+      const mapped: Task = {
         id: row.id, planKey: row.plan_key ?? null, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1,
         buildingId: building?.id ?? defaultBuildingId, building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
-        assignedTo: 'Úklidový tým', done: done.get(row.id) ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile) && !isTestCleaningDay,
+        assignedTo: 'Úklidový tým', done: completionByTask.get(row.id)?.completed ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile) && !isTestCleaningDay,
         dueToday: room?.active !== false && isTaskDueForCleaningDay(row, resolveCleaningDay(date, exceptions.filter((item) => item.buildingId === (building?.id ?? defaultBuildingId)), isTestCleaningDay)), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
         active: row.active, roomActive: room?.active ?? true,
         cleaningCycleLength: row.cleaning_cycle_length, cleaningCycleOffset: row.cleaning_cycle_offset,
         periodMonths: row.period_months, periodWeek: row.period_week, periodAnchorMonth: row.period_anchor_month,
+        completedBy: completionByTask.get(row.id)?.worker_name ?? null,
+        completedAt: completionByTask.get(row.id)?.completed_at ?? null,
       }
+      mapped.bulkCompletable = typeof row.bulk_completable === 'boolean' ? row.bulk_completable : inferredBulkCompletable(mapped)
+      return mapped
     })
     return { tasks, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
   },
@@ -321,7 +335,7 @@ export const schoolRepository = {
     ))
     if (duplicate) throw new Error('Stejný aktivní úkol se stejným harmonogramem už v této místnosti existuje.')
 
-    const values: Record<string, unknown> = { room_id: task.roomId ?? null, name, activity_type: task.activityType, frequency: frequencyKey, active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.periodMonths ? null : task.monthlyDay ?? null, requires_task_id: task.prerequisite ?? null }
+    const values: Record<string, unknown> = { room_id: task.roomId ?? null, name, activity_type: task.activityType, frequency: frequencyKey, active: task.active, sort_order: task.sortOrder, schedule_days: task.scheduleDays, monthly_day: task.periodMonths ? null : task.monthlyDay ?? null, requires_task_id: task.prerequisite ?? null, bulk_completable: isBulkCompletableTask(task) }
     const departureCheck = task.planKey?.startsWith('admin|final|') || task.planKey?.startsWith('v2026|school|common|final-')
     if (departureCheck) {
       values.room_id = null; values.frequency = 'cleaning_day'; values.schedule_days = [1, 3, 5]
@@ -334,7 +348,11 @@ export const schoolRepository = {
       values.period_week = task.periodWeek ?? null
       values.period_anchor_month = task.periodAnchorMonth ?? null
     }
-    const result = task.id ? await db.from('cleaning_tasks').update(values).eq('id', task.id).select('id').single() : await db.from('cleaning_tasks').insert(values).select('id').single()
+    let result = task.id ? await db.from('cleaning_tasks').update(values).eq('id', task.id).select('id').single() : await db.from('cleaning_tasks').insert(values).select('id').single()
+    if (missingColumn(result.error)) {
+      delete values.bulk_completable
+      result = task.id ? await db.from('cleaning_tasks').update(values).eq('id', task.id).select('id').single() : await db.from('cleaning_tasks').insert(values).select('id').single()
+    }
     if (result.error) throw result.error
     if (!result.data?.id) throw new Error('Databáze nepotvrdila uložení úkolu.')
     return String(result.data.id)
@@ -351,6 +369,10 @@ export const schoolRepository = {
     if (error) throw error
   },
   setCompletions: async (taskIds: string[]) => {
+    if (!taskIds.length) return
+    const bulk = await client().rpc('complete_cleaning_tasks_bulk', { target_task_ids: taskIds, target_completion_date: localToday() })
+    if (!bulk.error) return
+    if (!missingFunction(bulk.error)) throw bulk.error
     for (const taskId of taskIds) {
       const { error } = await client().rpc('set_cleaning_task_completion', { target_task_id: taskId, target_completion_date: localToday(), target_completed: true })
       if (error) throw error

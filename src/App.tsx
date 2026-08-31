@@ -37,6 +37,7 @@ import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay, type Clean
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
 import { attendanceEditorStartValue, pragueDateKey, pragueDateTimeInput } from "./attendanceTime";
 import { forBuilding, roomForBuilding } from "./buildingScope";
+import { bulkTasks, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
 
 type Section =
   | "Dnes"
@@ -372,7 +373,12 @@ export default function App() {
     try {
       setNotice("");
       await schoolRepository.setCompletion(id, !target.done);
-      setTasks((current) => current.map((task) => task.id === id ? { ...task, done: !target.done } : task));
+      setTasks((current) => current.map((task) => task.id === id ? {
+        ...task,
+        done: !target.done,
+        completedBy: !target.done ? profile.full_name : null,
+        completedAt: !target.done ? new Date().toISOString() : null,
+      } : task));
       try {
         await load(session, profile);
       } catch {
@@ -388,51 +394,23 @@ export default function App() {
     }
   };
   const completeMany = async (selectedTasks: Task[]) => {
-    const selectedIds = selectedTasks.map((task) => task.id);
+    const routineTasks = bulkTasks(selectedTasks);
+    const orderedTasks = orderTasksByDependency(routineTasks, tasks);
+    const selectedIds = orderedTasks.map((task) => task.id);
+    if (!selectedIds.length) return;
     if (
-      selectedTasks.some((task) => !task.canComplete) ||
+      routineTasks.some((task) => !task.canComplete) ||
       selectedIds.some((id) => taskWriteLocks.current.has(id))
     )
       return;
     selectedIds.forEach((id) => taskWriteLocks.current.add(id));
     setPendingTaskIds(new Set(taskWriteLocks.current));
-    const remaining = new Map(
-      selectedTasks.filter((task) => !task.done).map((task) => [task.id, task]),
-    );
-    const orderedIds: string[] = [];
     try {
       setNotice("");
-      for (const task of remaining.values()) {
-        if (
-          task.prerequisite &&
-          !tasks.find((item) => item.id === task.prerequisite)?.done &&
-          !remaining.has(task.prerequisite)
-        ) {
-          throw new Error(
-            `Nejdříve dokončete předchozí činnost pro „${task.title}“.`,
-          );
-        }
-      }
-      while (remaining.size > 0) {
-        const ready = [...remaining.values()]
-          .filter(
-            (task) =>
-              !task.prerequisite ||
-              tasks.find((item) => item.id === task.prerequisite)?.done ||
-              !remaining.has(task.prerequisite),
-          )
-          .sort((a, b) => a.sortOrder - b.sortOrder);
-        if (ready.length === 0) {
-          throw new Error("Úkoly mají neplatnou kruhovou závislost.");
-        }
-        for (const task of ready) {
-          orderedIds.push(task.id);
-          remaining.delete(task.id);
-        }
-      }
-      await schoolRepository.setCompletions(orderedIds);
-      const completedIds = new Set(orderedIds);
-      setTasks((current) => current.map((task) => completedIds.has(task.id) ? { ...task, done: true } : task));
+      await schoolRepository.setCompletions(selectedIds);
+      const completedIds = new Set(selectedIds);
+      const completedAt = new Date().toISOString();
+      setTasks((current) => current.map((task) => completedIds.has(task.id) ? { ...task, done: true, completedBy: profile.full_name, completedAt } : task));
       try {
         await load(session, profile);
       } catch {
@@ -872,6 +850,9 @@ export default function App() {
           )}
           {accessRole(profile) === "visitor" && (
             <p className="readonly-note">Návštěvnický přístup je pouze pro čtení.</p>
+          )}
+          {canWork(profile) && displayCleaningDay.kind !== "preview" && (
+            <ShiftRoomCompletion tasks={visible} onCompleteAll={completeMany} />
           )}
           <TaskHierarchy
             tasks={visible}
@@ -1966,42 +1947,93 @@ function RoomActivityGroup({
   guides: ManualEntry[];
 }) {
   const [saving, setSaving] = useState(false);
-  const completed = tasks.filter((task) => task.done).length;
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const routine = bulkTasks(tasks);
+  const completed = routine.filter((task) => task.done).length;
+  const allRoutineDone = routine.length > 0 && completed === routine.length;
+  const specialCount = tasks.length - routine.length;
+  const completion = allRoutineDone ? routine.find((task) => task.completedBy) : undefined;
   return (
-    <section className="room-group">
+    <section className={`room-group${allRoutineDone ? " room-done" : ""}`}>
       <header className="room-heading">
         <span>
           <h3>{room}</h3>
           <small>
-            {completed}/{tasks.length}
+            {routine.length ? `${completed}/${routine.length} běžných` : "Pouze speciální úkoly"}
+            {specialCount > 0 ? ` · ${specialCount} speciální` : ""}
           </small>
+          {completion?.completedBy && <small className="room-author">✓ {completion.completedBy}{completion.completedAt ? ` · ${new Date(completion.completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
         </span>
         <button
           className="complete-room"
           disabled={
             saving ||
-            completed === tasks.length ||
-            tasks.some((task) => !task.canComplete)
+            allRoutineDone ||
+            routine.length === 0 ||
+            routine.some((task) => !task.canComplete)
           }
           onClick={async () => {
             setSaving(true);
             try {
-              await onCompleteAll(tasks);
+              await onCompleteAll(routine);
             } finally {
               setSaving(false);
             }
           }}
         >
-          {saving ? "Ukládám…" : "Hotovo vše"}
+          {saving ? "Ukládám…" : allRoutineDone ? "✓ Hotovo" : "Označit vše jako hotové"}
         </button>
       </header>
-      <TaskRows
-        tasks={tasks}
-        onComplete={onComplete}
-        pendingTaskIds={pendingTaskIds}
-        allTasks={tasks}
-        guides={guides}
-      />
+      <button className="room-detail-toggle" onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen}>
+        {detailsOpen ? "Skrýt jednotlivé úkoly" : "Zobrazit jednotlivé úkoly"}
+      </button>
+      {detailsOpen && <TaskRows tasks={tasks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} />}
+    </section>
+  );
+}
+
+function ShiftRoomCompletion({ tasks, onCompleteAll }: { tasks: Task[]; onCompleteAll: (tasks: Task[]) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const rooms = new Map<string, { label: string; tasks: Task[] }>();
+  for (const task of tasks.filter((item) => item.roomId && !isFinalCheckTask(item))) {
+    const key = `${task.buildingId ?? task.building}|${task.roomId}`;
+    const entry = rooms.get(key) ?? { label: `${task.building} · ${task.floor} · ${task.room}`, tasks: [] };
+    entry.tasks.push(task);
+    rooms.set(key, entry);
+  }
+  const available = [...rooms.entries()].filter(([, entry]) => bulkTasks(entry.tasks).some((task) => !task.done));
+  if (!available.length) return null;
+  const toggle = (key: string) => setSelected((current) => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  return (
+    <section className="shift-room-completion">
+      <button className="shift-room-trigger" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+        <span><b>Co jsem dnes udělal/a</b><small>Vyberte místnosti a uložte je najednou</small></span><i>{open ? "⌃" : "⌄"}</i>
+      </button>
+      {open && <div className="shift-room-body">
+        {available.map(([key, entry]) => {
+          const routine = bulkTasks(entry.tasks);
+          return <label className="shift-room-option" key={key}>
+            <input type="checkbox" checked={selected.has(key)} onChange={() => toggle(key)} />
+            <span><b>{entry.label}</b><small>{routine.filter((task) => task.done).length}/{routine.length} hotovo · speciální úkoly se neoznačí</small></span>
+          </label>;
+        })}
+        <button className="primary-action" disabled={!selected.size || saving} onClick={async () => {
+          const chosen = available.filter(([key]) => selected.has(key)).flatMap(([, entry]) => bulkTasks(entry.tasks));
+          if (!window.confirm(`Označit běžný úklid ve ${selected.size} vybraných místnostech jako hotový?`)) return;
+          setSaving(true);
+          try {
+            await onCompleteAll(chosen);
+            setSelected(new Set());
+            setOpen(false);
+          } finally { setSaving(false); }
+        }}>{saving ? "Ukládám…" : "Označit vybrané jako hotové"}</button>
+      </div>}
     </section>
   );
 }
@@ -2180,6 +2212,7 @@ function PlanManager({
       periodMonths: undefined,
       periodWeek: undefined,
       periodAnchorMonth: undefined,
+      bulkCompletable: Boolean(room),
       active: true,
     });
   const floors = options.floors.filter((floor) => floor.buildingId === buildingId).sort((a, b) => a.sortOrder - b.sortOrder);
@@ -2702,6 +2735,18 @@ function TaskEditor({
             ))}
         </select>
         <small>Například vytření až po zametení nebo vysátí.</small>
+      </label>}
+      {!departureCheck && draft.roomId && <label className="bulk-setting">
+        <input
+          type="checkbox"
+          checked={isBulkCompletableTask(draft)}
+          disabled={!inferredBulkCompletable(draft)}
+          onChange={(event) => update("bulkCompletable", event.target.checked)}
+        />
+        <span>
+          Zahrnout do rychlého dokončení místnosti
+          <small>Vypněte u práce, kterou je nutné potvrdit samostatně. Okna, hloubkové čištění, praní, měsíční a mimořádné úkoly jsou vždy samostatné.</small>
+        </span>
       </label>}
       <label>
         Pořadí
