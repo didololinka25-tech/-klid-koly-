@@ -1460,9 +1460,6 @@ function AttendanceDashboard({
           : isDpc ? <article><small>MĚSÍC – DPČ</small><strong>{reportDuration(currentMonthReport.dpcMonthMs)}</strong><span>{currentMonthReport.dpcGrossEstimate === undefined ? "Doplňte hodinovou sazbu" : `${reportMoney(currentMonthReport.dpcGrossEstimate)} z ${reportMoney(appSettings.dpcMonthlyInsuranceThreshold)}`}</span></article>
           : <article><small>PRACOVNÍ VZTAH</small><strong>Není nastaven</strong><span>Správce doplní platnost smlouvy.</span></article>}
       </div>
-      {isDpp && <div className="dpp-progress" aria-label="Čerpání ročního limitu DPP">
-        <span style={{ width: `${progress}%` }} />
-      </div>}
       {isDpp && yearWarning && (
         <div
           className={`attendance-alert ${dppYearHours >= dppAnnualLimitHours * (280 / 300) ? "danger" : ""}`}
@@ -1471,35 +1468,25 @@ function AttendanceDashboard({
         </div>
       )}
       {isDpp && dppBudget && <section className="pace-card dpp-budget-card">
-        <p className="eyebrow">DPP – {todayKey.slice(0, 4)}</p>
-        <strong>Odpracováno: {reportDuration(currentMonthReport.dppYearMs)} / {dppAnnualLimitHours} h</strong>
-        <p>Roční fond zbývá: <b>{formatPlanningHours(dppBudget.annualRemainingHours)}</b></p>
-        <p>Pro rovnoměrné rozložení do konce smluvního období:</p>
-        <strong>≈ {formatPlanningHours(dppBudget.monthlyBudgetHours)} / měsíc</strong>
-        <p>Pro tento měsíc zbývá z orientačního rozpočtu: <b>≈ {formatPlanningHours(dppBudget.monthlyBudgetRemainingHours)}</b></p>
-        <small>Jde o plánovací rozpočet z ročního fondu, nikoli zákonné měsíční maximum. Počítá se do konce roku nebo aktuálního smluvního období.</small>
-        <div className="shift-setting">
-          <label>
-            Směn týdně
-            <input
-              type="number"
-              min="1"
-              max="7"
-              value={plannedShifts}
-              onChange={(event) => setPlannedShifts(Number(event.target.value))}
-              disabled={!settings.configurable}
-            />
-          </label>
-          <button
-            onClick={() => void onSaveSettings(plannedShifts)}
-            disabled={!settings.configurable}
-          >
-            Uložit
-          </button>
+        <p className="eyebrow">DPP · {todayKey.slice(0, 4)}</p>
+        <div className="pace-worked"><strong>{reportDuration(currentMonthReport.dppYearMs)}</strong><span>odpracováno z {dppAnnualLimitHours} h</span></div>
+        <div className="dpp-progress" aria-label="Čerpání ročního limitu DPP"><span style={{ width: `${progress}%` }} /></div>
+        <div className="pace-metrics">
+          <div><span>ZBÝVÁ</span><strong>{formatPlanningHours(dppBudget.annualRemainingHours)}</strong></div>
+          <div><span>MĚSÍČNÍ ROZPOČET</span><strong>≈ {formatPlanningHours(dppBudget.monthlyBudgetHours)}</strong><small>zbývá ≈ {formatPlanningHours(dppBudget.monthlyBudgetRemainingHours)}</small></div>
         </div>
-        {!settings.configurable && (
-          <small>Nastavení bude dostupné po aplikaci připravené migrace.</small>
-        )}
+        <details className="pace-explanation">
+          <summary>ⓘ Jak se to počítá</summary>
+          <div>
+            <p>Měsíční rozpočet je orientační rovnoměrné rozložení zbývajícího ročního fondu do konce roku nebo aktuálního smluvního období.</p>
+            <p>Nejde o zákonné měsíční maximum.</p>
+            <div className="shift-setting">
+              <label>Směn týdně<input type="number" min="1" max="7" value={plannedShifts} onChange={(event) => setPlannedShifts(Number(event.target.value))} disabled={!settings.configurable} /></label>
+              <button onClick={() => void onSaveSettings(plannedShifts)} disabled={!settings.configurable}>Uložit</button>
+            </div>
+            {!settings.configurable && <small>Nastavení směn zatím nelze měnit.</small>}
+          </div>
+        </details>
       </section>}
       {isDpc && currentContract && <DpcMonthlySummary report={currentMonthReport} appSettings={appSettings} contract={currentContract} currentDateKey={todayKey} />}
       <ShiftWarnings records={records} now={now} />
@@ -1603,24 +1590,31 @@ function DpcMonthlySummary({ report, appSettings, contract, currentDateKey }: { 
   });
   const pace = paceCard.pace;
   return <section className="pace-card dpc-month-card">
-    <p className="eyebrow">DPČ – {report.monthLabel.toLocaleUpperCase("cs-CZ")}</p>
-    <div className="pace-primary"><span>Odpracováno</span><strong>{reportDuration(report.dpcMonthMs)}</strong></div>
-    <p>Odhad příjmu: <b>{report.dpcGrossEstimate === undefined ? "nelze určit" : reportMoney(report.dpcGrossEstimate)}</b></p>
-    <p>Měsíční cíl: <b>{pace.targetHours === undefined ? "nelze určit" : formatPlanningHours(pace.targetHours)} / {reportMoney(appSettings.dpcMonthlyInsuranceThreshold)}</b></p>
+    <p className="eyebrow">DPČ · {report.monthLabel.toLocaleUpperCase("cs-CZ")}</p>
+    <div className="pace-worked"><strong>{reportDuration(report.dpcMonthMs)}</strong><span>odpracováno z {pace.targetHours === undefined ? "—" : formatPlanningHours(pace.targetHours)}</span></div>
+    <div className="dpp-progress" aria-label="Postup k měsíčnímu cíli DPČ"><span style={{ width: `${progress}%` }} /></div>
     {report.dpcGrossEstimate === undefined
       ? <p className="attendance-alert">Pro výpočet odměny a potřebného rozsahu doplňte hodinovou sazbu.</p>
       : <>
-        <p>Zbývá: <b>{pace.remainingHours === undefined ? "nelze určit" : formatPlanningHours(pace.remainingHours)} / {reportMoney(pace.remainingIncome)}</b></p>
-        <div className="dpp-progress" aria-label="Postup k nastavenému rozhodnému příjmu DPČ"><span style={{ width: `${progress}%` }} /></div>
-        <div className="pace-highlight"><span>Běžné tempo pro tento měsíc</span><strong>{paceCard.baselineWeeklyText === undefined ? "nelze určit" : `≈ ${paceCard.baselineWeeklyText} týdně`}</strong></div>
-        {pace.elapsedWeeks >= 1 && <p>Dosavadní průměr: <b>≈ {formatPlanningHours(pace.averageWorkedWeeklyHours)} týdně</b></p>}
+        <div className="pace-highlight"><span>BĚŽNÉ TEMPO</span><strong>{paceCard.baselineWeeklyText === undefined ? "nelze určit" : `≈ ${paceCard.baselineWeeklyText} týdně`}</strong></div>
         {pace.thresholdReached
           ? <p><b>Nastavená hranice dosažena podle evidované docházky.</b></p>
           : pace.remainingWeeklyHours !== undefined
-            ? <><div className="pace-highlight secondary"><span>Potřebné tempo ve zbývajících týdnech</span><strong>≈ {paceCard.remainingWeeklyText} týdně</strong></div>{pace.behindBaseline && <p className="attendance-alert">Pro dosažení měsíčního cíle je nyní potřeba tempo zvýšit.</p>}</>
-            : <><p>Do konce měsíce zbývá: <b>{paceCard.remainingHoursText ?? "nelze určit"}</b></p><small>Do konce měsíce už nezbývá celý pracovní týden, proto týdenní tempo nyní neuvádíme.</small></>}
+            ? <div className="pace-current"><span>Aktuálně potřebné tempo</span><strong>≈ {paceCard.remainingWeeklyText} týdně</strong></div>
+            : null}
+        <div className="pace-metrics">
+          <div><span>ZBÝVÁ</span><strong>{paceCard.remainingHoursText ?? "nelze určit"}</strong><small>{reportMoney(pace.remainingIncome)}</small></div>
+          <div><span>ODHAD ODMĚNY</span><strong>{reportMoney(report.dpcGrossEstimate)}</strong></div>
+        </div>
       </>}
-    {contract.hourlyRate && pace.targetHours !== undefined && <small>Při sazbě {reportMoney(contract.hourlyRate)}/h potřebujete pro nastavenou měsíční hranici {reportMoney(appSettings.dpcMonthlyInsuranceThreshold)} přibližně {formatPlanningHours(pace.targetHours)} za měsíc. Týdenní tempo je orientační rozložení měsíčního cíle a během měsíce se upravuje podle odpracovaného času.</small>}
+    {contract.hourlyRate && pace.targetHours !== undefined && <details className="pace-explanation">
+      <summary>ⓘ Jak se to počítá</summary>
+      <div>
+        <p>Při sazbě {reportMoney(contract.hourlyRate)}/h je pro nastavenou měsíční hranici {reportMoney(appSettings.dpcMonthlyInsuranceThreshold)} potřeba přibližně {formatPlanningHours(pace.targetHours)} za měsíc.</p>
+        <p>Běžné týdenní tempo je orientační rozložení tohoto měsíčního cíle.</p>
+        {pace.remainingWeeklyHours === undefined && !pace.thresholdReached && <p>Do konce měsíce už nezbývá celý pracovní týden, proto další týdenní tempo neuvádíme.</p>}
+      </div>
+    </details>}
   </section>;
 }
 

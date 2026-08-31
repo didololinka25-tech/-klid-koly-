@@ -278,6 +278,75 @@ h1 {
   color: #627a75;
   line-height: 1.4;
 }
+.pace-worked {
+  display: grid;
+  gap: 1px;
+}
+.pace-worked strong {
+  color: #123d36;
+  font-size: clamp(26px, 8vw, 34px);
+  line-height: 1.1;
+}
+.pace-worked span {
+  color: #627a75;
+  font-size: 13px;
+  font-weight: 700;
+}
+.pace-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.pace-metrics > div {
+  min-width: 0;
+  padding: 10px;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  border-radius: 11px;
+  background: #f2f7f5;
+}
+.pace-metrics span,
+.pace-current span {
+  color: #56716b;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .06em;
+}
+.pace-metrics strong {
+  color: #173832;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.pace-metrics small { font-size: 12px; font-weight: 700; }
+.pace-current {
+  padding: 8px 10px;
+  display: grid;
+  gap: 2px;
+  border-left: 3px solid #77aa9f;
+}
+.pace-current strong { color: #285f57; }
+.pace-explanation {
+  border-top: 1px solid #e0ebe7;
+}
+.pace-explanation summary {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: #165e56;
+  font-weight: 850;
+  list-style: none;
+  touch-action: manipulation;
+}
+.pace-explanation summary::-webkit-details-marker { display: none; }
+.pace-explanation summary::after { content: "⌄"; margin-left: auto; }
+.pace-explanation[open] summary::after { content: "⌃"; }
+.pace-explanation > div {
+  padding: 0 2px 8px;
+  display: grid;
+  gap: 8px;
+}
 .shift-setting {
   display: flex;
   align-items: end;

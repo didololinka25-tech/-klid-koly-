@@ -252,9 +252,9 @@ test('DPČ UI označuje 20 hodin jako referenční rozsah, nikoli zákonné mini
   const mainDpcCard = app.match(/function DpcMonthlySummary[\s\S]*?function formatPlanningHours/)?.[0] ?? ''
   assert.match(mainDpcCard, /calculateDpcPaceCard/)
   assert.match(mainDpcCard, /paceCard\.baselineWeeklyText/)
-  assert.match(mainDpcCard, /Běžné tempo pro tento měsíc/i)
-  assert.match(mainDpcCard, /Potřebné tempo ve zbývajících týdnech/i)
-  assert.match(mainDpcCard, /týdenní tempo nyní neuvádíme/i)
+  assert.match(mainDpcCard, /BĚŽNÉ TEMPO/i)
+  assert.match(mainDpcCard, /Aktuálně potřebné tempo/i)
+  assert.match(mainDpcCard, /další týdenní tempo neuvádíme/i)
   assert.doesNotMatch(mainDpcCard, /dpcWeeklyHoursReference|20 h/i)
 })
 
