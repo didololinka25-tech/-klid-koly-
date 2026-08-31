@@ -555,6 +555,8 @@ h2 {
 .complete-room:disabled {
   opacity: 0.45;
 }
+.undo-room { flex: 0 0 auto; min-height: 44px; border: 1px solid #c99575; border-radius: 9px; padding: 0 12px; background: #fff8f3; color: #844522; font-size: 12px; font-weight: 900; }
+.undo-room:disabled { opacity: .5; }
 .activity-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));

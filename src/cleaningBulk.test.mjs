@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { bulkTasks, isBulkCompletableTask, orderTasksByDependency } from './cleaningBulk.ts'
+import { applyBulkUndo, bulkTasks, isBulkCompletableTask, orderTasksByDependency } from './cleaningBulk.ts'
 
 const task = (id, overrides = {}) => ({
   id, roomId: 'room-1', room: 'Jídelna', floor: '1. patro', floorSort: 1,
@@ -34,4 +34,24 @@ test('již hotový úkol se znovu neposílá a jeho autor se tím nepřepisuje',
 test('neplatná chybějící závislost je srozumitelně odmítnuta', () => {
   const mop = task('mop', { activityType: 'mop', prerequisite: 'vacuum' })
   assert.throws(() => orderTasksByDependency([mop]), /Nejdříve dokončete/)
+})
+
+test('undo vrátí přesně pět úkolů vytvořených bulk akcí', () => {
+  const tasks = Array.from({ length: 5 }, (_, index) => task(`bulk-${index}`, { done: true, completedBy: 'Didi' }))
+  const result = applyBulkUndo(tasks, tasks.map((item) => item.id))
+  assert.equal(result.filter((item) => item.done).length, 0)
+})
+
+test('undo zachová dva dříve hotové úkoly i jejich autory', () => {
+  const earlier = [task('earlier-dana', { done: true, completedBy: 'Dana' }), task('earlier-martina', { done: true, completedBy: 'Martina' })]
+  const bulk = Array.from({ length: 5 }, (_, index) => task(`bulk-${index}`, { done: true, completedBy: 'Didi' }))
+  const result = applyBulkUndo([...earlier, ...bulk], bulk.map((item) => item.id))
+  assert.deepEqual(result.filter((item) => item.done).map((item) => item.completedBy), ['Dana', 'Martina'])
+})
+
+test('progress místnosti po undo odpovídá pouze zbývajícím completion', () => {
+  const prior = task('prior', { done: true, completedBy: 'Dana' })
+  const bulk = [task('vacuum', { done: true }), task('mop', { done: true, prerequisite: 'vacuum' })]
+  const result = applyBulkUndo([prior, ...bulk], ['vacuum', 'mop'])
+  assert.equal(result.filter((item) => item.done).length, 1)
 })

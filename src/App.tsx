@@ -12,6 +12,7 @@ import {
   type AttendanceAuditEntry,
   type AttendanceWorker,
   type AppSettings,
+  type BulkCompletionAction,
   type CleaningDayDraft,
   type CleaningDayRecord,
   type ManagedFloor,
@@ -37,7 +38,7 @@ import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay, type Clean
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
 import { attendanceEditorStartValue, pragueDateKey, pragueDateTimeInput } from "./attendanceTime";
 import { forBuilding, roomForBuilding } from "./buildingScope";
-import { bulkTasks, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
+import { applyBulkUndo, bulkTasks, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
 
 type Section =
   | "Dnes"
@@ -98,6 +99,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [bulkActions, setBulkActions] = useState<BulkCompletionAction[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [cleaningDays, setCleaningDays] = useState<CleaningDayRecord[]>([]);
   const [cleaningDaysAvailable, setCleaningDaysAvailable] = useState(false);
@@ -157,6 +159,7 @@ export default function App() {
       setProfile(activeProfile);
       if (!activeProfile.active || !canViewSchool(activeProfile)) {
         setTasks([]);
+        setBulkActions([]);
         setAttendance([]);
         setAttendanceView([]);
         setAttendanceWorkers([]);
@@ -186,10 +189,12 @@ export default function App() {
       );
       if (taskResult.status === "fulfilled") {
         setTasks(taskResult.value.tasks);
+        setBulkActions(taskResult.value.bulkActions);
         setCleaningDay(taskResult.value.cleaningDay);
         setCleaningDaysAvailable(taskResult.value.cleaningDaysAvailable);
       } else {
         setTasks([]);
+        setBulkActions([]);
         setNotice(
           taskResult.reason instanceof Error
             ? taskResult.reason.message
@@ -260,6 +265,7 @@ export default function App() {
       setSession(next);
       setProfile(null);
       setTasks([]);
+      setBulkActions([]);
       setUsers([]);
       setCleaningDays([]);
       setCleaningTaskSelectionAvailable(false);
@@ -377,6 +383,7 @@ export default function App() {
         ...task,
         done: !target.done,
         completedBy: !target.done ? profile.full_name : null,
+        completedById: !target.done ? profile.id : null,
         completedAt: !target.done ? new Date().toISOString() : null,
       } : task));
       try {
@@ -399,7 +406,7 @@ export default function App() {
     const selectedIds = orderedTasks.map((task) => task.id);
     if (!selectedIds.length) return;
     if (
-      routineTasks.some((task) => !task.canComplete) ||
+      orderedTasks.some((task) => !task.canComplete) ||
       selectedIds.some((id) => taskWriteLocks.current.has(id))
     )
       return;
@@ -410,7 +417,7 @@ export default function App() {
       await schoolRepository.setCompletions(selectedIds);
       const completedIds = new Set(selectedIds);
       const completedAt = new Date().toISOString();
-      setTasks((current) => current.map((task) => completedIds.has(task.id) ? { ...task, done: true, completedBy: profile.full_name, completedAt } : task));
+      setTasks((current) => current.map((task) => completedIds.has(task.id) ? { ...task, done: true, completedBy: profile.full_name, completedById: profile.id, completedAt } : task));
       try {
         await load(session, profile);
       } catch {
@@ -425,6 +432,28 @@ export default function App() {
       throw error;
     } finally {
       selectedIds.forEach((id) => taskWriteLocks.current.delete(id));
+      setPendingTaskIds(new Set(taskWriteLocks.current));
+    }
+  };
+  const undoBulkCompletion = async (action: BulkCompletionAction) => {
+    if (action.taskIds.some((id) => taskWriteLocks.current.has(id))) return;
+    action.taskIds.forEach((id) => taskWriteLocks.current.add(id));
+    setPendingTaskIds(new Set(taskWriteLocks.current));
+    try {
+      setNotice("");
+      await schoolRepository.undoBulkCompletion(action.id);
+      setTasks((current) => applyBulkUndo(current, action.taskIds));
+      setBulkActions((current) => current.filter((item) => item.id !== action.id));
+      try {
+        await load(session, profile);
+      } catch {
+        setNotice("Vrácení je uložené, ale aktuální stav se nepodařilo znovu načíst. Zkontrolujte připojení.");
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Hromadné dokončení se nepodařilo vrátit.");
+      throw error;
+    } finally {
+      action.taskIds.forEach((id) => taskWriteLocks.current.delete(id));
       setPendingTaskIds(new Set(taskWriteLocks.current));
     }
   };
@@ -856,8 +885,10 @@ export default function App() {
           )}
           <TaskHierarchy
             tasks={visible}
+            bulkActions={bulkActions}
             onComplete={complete}
             onCompleteAll={completeMany}
+            onUndoBulk={undoBulkCompletion}
             pendingTaskIds={pendingTaskIds}
             guides={manual.entries.filter((entry) => entry.entryType === "guide" && entry.active)}
           />
@@ -1826,14 +1857,18 @@ function AttendanceEditor({
 
 function TaskHierarchy({
   tasks,
+  bulkActions,
   onComplete,
   onCompleteAll,
+  onUndoBulk,
   pendingTaskIds,
   guides,
 }: {
   tasks: Task[];
+  bulkActions: BulkCompletionAction[];
   onComplete: (id: string) => Promise<void>;
   onCompleteAll: (tasks: Task[]) => Promise<void>;
+  onUndoBulk: (action: BulkCompletionAction) => Promise<void>;
   pendingTaskIds: Set<string>;
   guides: ManualEntry[];
 }) {
@@ -1853,7 +1888,7 @@ function TaskHierarchy({
           <ProgressBar value={done} total={buildingTasks.length} label={`Průběh: ${building}`} />
           {common.length > 0 && <section className="shared-tasks"><h2>Společné úkoly</h2><TaskRows tasks={common} onComplete={onComplete} pendingTaskIds={pendingTaskIds} guides={guides} /></section>}
           {[...floorGroups.entries()].sort(([, a], [, b]) => a[0].floorSort - b[0].floorSort).map(([floor, floorTasks]) => (
-            <FloorGroup key={`${building}|${floor}`} label={floor} tasks={floorTasks} onComplete={onComplete} onCompleteAll={onCompleteAll} pendingTaskIds={pendingTaskIds} guides={guides} />
+            <FloorGroup key={`${building}|${floor}`} label={floor} tasks={floorTasks} bulkActions={bulkActions} onComplete={onComplete} onCompleteAll={onCompleteAll} onUndoBulk={onUndoBulk} pendingTaskIds={pendingTaskIds} guides={guides} />
           ))}
         </section>;
       })}
@@ -1878,15 +1913,19 @@ function TaskHierarchy({
 function FloorGroup({
   label,
   tasks,
+  bulkActions,
   onComplete,
   onCompleteAll,
+  onUndoBulk,
   pendingTaskIds,
   guides,
 }: {
   label: string;
   tasks: Task[];
+  bulkActions: BulkCompletionAction[];
   onComplete: (id: string) => Promise<void>;
   onCompleteAll: (tasks: Task[]) => Promise<void>;
+  onUndoBulk: (action: BulkCompletionAction) => Promise<void>;
   pendingTaskIds: Set<string>;
   guides: ManualEntry[];
 }) {
@@ -1919,8 +1958,10 @@ function FloorGroup({
               key={room}
               room={room}
               tasks={roomTasks}
+              bulkAction={bulkActions.find((action) => action.roomId === roomTasks[0]?.roomId)}
               onComplete={onComplete}
               onCompleteAll={onCompleteAll}
+              onUndoBulk={onUndoBulk}
               pendingTaskIds={pendingTaskIds}
               guides={guides}
             />
@@ -1934,15 +1975,19 @@ function FloorGroup({
 function RoomActivityGroup({
   room,
   tasks,
+  bulkAction,
   onComplete,
   onCompleteAll,
+  onUndoBulk,
   pendingTaskIds,
   guides,
 }: {
   room: string;
   tasks: Task[];
+  bulkAction?: BulkCompletionAction;
   onComplete: (id: string) => Promise<void>;
   onCompleteAll: (tasks: Task[]) => Promise<void>;
+  onUndoBulk: (action: BulkCompletionAction) => Promise<void>;
   pendingTaskIds: Set<string>;
   guides: ManualEntry[];
 }) {
@@ -1953,6 +1998,8 @@ function RoomActivityGroup({
   const allRoutineDone = routine.length > 0 && completed === routine.length;
   const specialCount = tasks.length - routine.length;
   const completion = allRoutineDone ? routine.find((task) => task.completedBy) : undefined;
+  const completedBy = bulkAction?.workerName ?? completion?.completedBy;
+  const completedAt = bulkAction?.createdAt ?? completion?.completedAt;
   return (
     <section className={`room-group${allRoutineDone ? " room-done" : ""}`}>
       <header className="room-heading">
@@ -1962,15 +2009,23 @@ function RoomActivityGroup({
             {routine.length ? `${completed}/${routine.length} běžných` : "Pouze speciální úkoly"}
             {specialCount > 0 ? ` · ${specialCount} speciální` : ""}
           </small>
-          {completion?.completedBy && <small className="room-author">✓ {completion.completedBy}{completion.completedAt ? ` · ${new Date(completion.completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
+          {completedBy && <small className="room-author">✓ {completedBy}{completedAt ? ` · ${new Date(completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
         </span>
-        <button
+        {bulkAction?.canUndo && allRoutineDone ? <button
+          className="undo-room"
+          disabled={saving}
+          onClick={async () => {
+            if (!window.confirm("Vrátit hromadné dokončení této místnosti?")) return;
+            setSaving(true);
+            try { await onUndoBulk(bulkAction); } finally { setSaving(false); }
+          }}
+        >{saving ? "Vracím…" : "Vrátit dokončení"}</button> : <button
           className="complete-room"
           disabled={
             saving ||
             allRoutineDone ||
             routine.length === 0 ||
-            routine.some((task) => !task.canComplete)
+            routine.some((task) => !task.done && !task.canComplete)
           }
           onClick={async () => {
             setSaving(true);
@@ -1982,7 +2037,7 @@ function RoomActivityGroup({
           }}
         >
           {saving ? "Ukládám…" : allRoutineDone ? "✓ Hotovo" : "Označit vše jako hotové"}
-        </button>
+        </button>}
       </header>
       <button className="room-detail-toggle" onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen}>
         {detailsOpen ? "Skrýt jednotlivé úkoly" : "Zobrazit jednotlivé úkoly"}

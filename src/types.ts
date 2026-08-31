@@ -11,6 +11,7 @@ export type Task = {
   periodMonths?: number | null; periodWeek?: number | null; periodAnchorMonth?: string | null
   bulkCompletable?: boolean
   completedBy?: string | null
+  completedById?: string | null
   completedAt?: string | null
 }
 export type Shift = { worker: Worker; start: string; end: string }

@@ -24,6 +24,7 @@ const migration24 = readFileSync(new URL('../supabase/migrations/20260830002400_
 const migration25 = readFileSync(new URL('../supabase/migrations/20260830002500_restore_missing_app_settings.sql', import.meta.url), 'utf8')
 const migration26 = readFileSync(new URL('../supabase/migrations/20260830002600_multi_building_operations.sql', import.meta.url), 'utf8')
 const migration27 = readFileSync(new URL('../supabase/migrations/20260831002700_fast_room_completion.sql', import.meta.url), 'utf8')
+const migration28 = readFileSync(new URL('../supabase/migrations/20260831002800_reversible_bulk_completion.sql', import.meta.url), 'utf8')
 const settingsDiagnostics = readFileSync(new URL('../supabase/diagnostics/verify_02300_02400_state.sql', import.meta.url), 'utf8')
 const attendanceRepair = readFileSync(new URL('../supabase/diagnostics/repair_attendance_d05aac53.sql', import.meta.url), 'utf8')
 
@@ -172,6 +173,26 @@ test('autor dokončení je čten bezpečně bez rozšíření RLS profilů', () 
   assert.match(migration27, /not public\.can_view_school_data\(\)/i)
   assert.match(migration27, /join public\.profiles profile on profile\.id = completion\.worker_id/i)
   assert.match(repository, /completedBy: completionByTask\.get\(row\.id\)\?\.worker_name/)
+})
+
+test('bulk undo eviduje jen nově dokončené úkoly a zachovává původní completion', () => {
+  assert.match(migration28, /create table if not exists public\.cleaning_bulk_completion_actions/i)
+  assert.match(migration28, /create table if not exists public\.cleaning_bulk_completion_items/i)
+  assert.match(migration28, /if not found or not completion_before\.completed/i)
+  assert.match(migration28, /insert into public\.cleaning_bulk_completion_items/i)
+  assert.match(migration28, /completed_at is distinct from current_item\.completed_at/i)
+  assert.match(migration28, /order by ranked\.depth desc/i)
+  assert.doesNotMatch(migration28, /delete\s+from\s+public\.cleaning_completions/i)
+})
+
+test('bulk undo smí provést autor nebo admin a audit není přímo zapisovatelný', () => {
+  assert.match(migration28, /target_action\.worker_id <> actor_id and not public\.is_admin\(\)/i)
+  assert.match(migration28, /undone_at = now\(\), undone_by = actor_id/i)
+  assert.match(migration28, /revoke all on public\.cleaning_bulk_completion_actions from anon, authenticated/i)
+  assert.match(migration28, /Cizí dokončení může vrátit pouze administrátor/i)
+  assert.match(repository, /rpc\('undo_cleaning_tasks_bulk'/)
+  assert.match(repository, /table: 'cleaning_completions'/, 'undo se ostatním načte přes existující realtime completion subscription')
+  assert.match(app, /Vrátit hromadné dokončení této místnosti\?/)
 })
 
 test('audit docházky ukládá neměnné původní i nové hodnoty a čte jej pouze admin', () => {

@@ -40,3 +40,10 @@ export function orderTasksByDependency(tasks: Task[], allTasks: Task[] = tasks) 
   }
   return ordered
 }
+
+export function applyBulkUndo(tasks: Task[], taskIds: string[]) {
+  const reverted = new Set(taskIds)
+  return tasks.map((task) => reverted.has(task.id)
+    ? { ...task, done: false, completedBy: null, completedById: null, completedAt: null }
+    : task)
+}

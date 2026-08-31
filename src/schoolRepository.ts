@@ -36,7 +36,16 @@ export type UserProfile = {
   firstSignedInAt: string
   lastSignedInAt?: string
 }
-export type TaskLoad = { tasks: Task[]; cleaningDay: CleaningDayContext; cleaningDaysAvailable: boolean }
+export type BulkCompletionAction = {
+  id: string
+  roomId: string
+  workerId: string
+  workerName: string
+  createdAt: string
+  taskIds: string[]
+  canUndo: boolean
+}
+export type TaskLoad = { tasks: Task[]; bulkActions: BulkCompletionAction[]; cleaningDay: CleaningDayContext; cleaningDaysAvailable: boolean }
 export type CleaningDayRecord = CleaningDayException & {
   buildingId: string
   scopeType: 'whole_school'
@@ -207,6 +216,17 @@ export const schoolRepository = {
     if (!completionStatus.error) completionRows = completionStatus.data ?? []
     else if (!missingFunction(completionStatus.error)) throw completionStatus.error
     const completionByTask = new Map(completionRows.map((completion: any) => [completion.task_id, completion]))
+    const bulkActionResult = await db.rpc('get_cleaning_bulk_actions', { target_date: date })
+    if (bulkActionResult.error && !missingFunction(bulkActionResult.error)) throw bulkActionResult.error
+    const bulkActions: BulkCompletionAction[] = (bulkActionResult.data ?? []).map((action: any) => ({
+      id: action.action_id,
+      roomId: action.room_id,
+      workerId: action.worker_id,
+      workerName: action.worker_name,
+      createdAt: action.created_at,
+      taskIds: action.task_ids ?? [],
+      canUndo: Boolean(action.can_undo),
+    }))
     const tasks = (rows ?? []).filter((row: any) => {
       if (row.activity_type === 'disinfect') return false
       const room: any = row.room_id ? roomById.get(row.room_id) : null
@@ -219,18 +239,20 @@ export const schoolRepository = {
       const mapped: Task = {
         id: row.id, planKey: row.plan_key ?? null, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1,
         buildingId: building?.id ?? defaultBuildingId, building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
-        assignedTo: 'Úklidový tým', done: completionByTask.get(row.id)?.completed ?? false, prerequisite: row.requires_task_id, canComplete: canWork(profile) && !isTestCleaningDay,
+        assignedTo: 'Úklidový tým', done: completionByTask.get(row.id)?.completed ?? false, prerequisite: row.requires_task_id,
+        canComplete: canWork(profile) && !isTestCleaningDay && (!(completionByTask.get(row.id)?.completed ?? false) || completionByTask.get(row.id)?.worker_id === profile.id || accessRole(profile) === 'admin'),
         dueToday: room?.active !== false && isTaskDueForCleaningDay(row, resolveCleaningDay(date, exceptions.filter((item) => item.buildingId === (building?.id ?? defaultBuildingId)), isTestCleaningDay)), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
         active: row.active, roomActive: room?.active ?? true,
         cleaningCycleLength: row.cleaning_cycle_length, cleaningCycleOffset: row.cleaning_cycle_offset,
         periodMonths: row.period_months, periodWeek: row.period_week, periodAnchorMonth: row.period_anchor_month,
         completedBy: completionByTask.get(row.id)?.worker_name ?? null,
+        completedById: completionByTask.get(row.id)?.worker_id ?? null,
         completedAt: completionByTask.get(row.id)?.completed_at ?? null,
       }
       mapped.bulkCompletable = typeof row.bulk_completable === 'boolean' ? row.bulk_completable : inferredBulkCompletable(mapped)
       return mapped
     })
-    return { tasks, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
+    return { tasks, bulkActions, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
   },
   planOptions: async (buildingId?: string): Promise<PlanOptions> => {
     const db = client()
@@ -503,6 +525,10 @@ export const schoolRepository = {
       rooms, buildings: (buildingResult.data ?? []).map((item: any) => ({ id: item.id, name: item.name, active: item.active })),
       editable: true, buildingScopeAvailable,
     }
+  },
+  undoBulkCompletion: async (actionId: string) => {
+    const { error } = await client().rpc('undo_cleaning_tasks_bulk', { target_action_id: actionId })
+    if (error) throw error
   },
   savePurchaseItem: async (item: { id?: string; name: string; note: string; buildingId: string }, userId: string) => {
     if (!item.buildingId) throw new Error('Vyberte pracoviště.')
