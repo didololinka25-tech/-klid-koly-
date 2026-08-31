@@ -595,7 +595,27 @@ export default function App() {
           worker.id === profile.id ? { ...worker, name: savedName } : worker,
         ),
       );
+      setUsers((current) =>
+        current.map((user) =>
+          user.id === profile.id ? { ...user, fullName: savedName } : user,
+        ),
+      );
+      setTasks((current) =>
+        current.map((task) =>
+          task.completedById === profile.id
+            ? { ...task, completedBy: savedName }
+            : task,
+        ),
+      );
+      setBulkActions((current) =>
+        current.map((action) =>
+          action.workerId === profile.id
+            ? { ...action, workerName: savedName }
+            : action,
+        ),
+      );
       setProfileEditorOpen(false);
+      setNotice("Profil byl uložen.");
     } catch (error) {
       setNotice(
         error instanceof Error ? error.message : "Profil se nepodařilo uložit.",
@@ -998,7 +1018,6 @@ export default function App() {
       {profileEditorOpen && (
         <ProfileEditor
           profile={profile}
-          editable={appSettings.available}
           onCancel={() => setProfileEditorOpen(false)}
           onSave={saveOwnProfile}
         />
@@ -3270,12 +3289,10 @@ function DppLimitSetting({
 
 function ProfileEditor({
   profile,
-  editable,
   onCancel,
   onSave,
 }: {
   profile: Profile;
-  editable: boolean;
   onCancel: () => void;
   onSave: (fullName: string) => Promise<void>;
 }) {
@@ -3285,11 +3302,10 @@ function ProfileEditor({
     <div className="confirmation-backdrop" role="dialog" aria-modal="true" aria-label="Upravit profil">
       <form className="confirmation-dialog profile-editor" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave(fullName); } finally { setSaving(false); } }}>
         <h2>Upravit profil</h2>
-        <label>Zobrazované jméno<input value={fullName} minLength={2} maxLength={100} required disabled={!editable} onChange={(event) => setFullName(event.target.value)} /></label>
+        <label>Zobrazované jméno<input value={fullName} minLength={2} maxLength={100} required onChange={(event) => setFullName(event.target.value)} /></label>
         <label>E-mail<input value={profile.email ?? ""} readOnly /></label>
         <label>Role<input value={roleLabel(accessRole(profile))} readOnly /></label>
-        {!editable && <p className="hint">Uložení profilu bude dostupné po aplikaci migrace 01600.</p>}
-        <div className="confirmation-actions"><button type="button" onClick={onCancel}>Zrušit</button><button className="primary" disabled={!editable || saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+        <div className="confirmation-actions"><button type="button" onClick={onCancel}>Zrušit</button><button className="primary" disabled={saving}>{saving ? "Ukládám…" : "Uložit profil"}</button></div>
       </form>
     </div>
   );

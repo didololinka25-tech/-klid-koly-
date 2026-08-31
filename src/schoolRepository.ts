@@ -150,8 +150,12 @@ export const schoolRepository = {
   },
   signOut: async () => { const { error } = await client().auth.signOut(); if (error) throw error },
   updateOwnProfileName: async (fullName: string) => {
-    const { data, error } = await client().rpc('update_own_profile_name', { new_full_name: fullName.trim() })
-    if (error) throw error
+    const cleanedName = fullName.trim()
+    if (cleanedName.length < 2 || cleanedName.length > 100) throw new Error('Zobrazované jméno musí mít 2 až 100 znaků.')
+    if (/[\u0000-\u001f\u007f]/.test(cleanedName)) throw new Error('Zobrazované jméno nesmí obsahovat nové řádky ani řídicí znaky.')
+    const { data, error } = await client().rpc('update_own_profile_name', { new_full_name: cleanedName })
+    if (missingFunction(error)) throw new Error('Ukládání profilu ještě není v databázi aktivní. Aplikujte migraci 02900.')
+    if (error) throw new Error(error.message || 'Profil se nepodařilo uložit.')
     return String(data)
   },
   profile: async (id: string): Promise<Profile | null> => {
