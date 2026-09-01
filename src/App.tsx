@@ -52,6 +52,7 @@ import {
   roomPresentationState,
   summarizeCleaningDay,
 } from "./cleaningPresentation";
+import { buildCalendarDaySummary, circledFloor, filterCalendarTasks, type CalendarDaySummary } from "./cleaningCalendar";
 
 type Section =
   | "Dnes"
@@ -3654,13 +3655,43 @@ function calendarContextForDate(tasks: Task[], records: CleaningDayRecord[], dat
   return resolveCleaningDay(date, []);
 }
 
-function floorPictogram(floor: string) {
-  const number = floor.match(/^[1-4]/)?.[0];
-  return number ? `${number}F` : (floor === "Schodiště" ? "SCH" : "•");
+function CalendarDayCell({ summary, month, selected, onSelect }: { summary: CalendarDaySummary; month: string; selected: boolean; onSelect: (date: string, outside: boolean) => void }) {
+  const outside = summary.date.slice(0, 7) !== month;
+  const visibleSections = summary.sections.filter((section) => !section.staircase && /^[1-4]$/.test(section.marker));
+  const hasStaircase = summary.sections.some((section) => section.staircase);
+  const aria = [
+    formatDate(summary.date),
+    ...summary.workplaces.map((workplace) => workplace.name),
+    ...summary.sections.map((section) => `${section.name}${section.rotating ? " – rotace" : ""}`),
+    ...summary.extraCategories.map((category) => category.label),
+    ...summary.extraordinary.map((title) => `Mimořádně: ${title}`),
+    ...summary.rescheduled.map((title) => `Přesunuto: ${title}`),
+  ].join(", ");
+  return <button
+    className={`calendar-day${outside ? " outside" : ""}${summary.isWeekend ? " weekend" : ""}${summary.isToday ? " today" : ""}${selected ? " selected" : ""}${summary.workplaces.length ? " has-work" : ""}${summary.workplaces.some((item) => item.name === "Školka") ? " kindergarten-day" : ""}`}
+    onClick={() => onSelect(summary.date, outside)}
+    aria-label={aria}
+  >
+    <strong>{Number(summary.date.slice(8, 10))}</strong>
+    {summary.workplaces.length > 0 && <span className="calendar-workplaces">{summary.workplaces.map((workplace) => <i key={workplace.name} title={workplace.name}>{workplace.icon}</i>)}</span>}
+    {visibleSections.length > 0 && <span className="calendar-sections">{visibleSections.map((section) => <i className={section.rotating ? "rotation" : ""} key={`${section.workplace}|${section.name}`}>{section.rotating ? circledFloor(section.marker) : section.marker}</i>)}</span>}
+    {(summary.extraordinary.length > 0 || summary.rescheduled.length > 0 || summary.cancelledExceptions.length > 0 || summary.movedTo || hasStaircase || summary.extraCategories.length > 0) && <span className="calendar-specials">
+      {summary.extraordinary.length > 0 && <i title="Mimořádný úklid">⚠</i>}
+      {summary.rescheduled.length > 0 && <i title="Přesunutý úklid">↪</i>}
+      {summary.cancelledExceptions.length > 0 && <i title="Zrušený úklid">×</i>}
+      {summary.movedTo && <i title={`Přesunuto na ${formatDate(summary.movedTo)}`}>↗</i>}
+      {hasStaircase && <i title="Schodiště">🪜</i>}
+      {summary.extraCategories.slice(0, 3).map((category) => <i key={category.key} title={category.label}>{category.icon}</i>)}
+    </span>}
+  </button>;
 }
 
-function CalendarDayDetail({ date, tasks, context }: { date: string; tasks: Task[]; context: CleaningDayContext }) {
-  const summary = summarizeCleaningDay(tasks.filter((task) => !isFinalCheckTask(task)));
+function CalendarLegend() {
+  return <details className="calendar-legend"><summary>ⓘ Legenda</summary><div><span>🏫 Škola</span><span>🌱 Školka</span><span>②/③ rotace</span><span>🪜 schody</span><span>🧺 praní</span><span>⚠ mimořádně</span><small>Další symboly označují práci navíc.</small></div></details>;
+}
+
+function CalendarDayDetail({ summary }: { summary: CalendarDaySummary }) {
+  const { date, tasks, context } = summary;
   const buildings = new Map<string, Map<string, Map<string, Task[]>>>();
   tasks.forEach((task) => {
     const floors = buildings.get(task.building) ?? new Map<string, Map<string, Task[]>>();
@@ -3671,14 +3702,19 @@ function CalendarDayDetail({ date, tasks, context }: { date: string; tasks: Task
   });
   return (
     <section className="calendar-day-detail">
-      <header><span><small>{context.kind === "extraordinary" ? "MIMOŘÁDNÝ ÚKLID" : context.kind === "rescheduled" ? "PŘESUNUTÝ ÚKLID" : "PLÁN DNE"}</small><b>{todayLabel(date)}</b></span><strong>{summary.reduce((sum, building) => sum + building.roomCount, 0)} místností</strong></header>
+      <header><small>{summary.extraordinary.length ? "MIMOŘÁDNÝ ÚKLID" : summary.rescheduled.length ? "PŘESUNUTÝ ÚKLID" : context.kind === "moved_away" ? "PŘESUNUTÝ TERMÍN" : "PLÁN DNE"}</small><h2>{todayLabel(date)}</h2></header>
       {context.note && <p>{context.note}</p>}
-      {summary.map((building) => <section className="calendar-day-summary" key={building.name}>
-        <h3>{building.name === "Školka" ? "🌱" : "🏫"} {building.name}</h3>
+      {summary.extraordinary.map((title) => <p className="calendar-extraordinary" key={title}><b>⚠ MIMOŘÁDNĚ</b><span>{title}</span></p>)}
+      {summary.rescheduled.map((title) => <p className="calendar-rescheduled" key={title}><b>↪ PŘESUNUTÝ ÚKLID</b><span>{title}</span></p>)}
+      {summary.cancelledExceptions.map((title) => <p className="calendar-cancelled" key={title}><b>× ZRUŠENÝ ÚKLID</b><span>{title}</span></p>)}
+      {summary.movedTo && <p className="calendar-rescheduled"><b>ÚKLID PŘESUNUT</b><span>Nový termín: {formatDate(summary.movedTo)}</span></p>}
+      {summary.workplaces.map((workplace) => <section className="calendar-day-summary" key={workplace.name}>
+        <h3>{workplace.icon} {workplace.name}</h3>
+        <b className="calendar-detail-label">DNES UKLÍZÍME</b>
         <div className="calendar-plan-lines">
-          {building.floors.map((floor) => <span key={floor.name}><b>{floor.kind === "standard" ? "STANDARD" : floor.kind === "rotation" ? "ROTACE" : "DALŠÍ"}</b><i>{floor.name}</i></span>)}
+          {workplace.sections.map((section) => <span key={section.name}><b>{section.rotating ? "ROTACE" : section.staircase ? "SAMOSTATNĚ" : ""}</b><i>{section.name}</i></span>)}
         </div>
-        <div className="calendar-extra-summary"><b>DNES NAVÍC</b>{building.extraTasks.length ? <span>{extraActivityTypes(building.extraTasks).map((type) => `${activityTypes[type]?.icon ?? "✓"} ${activityTypes[type]?.label ?? type}`).join(" · ")}</span> : <span>Bez dalších periodických prací.</span>}</div>
+        {workplace.extraCategories.length > 0 && <div className="calendar-extra-summary"><b>DNES NAVÍC</b><div>{workplace.extraCategories.map((category) => <span key={category.key}><i>{category.icon}</i>{category.label}</span>)}</div></div>}
       </section>)}
       {tasks.length > 0 && <details className="calendar-full-plan"><summary>Zobrazit celý plán dne</summary>
         {[...buildings.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([building, floors]) => <section className="calendar-detail-building" key={building}><h3>{building}</h3>
@@ -3689,7 +3725,7 @@ function CalendarDayDetail({ date, tasks, context }: { date: string; tasks: Task
           ))}
         </section>)}
       </details>}
-      {!tasks.length && <p className="hint">V tento den není naplánovaný úklid.</p>}
+      {!tasks.length && !summary.movedTo && !summary.extraordinary.length && <p className="hint">V tento den není naplánovaný úklid.</p>}
     </section>
   );
 }
@@ -3718,14 +3754,26 @@ function CleaningCalendar({
   const [month, setMonth] = useState(today.slice(0, 7));
   const [selectedDate, setSelectedDate] = useState(today);
   const [buildingFilter, setBuildingFilter] = useState("all");
-  const calendarTasks = buildingFilter === "all" ? tasks : tasks.filter((task) => task.buildingId === buildingFilter);
+  const planTasks = useMemo(() => tasks.filter((task) => !isFinalCheckTask(task)), [tasks]);
+  const visibleRecords = useMemo(
+    () => buildingFilter === "all" ? records : records.filter((record) => record.buildingId === buildingFilter),
+    [records, buildingFilter],
+  );
   const future = records.filter((item) => item.executionDate >= today).sort((a, b) => a.executionDate.localeCompare(b.executionDate));
-  const calendarDays = useMemo(() => monthGridDates(month).map((date) => {
-    const due = dueTasksForDate(calendarTasks, records, date);
-    return { date, tasks: due, context: calendarContextForDate(due, records, date) };
-  }), [month, records, calendarTasks]);
+  const resolvedCalendarDays = useMemo(() => monthGridDates(month).map((date) => ({
+    date,
+    tasks: dueTasksForDate(planTasks, records, date),
+  })), [month, records, planTasks]);
+  const calendarDays = useMemo(() => resolvedCalendarDays.map((item) => {
+    const visibleTasks = filterCalendarTasks(item.tasks, buildingFilter);
+    const context = calendarContextForDate(visibleTasks, visibleRecords, item.date);
+    return buildCalendarDaySummary({ date: item.date, today, tasks: visibleTasks, context, exceptions: visibleRecords });
+  }), [resolvedCalendarDays, buildingFilter, visibleRecords, today]);
   const selected = calendarDays.find((item) => item.date === selectedDate)
-    ?? (() => { const due = dueTasksForDate(calendarTasks, records, selectedDate); return { date: selectedDate, tasks: due, context: calendarContextForDate(due, records, selectedDate) }; })();
+    ?? (() => {
+      const due = filterCalendarTasks(dueTasksForDate(planTasks, records, selectedDate), buildingFilter);
+      return buildCalendarDaySummary({ date: selectedDate, today, tasks: due, context: calendarContextForDate(due, visibleRecords, selectedDate), exceptions: visibleRecords });
+    })();
   const moveMonth = (amount: number) => {
     const [year, monthNumber] = month.split("-").map(Number);
     const next = new Date(Date.UTC(year, monthNumber - 1 + amount, 1));
@@ -3733,6 +3781,7 @@ function CleaningCalendar({
     setMonth(key);
     setSelectedDate(`${key}-01`);
   };
+  const goToday = () => { setMonth(today.slice(0, 7)); setSelectedDate(today); };
   const monthLabel = new Intl.DateTimeFormat("cs-CZ", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`));
   return (
     <div className="cleaning-calendar">
@@ -3757,34 +3806,14 @@ function CleaningCalendar({
         />
       )}
       <section className="month-calendar" aria-label="Měsíční plán úklidu">
-        <header><button onClick={() => moveMonth(-1)} aria-label="Předchozí měsíc">‹</button><h2>{monthLabel}</h2><button onClick={() => moveMonth(1)} aria-label="Další měsíc">›</button></header>
+        <header className="calendar-month-nav"><button onClick={() => moveMonth(-1)} aria-label="Předchozí měsíc">‹</button><span><h2>{monthLabel}</h2><button className="calendar-today-button" onClick={goToday}>Dnes</button></span><button onClick={() => moveMonth(1)} aria-label="Další měsíc">›</button></header>
         <div className="calendar-weekdays">{weekdays.map((day) => <b key={day}>{day}</b>)}</div>
         <div className="calendar-grid">
-          {calendarDays.map((item) => {
-            const daySummary = summarizeCleaningDay(item.tasks.filter((task) => !isFinalCheckTask(task)));
-            const floors = daySummary.flatMap((building) => building.floors.map((floor) => ({ ...floor, key: `${building.name}|${floor.name}` })));
-            const activities = extraActivityTypes(item.tasks.filter((task) => !isFinalCheckTask(task)));
-            const dayBuildings = [...new Set(item.tasks.map((task) => task.building))];
-            return (
-              <button
-                key={item.date}
-                className={`calendar-day ${item.date.slice(0, 7) === month ? "" : "outside"} ${item.date === today ? "today" : ""} ${item.date === selectedDate ? "selected" : ""} ${item.tasks.length ? "has-work" : ""}`}
-                onClick={() => setSelectedDate(item.date)}
-                aria-label={`${formatDate(item.date)}, ${item.tasks.length} úkolů`}
-              >
-                <strong>{Number(item.date.slice(8, 10))}</strong>
-                <span className="building-pictograms">{dayBuildings.map((building) => <i key={building}>{building === "Školka" ? "MŠ" : "Š"}</i>)}</span>
-                <span className="floor-pictograms">{floors.slice(0, 4).map((floor) => <i className={floor.kind} key={floor.key}>{floor.kind === "rotation" ? "↻" : ""}{floorPictogram(floor.name)}</i>)}</span>
-                <span className="activity-pictograms">{activities.slice(0, 4).map((activity) => <i key={activity}>{activityTypes[activity]?.icon ?? "✓"}</i>)}</span>
-                {item.context.kind === "extraordinary" && <em>M</em>}
-                {item.context.kind === "rescheduled" && <em>P</em>}
-              </button>
-            );
-          })}
+          {calendarDays.map((item) => <CalendarDayCell key={item.date} summary={item} month={month} selected={item.date === selectedDate} onSelect={(date, outside) => { setSelectedDate(date); if (outside) setMonth(date.slice(0, 7)); }} />)}
         </div>
-        <div className="calendar-legend"><span><i>Š / MŠ</i> pracoviště</span><span><i>1F–4F</i> patro</span><span><i>↻</i> rotace</span><span><i>SCH</i> schodiště</span><span><i>ikona</i> práce navíc</span></div>
+        <CalendarLegend />
       </section>
-      <CalendarDayDetail date={selected.date} tasks={selected.tasks} context={selected.context} />
+      <CalendarDayDetail summary={selected} />
       <section className="calendar-list">
         <h2>Plánované výjimky</h2>
         {future.map((item) => (
