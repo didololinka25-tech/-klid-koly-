@@ -55,3 +55,15 @@ test('budoucí přepočet je auditovaný a přímý zápis do planneru ani audit
   assert.match(migration, /has_table_privilege\('authenticated','public\.cleaning_planner_occurrences','INSERT,UPDATE,DELETE'\)/)
   assert.match(migration, /has_table_privilege\('authenticated','public\.cleaning_planner_schedule_audit','INSERT,UPDATE,DELETE'\)/)
 })
+
+test('kapacita počítá weekly special, small a large společně a WC fronta má serverové pořadí', () => {
+  assert.match(migration, /case scheduled\.work_size when 'large' then 2 else 1 end/)
+  assert.match(migration, /load_units\+1<=least\(public\.school_worker_count_for_date\(candidate\),3\)/)
+  assert.match(migration, /load_units\+2<=least\(public\.school_worker_count_for_date\(candidate\),3\)/)
+  assert.match(migration, /shift\.load_units\+1>least\(shift\.worker_count,3\)[\s\S]*shift\.worker_count desc,shift\.load_units,shift\.day/)
+  assert.match(migration, /planner_priority integer/)
+  assert.match(migration, /task\.floor_sort\*10000\+task\.room_sort\*100\+task\.sort_order/)
+  assert.match(repository, /plannerPriority: dynamicSchoolRows\?\.get\(row\.id\)\?\.planner_priority/)
+  assert.match(app, /WC jsou otevřená fronta, ne povinnost dokončit všechna/)
+  assert.match(app, /task\.plannerPriority/)
+})

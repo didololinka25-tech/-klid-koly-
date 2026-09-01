@@ -140,11 +140,9 @@ function bestSchoolShiftInWeek(weekMonday: string, planning: WorkerPlanningData)
   return candidates.sort((a, b) => b.count - a.count || a.date.localeCompare(b.date))[0]?.date ?? null
 }
 
-/** Stabilní pořadí je odvozené z týdenních výskytů 4. patra a UUID, nikdy ze jména ani pevného pátku. */
-export function cleaningRotationForDate(date: string, planning: WorkerPlanningData, rotationKey = 'school-fourth-floor'): RotationForDate | null {
+function rotationForOccurrence(date: string, planning: WorkerPlanningData, rotationKey: string): RotationForDate | null {
   const definition = (planning.rotationDefinitions ?? []).find((item) => item.rotationKey === rotationKey && item.active)
   if (!definition || date < definition.anchorDate) return null
-  if (bestSchoolShiftInWeek(monday(date), planning) !== date) return null
   let occurrenceIndex = 0
   for (let week = monday(definition.anchorDate); week < monday(date); week = addDays(week, 7)) {
     if (bestSchoolShiftInWeek(week, planning)) occurrenceIndex += 1
@@ -154,6 +152,19 @@ export function cleaningRotationForDate(date: string, planning: WorkerPlanningDa
     .filter((item) => item.active && item.rotationKey === rotationKey && item.slotIndex === slotIndex && item.validFrom <= date && (!item.validTo || item.validTo >= date))
     .sort((a, b) => b.validFrom.localeCompare(a.validFrom))[0]
   return { definition, slotIndex, slotLabel: String.fromCharCode(65 + slotIndex), assignment }
+}
+
+/** Stabilní pořadí je odvozené z týdenních výskytů 4. patra a UUID, nikdy ze jména ani pevného pátku. */
+export function cleaningRotationForDate(date: string, planning: WorkerPlanningData, rotationKey = 'school-fourth-floor'): RotationForDate | null {
+  const definition = (planning.rotationDefinitions ?? []).find((item) => item.rotationKey === rotationKey && item.active)
+  if (!definition || date < definition.anchorDate) return null
+  if (bestSchoolShiftInWeek(monday(date), planning) !== date) return null
+  return rotationForOccurrence(date, planning, rotationKey)
+}
+
+/** Pozice skutečně naplánovaného výskytu; konkrétní den už vybral kapacitní planner. */
+export function cleaningRotationForOccurrence(date: string, planning: WorkerPlanningData, rotationKey = 'school-fourth-floor') {
+  return rotationForOccurrence(date, planning, rotationKey)
 }
 
 export function assignmentOverlapsMonth(assignment: WorkerWorkAssignment, month: string) {

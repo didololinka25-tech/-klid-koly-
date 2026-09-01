@@ -35,6 +35,7 @@ test('1 pracovník dostane 1F podlahy a pokračující WC frontu, ale žádný l
   const plan = buildDynamicSchoolPlan({ startDate: '2026-09-07', endDate: '2026-09-07', tasks: baseTasks, planning: planning([assignment('solo', [1])]) }).get('2026-09-07')
   assert.ok(plan)
   assert.deepEqual(plan.tasks.filter((item) => item.reason === 'wc-queue').map((item) => item.task.id), ['wc1', 'wc2', 'wc3'])
+  assert.equal(plan.tasks.filter((item) => item.reason === 'wc-queue').every((item) => item.size === 'routine'), true)
   assert.ok(plan.tasks.some((item) => item.task.id === '1-vacuum'))
   assert.equal(plan.tasks.some((item) => item.size === 'large'), false)
 })
@@ -77,6 +78,7 @@ test('schodiště a 4. patro se zvolí jednou týdně na nejlepší směně i be
   assert.equal([...plan.values()].filter((day) => day.tasks.some((item) => item.task.floor === 'Schodiště')).length, 1)
   assert.equal([...plan.values()].filter((day) => day.tasks.some((item) => item.task.floor === '4. patro')).length, 1)
   assert.ok(plan.get('2026-09-07').tasks.some((item) => item.task.floor === 'Schodiště'), 'při shodné kapacitě vyhraje deterministicky první směna')
+  assert.ok(plan.get('2026-09-09').tasks.some((item) => item.task.floor === '4. patro'), 'druhá týdenní práce se při stejné kapacitě rozloží na další směnu')
 
   const onlyFridayTwo = planning([assignment('a', [1, 3, 5]), assignment('b', [5])])
   const sparse = buildDynamicSchoolPlan({ startDate: '2026-09-07', endDate: '2026-09-13', tasks: baseTasks, planning: onlyFridayTwo })
@@ -85,6 +87,32 @@ test('schodiště a 4. patro se zvolí jednou týdně na nejlepší směně i be
   const deterministicThree = planning([assignment('a', [1, 3]), assignment('b', [1, 3]), assignment('c', [1, 3])])
   const best = buildDynamicSchoolPlan({ startDate: '2026-09-07', endDate: '2026-09-13', tasks: baseTasks, planning: deterministicThree })
   assert.ok(best.get('2026-09-07').tasks.some((item) => item.task.floor === 'Schodiště'), 'při dvou stejně silných směnách rozhodne dřívější datum')
+})
+
+test('dvě dvoučlenné směny rozloží schody, 4. patro a small extra bez nahromadění', () => {
+  const data = planning([assignment('a', [1, 3]), assignment('b', [1, 3])])
+  const plan = buildDynamicSchoolPlan({ startDate: '2026-09-07', endDate: '2026-09-13', tasks: baseTasks, planning: data })
+  const mondayExtras = plan.get('2026-09-07').tasks.filter((item) => item.size !== 'routine')
+  const wednesdayExtras = plan.get('2026-09-09').tasks.filter((item) => item.size !== 'routine')
+  assert.ok(mondayExtras.length > 0 && wednesdayExtras.length > 0)
+  assert.equal(mondayExtras.some((item) => item.task.floor === 'Schodiště') && mondayExtras.some((item) => item.task.floor === '4. patro'), false)
+  assert.equal(wednesdayExtras.some((item) => item.task.floor === 'Schodiště') && wednesdayExtras.some((item) => item.task.floor === '4. patro'), false)
+})
+
+test('jediná dvoučlenná směna zachová schody i 4. patro a small extra nechá čekat', () => {
+  const data = planning([assignment('a', [5]), assignment('b', [5])])
+  const friday = buildDynamicSchoolPlan({ startDate: '2026-09-07', endDate: '2026-09-13', tasks: baseTasks, planning: data }).get('2026-09-11')
+  assert.ok(friday.tasks.some((item) => item.task.floor === 'Schodiště'))
+  assert.ok(friday.tasks.some((item) => item.task.floor === '4. patro'))
+  assert.equal(friday.tasks.some((item) => item.size === 'small'), false)
+})
+
+test('více tříčlenných směn rozloží týdenní práce a velkou práci deterministicky', () => {
+  const data = planning([assignment('a', [1, 3, 5]), assignment('b', [1, 3, 5]), assignment('c', [1, 3, 5])])
+  const plan = buildDynamicSchoolPlan({ startDate: '2026-09-07', endDate: '2026-09-13', tasks: baseTasks, planning: data })
+  assert.ok(plan.get('2026-09-07').tasks.some((item) => item.task.floor === 'Schodiště'))
+  assert.ok(plan.get('2026-09-09').tasks.some((item) => item.task.floor === '4. patro'))
+  assert.ok(plan.get('2026-09-11').tasks.some((item) => item.task.id === 'windows'))
 })
 
 test('splatná velká práce bez kapacity nezmizí a přejde na další vhodnou směnu', () => {
@@ -98,6 +126,14 @@ test('splatná velká práce bez kapacity nezmizí a přejde na další vhodnou 
   const carried = [...october.values()].flatMap((day) => day.tasks).find((item) => item.task.id === 'windows')
   assert.ok(carried)
   assert.equal(carried.reason, 'overdue')
+})
+
+test('overdue práce má přednost před novější prací stejné kapacitní kategorie', () => {
+  const newer = task('new-window', '2. patro', 'Chodba', 'windows', { frequency: 'měsíčně', periodMonths: 3, periodWeek: 1, periodAnchorMonth: '2026-10-01' })
+  const data = planning([assignment('a', [1]), assignment('b', [1]), assignment('c', [1])])
+  const day = buildDynamicSchoolPlan({ startDate: '2026-10-05', endDate: '2026-10-05', tasks: [baseTasks.find((item) => item.id === 'windows'), newer], planning: data }).get('2026-10-05')
+  assert.ok(day.tasks.some((item) => item.task.id === 'windows' && item.reason === 'overdue'))
+  assert.equal(day.tasks.some((item) => item.task.id === 'new-window'), false)
 })
 
 test('přejmenování pracovníka nemění plán a Školka zůstává mimo školní planner', () => {

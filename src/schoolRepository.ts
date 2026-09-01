@@ -282,6 +282,7 @@ export const schoolRepository = {
         completedAt: completionByTask.get(row.id)?.completed_at ?? null,
         plannerReason: dynamicSchoolRows?.get(row.id)?.plan_reason ?? null,
         plannerAssignedWorkerId: dynamicSchoolRows?.get(row.id)?.assigned_worker_id ?? null,
+        plannerPriority: dynamicSchoolRows?.get(row.id)?.planner_priority ?? null,
       }
       mapped.bulkCompletable = typeof row.bulk_completable === 'boolean' ? row.bulk_completable : inferredBulkCompletable(mapped)
       return mapped

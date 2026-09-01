@@ -920,7 +920,9 @@ export default function App() {
   const visible = section === "Dnes"
     ? tasks.filter((task) => task.active && task.dueToday)
     : tasks;
-  const visibleDone = visible.filter((task) => task.done).length;
+  const requiredVisible = visible.filter((task) => task.plannerReason !== "wc-queue");
+  const requiredVisibleDone = requiredVisible.filter((task) => task.done).length;
+  const optionalQueueRemaining = visible.some((task) => task.plannerReason === "wc-queue" && !task.done);
   const todayExtras = visible.filter((task) => !isFinalCheckTask(task) && isExtraCleaningTask(task));
   const todayExtrasDone = todayExtras.filter((task) => task.done).length;
   const todayBuildingIds = [...new Set(visible.map((task) => task.buildingId).filter((id): id is string => Boolean(id)))];
@@ -1004,7 +1006,7 @@ export default function App() {
             <ArrivalReminders entries={manual.entries.filter((entry) => entry.entryType === "arrival" && entry.active)} />
           )}
           {visible.length > 0 && <TodayExtras tasks={todayExtras} done={todayExtrasDone} onComplete={complete} pendingTaskIds={pendingTaskIds} />}
-          {visible.some((task) => task.plannerReason === "wc-queue") && <p className="today-planner-note"><b>WC jsou dnes pokračující fronta.</b> Začněte od nejnižšího patra a označte pouze to, co se skutečně stihlo. Planner neurčuje umělý pevný počet WC.</p>}
+          {visible.some((task) => task.plannerReason === "wc-queue") && <p className="today-planner-note"><b>WC jsou otevřená fronta, ne povinnost dokončit všechna.</b> Postupujte od 1. patra nahoru a označte pouze skutečně uklizená WC. Planner neurčuje umělý pevný počet.</p>}
           {accessRole(profile) === "visitor" && (
             <p className="readonly-note">Návštěvnický přístup je pouze pro čtení.</p>
           )}
@@ -1023,7 +1025,7 @@ export default function App() {
             pendingTaskIds={pendingTaskIds}
             guides={manual.entries.filter((entry) => entry.entryType === "guide" && entry.active)}
           />
-          {visible.length > 0 && visibleDone === visible.length && <p className="today-all-done">Všechno hotovo – můžete odejít.</p>}
+          {requiredVisible.length > 0 && requiredVisibleDone === requiredVisible.length && <p className="today-all-done">{optionalQueueRemaining ? "Povinná práce je hotová – můžete odejít. WC fronta zůstává podle kapacity." : "Všechno hotovo – můžete odejít."}</p>}
           </>}
         </>
       )}
@@ -2108,6 +2110,8 @@ function FloorGroup({
   tasks.forEach((task) =>
     rooms.set(task.room, [...(rooms.get(task.room) ?? []), task]),
   );
+  const requiredRooms = [...rooms.values()].filter((roomTasks) => roomTasks.some((task) => task.plannerReason !== "wc-queue"));
+  const completedRequiredRooms = requiredRooms.filter(roomIsComplete).length;
   return (
     <section className="floor-group">
       <button
@@ -2118,15 +2122,19 @@ function FloorGroup({
         <span>
           <b>{label}</b>
           <small>
-            {[...rooms.values()].filter(roomIsComplete).length} / {rooms.size} místností
+            {requiredRooms.length > 0 ? `${completedRequiredRooms} / ${requiredRooms.length} povinných místností` : "Otevřená WC fronta"}
           </small>
         </span>
         <i>{open ? "⌃" : "⌄"}</i>
-        <ProgressBar value={[...rooms.values()].filter(roomIsComplete).length} total={rooms.size} label={`Dokončené místnosti: ${label}`} />
+        <ProgressBar value={completedRequiredRooms} total={requiredRooms.length} label={`Dokončené povinné místnosti: ${label}`} />
       </button>
       {open && (
         <div className="room-list">
-          {[...rooms.entries()].map(([room, roomTasks]) => (
+          {[...rooms.entries()].sort(([, first], [, second]) => {
+            const firstPriority = Math.min(...first.map((task) => task.plannerPriority ?? Number.POSITIVE_INFINITY));
+            const secondPriority = Math.min(...second.map((task) => task.plannerPriority ?? Number.POSITIVE_INFINITY));
+            return firstPriority - secondPriority;
+          }).map(([room, roomTasks]) => (
             <RoomActivityGroup
               key={room}
               room={room}
@@ -2171,6 +2179,7 @@ function RoomActivityGroup({
   const allRoutineDone = routine.length > 0 && completed === routine.length;
   const allRequiredDone = roomIsComplete(tasks);
   const presentationState = roomPresentationState(tasks, routine);
+  const queueOnly = tasks.length > 0 && tasks.every((task) => task.plannerReason === "wc-queue");
   const completion = allRoutineDone ? routine.find((task) => task.completedBy) : undefined;
   const completedBy = bulkAction?.workerName ?? completion?.completedBy;
   const completedAt = bulkAction?.createdAt ?? completion?.completedAt;
@@ -2180,6 +2189,7 @@ function RoomActivityGroup({
         <h3>{allRequiredDone && <span aria-hidden="true">✓ </span>}{room}</h3>
         {presentationState === "done" && <b className="room-status">Hotovo</b>}
         {presentationState === "partial" && <b className="room-status">Část hotová</b>}
+        {queueOnly && presentationState === "pending" && <b className="room-status">Podle kapacity</b>}
         {completedBy && <small className="room-author">{completedBy}{completedAt ? ` · ${new Date(completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
       </header>
       <div className="room-primary-action">
@@ -2227,7 +2237,7 @@ function DepartureChecks({ tasks, onComplete, pendingTaskIds, guides }: {
   guides: ManualEntry[];
 }) {
   const finalChecks = tasks.filter(isFinalCheckTask);
-  const workTasks = tasks.filter((task) => !isFinalCheckTask(task));
+  const workTasks = tasks.filter((task) => !isFinalCheckTask(task) && task.plannerReason !== "wc-queue");
   if (!finalChecks.length) return null;
   return <details className="shared-tasks final-checks" open={workTasks.length > 0 && workTasks.every((task) => task.done)}>
     <summary className="section-heading">

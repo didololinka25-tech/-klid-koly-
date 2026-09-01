@@ -1,5 +1,5 @@
 import type { Task } from './types.ts'
-import { cleaningRotationForDate, workersForDate, type PlannedWorker, type WorkerPlanningData } from './workerPlanning.ts'
+import { cleaningRotationForOccurrence, workersForDate, type PlannedWorker, type WorkerPlanningData } from './workerPlanning.ts'
 
 export type PlannerSize = 'routine' | 'small' | 'large' | 'weekly-special'
 export type PlannerReason = 'routine' | 'wc-queue' | 'weekly' | 'periodic' | 'overdue'
@@ -23,6 +23,8 @@ export type DynamicCleaningDay = {
   rotatingFloor?: '2. patro' | '3. patro'
   fourthFloorWorkerId?: string | null
 }
+
+type DayLoad = { weekly: number; small: number; large: number }
 
 type PlannerInput = {
   startDate: string
@@ -119,14 +121,30 @@ function periodFor(task: Task, reference: string): { from: string; to: string } 
   }
   if (!task.periodMonths || !task.periodAnchorMonth) return null
   const currentMonth = monthStart(reference)
+  if (currentMonth < monthStart(task.periodAnchorMonth)) return null
   if (((monthsBetween(monthStart(task.periodAnchorMonth), currentMonth) % task.periodMonths) + task.periodMonths) % task.periodMonths !== 0) return null
   return { from: currentMonth, to: monthEnd(reference) }
 }
 
-function eligibleShiftDates(from: string, to: string, planning: WorkerPlanningData, schoolName: string, minimum: number) {
+function loadUnits(load?: DayLoad) {
+  return load ? load.weekly + load.small + 2 * load.large : 0
+}
+
+function reserve(loads: Map<string, DayLoad>, date: string, size: 'weekly' | 'small' | 'large') {
+  const load = loads.get(date) ?? { weekly: 0, small: 0, large: 0 }
+  load[size] += 1
+  loads.set(date, load)
+}
+
+function eligibleShiftDates(from: string, to: string, planning: WorkerPlanningData, schoolName: string, minimum: number, loads?: ReadonlyMap<string, DayLoad>, keepWithinCapacity = false) {
   return datesBetween(from, to).map((date) => ({ date, count: schoolWorkers(date, planning, schoolName).length }))
     .filter((item) => item.count >= minimum)
-    .sort((a, b) => b.count - a.count || a.date.localeCompare(b.date))
+    .sort((a, b) => {
+      const overloadA = keepWithinCapacity && loadUnits(loads?.get(a.date)) + 1 > Math.min(a.count, 3)
+      const overloadB = keepWithinCapacity && loadUnits(loads?.get(b.date)) + 1 > Math.min(b.count, 3)
+      return Number(overloadA) - Number(overloadB) || b.count - a.count
+        || loadUnits(loads?.get(a.date)) - loadUnits(loads?.get(b.date)) || a.date.localeCompare(b.date)
+    })
 }
 
 function eligibleShiftSequence(until: string, planning: WorkerPlanningData, schoolName: string, minimum: number) {
@@ -147,27 +165,22 @@ export function buildDynamicSchoolPlan({ startDate, endDate, tasks, planning, co
   const schoolTasks = tasks.filter((task) => activeSchoolTask(task, schoolName))
   const days = datesBetween(startDate, endDate)
   const result = new Map<string, DynamicCleaningDay>()
-  const weeklyBest = new Map<string, string>()
-
-  for (const date of days) {
-    const week = monday(date)
-    if (!weeklyBest.has(week)) {
-      const candidates = eligibleShiftDates(week, addDays(week, 6), planning, schoolName, 2)
-      if (candidates[0]) weeklyBest.set(week, candidates[0].date)
-    }
-  }
-
-  const usedGroups = new Map<string, Set<string>>()
+  const loads = new Map<string, DayLoad>()
   const selectedGroupDates = new Map<string, string>()
+  const weeklyGroups = [
+    { key: 'stairs', present: schoolTasks.some((task) => task.floor === 'Schodiště' && task.activityType !== 'windows') },
+    { key: 'fourth-floor', present: schoolTasks.some((task) => task.floor === '4. patro' && task.frequency === 'týdně') },
+  ].filter((group) => group.present)
   const lookbackStart = addDays(startDate, -124)
   const referenceDates = datesBetween(lookbackStart, endDate)
-  const groupCandidates = new Map<string, { tasks: Task[]; size: PlannerSize; dueFrom: string; dueTo: string }>()
+  const groupCandidates = new Map<string, { tasks: Task[]; size: 'small' | 'large'; dueFrom: string; dueTo: string }>()
   for (const reference of referenceDates) {
     for (const task of schoolTasks) {
       const size = extraSize(task)
-      if (!size || size === 'weekly-special') continue
+      if (size !== 'small' && size !== 'large') continue
       const period = periodFor(task, reference)
       if (!period || period.from !== (task.frequency === 'týdně' && !task.periodMonths ? monday(reference) : monthStart(reference))) continue
+      if (task.frequency === 'týdně' && !task.periodMonths && period.from < monday(startDate)) continue
       if (isCompleted(task.id, period.from, period.to, completedDatesByTask)) continue
       const key = `${extraGroup(task)}|${period.from}`
       const existing = groupCandidates.get(key)
@@ -177,23 +190,39 @@ export function buildDynamicSchoolPlan({ startDate, endDate, tasks, planning, co
     }
   }
 
-  for (const [groupKey, group] of [...groupCandidates].sort((a, b) => a[1].dueFrom.localeCompare(b[1].dueFrom)
-    || Number(b[1].size === 'large') - Number(a[1].size === 'large') || a[0].localeCompare(b[0]))) {
-    const earliest = group.dueFrom < startDate ? startDate : group.dueFrom
-    const candidates = datesBetween(earliest, endDate).filter((date) => {
-      const count = schoolWorkers(date, planning, schoolName).length
-      if (group.size === 'large') return count >= 3 && (usedGroups.get(date)?.size ?? 0) === 0
-      if (count < 2) return false
-      const used = usedGroups.get(date) ?? new Set<string>()
-      return ![...used].some((key) => key.startsWith('large|')) && used.size < (count >= 3 ? 2 : 1)
-    })
-    const scheduled = candidates[0]
-    if (!scheduled) continue
-    selectedGroupDates.set(groupKey, scheduled)
-    const used = usedGroups.get(scheduled) ?? new Set<string>()
-    used.add(`${group.size}|${groupKey}`)
-    usedGroups.set(scheduled, used)
+  const sortedGroups = [...groupCandidates].sort((a, b) => a[1].dueFrom.localeCompare(b[1].dueFrom)
+    || Number(b[1].size === 'large') - Number(a[1].size === 'large') || a[0].localeCompare(b[0]))
+  const scheduleGroups = (groups: typeof sortedGroups) => {
+    for (const [groupKey, group] of groups) {
+      const earliest = group.dueFrom < startDate ? startDate : group.dueFrom
+      const candidates = datesBetween(earliest, endDate).filter((date) => {
+        const count = schoolWorkers(date, planning, schoolName).length
+        const load = loads.get(date) ?? { weekly: 0, small: 0, large: 0 }
+        const capacity = Math.min(count, 3)
+        if (group.size === 'large') return count >= 3 && load.small === 0 && load.large === 0 && loadUnits(load) + 2 <= capacity
+        if (count < 2) return false
+        return load.large === 0 && load.small < (count >= 3 ? 2 : 1) && loadUnits(load) + 1 <= capacity
+      }).sort((a, b) => {
+        const countA = schoolWorkers(a, planning, schoolName).length
+        const countB = schoolWorkers(b, planning, schoolName).length
+        return countB - countA || loadUnits(loads.get(a)) - loadUnits(loads.get(b)) || a.localeCompare(b)
+      })
+      const scheduled = candidates[0]
+      if (!scheduled) continue
+      selectedGroupDates.set(groupKey, scheduled)
+      reserve(loads, scheduled, group.size)
+    }
   }
+  scheduleGroups(sortedGroups.filter(([, group]) => group.dueTo < startDate))
+  for (const week of [...new Set(days.map(monday))]) {
+    for (const group of weeklyGroups) {
+      const candidates = eligibleShiftDates(week, addDays(week, 6), planning, schoolName, 2, loads, true)
+      if (!candidates[0]) continue
+      selectedGroupDates.set(`${group.key}|${week}`, candidates[0].date)
+      reserve(loads, candidates[0].date, 'weekly')
+    }
+  }
+  scheduleGroups(sortedGroups.filter(([, group]) => group.dueTo >= startDate))
 
   for (const date of days) {
     const workers = schoolWorkers(date, planning, schoolName)
@@ -219,16 +248,19 @@ export function buildDynamicSchoolPlan({ startDate, endDate, tasks, planning, co
 
     const week = monday(date)
     let fourthWorkerId: string | null = null
-    if (weeklyBest.get(week) === date) {
-      const period = { from: week, to: addDays(week, 6) }
+    const period = { from: week, to: addDays(week, 6) }
+    if (selectedGroupDates.get(`stairs|${week}`) === date) {
       schoolTasks.filter((task) => task.floor === 'Schodiště' && task.activityType !== 'windows').forEach((task) => add(task, 'weekly', 'weekly-special', period.from, period.to, `stairs|${week}`))
-      fourthWorkerId = cleaningRotationForDate(date, planning)?.assignment?.workerId ?? null
+    }
+    if (selectedGroupDates.get(`fourth-floor|${week}`) === date) {
+      fourthWorkerId = cleaningRotationForOccurrence(date, planning)?.assignment?.workerId ?? null
       schoolTasks.filter((task) => task.floor === '4. patro' && task.frequency === 'týdně').forEach((task) => add(task, 'weekly', 'weekly-special', period.from, period.to, `fourth-floor|${week}`, fourthWorkerId))
     }
 
     for (const [groupKey, scheduled] of selectedGroupDates) {
       if (scheduled !== date) continue
-      const group = groupCandidates.get(groupKey)!
+      const group = groupCandidates.get(groupKey)
+      if (!group) continue
       group.tasks.forEach((task) => add(task, group.dueTo < date ? 'overdue' : task.frequency === 'týdně' ? 'weekly' : 'periodic', group.size, group.dueFrom, group.dueTo, groupKey))
     }
     result.set(date, { date, workers, workerCount: count, tasks: chosen, rotatingFloor: floor, fourthFloorWorkerId: fourthWorkerId })

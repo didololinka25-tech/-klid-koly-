@@ -174,12 +174,13 @@ $$;
 
 create or replace function public.refresh_dynamic_school_cleaning_plan(target_from date,target_to date) returns void
 language plpgsql security definer set search_path=public as $$
-declare month_cursor date; week_cursor date; group_row record; candidate date; used_count integer;
+declare month_cursor date; week_cursor date; group_row record; candidate date;
+  weekly_count integer; small_count integer; large_count integer; load_units integer;
 begin
   if not public.can_view_school_data() then raise exception 'Nemáte oprávnění zobrazit plán.'; end if;
   if target_from is null or target_to is null or target_to<target_from or target_to-target_from>100 then raise exception 'Neplatný interval planneru.'; end if;
   perform pg_advisory_xact_lock(3300,1);
-  for week_cursor in select generate_series(date_trunc('week',target_from-interval '35 days')::date,date_trunc('week',target_to)::date,interval '7 days')::date loop
+  for week_cursor in select generate_series(date_trunc('week',target_from)::date,date_trunc('week',target_to)::date,interval '7 days')::date loop
     insert into public.cleaning_planner_occurrences(task_id,due_from,due_to,planner_group,work_size)
     select task.id,week_cursor,week_cursor+6,case when floor.name='Schodiště' then 'stairs|'||week_cursor when floor.name='4. patro' then 'fourth|'||week_cursor else 'small|'||task.activity_type||'|'||floor.id||'|'||week_cursor end,
       case when floor.name in ('Schodiště','4. patro') then 'weekly-special' else 'small' end
@@ -195,6 +196,7 @@ begin
     from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.floors floor on floor.id=room.floor_id join public.buildings building on building.id=room.building_id
     where building.name='Škola' and task.active and room.active and task.plan_key like 'v2026|%' and task.period_months is not null
       and task.activity_type in ('windows','deep_clean','doors','tiles','surfaces')
+      and month_cursor>=date_trunc('month',task.period_anchor_month)::date
       and mod((extract(year from month_cursor)::int-extract(year from task.period_anchor_month)::int)*12+extract(month from month_cursor)::int-extract(month from task.period_anchor_month)::int,task.period_months)=0
     on conflict(task_id,due_from) do nothing;
   end loop;
@@ -203,18 +205,33 @@ begin
   for group_row in select planner_group,due_from,min(due_to) due_to,work_size,min(id) stable_id from public.cleaning_planner_occurrences o
     where o.active and o.scheduled_for is null and o.due_from<=target_to
       and not exists(select 1 from public.cleaning_completions c where c.task_id=o.task_id and c.completed and c.completion_date between o.due_from and greatest(o.due_to,target_from-1))
-    group by planner_group,due_from,work_size order by due_from,case work_size when 'weekly-special' then 0 when 'large' then 1 else 2 end,stable_id
+    group by planner_group,due_from,work_size
+    order by (min(due_to)<target_from)::integer desc,due_from,case work_size when 'weekly-special' then 0 when 'large' then 1 else 2 end,stable_id
   loop
     candidate:=null;
-    for candidate in select day::date from generate_series(greatest(group_row.due_from,target_from),least(target_from+100,greatest(target_to,group_row.due_to)),interval '1 day') day
-      where public.school_worker_count_for_date(day::date)>=case when group_row.work_size='large' then 3 else 2 end
-      order by case when group_row.work_size='weekly-special' then (day::date=public.best_school_shift_for_week(day::date))::int else 0 end desc,
-        public.school_worker_count_for_date(day::date) desc,(group_row.due_to<day::date)::int desc,day::date
+    for candidate in
+      select shift.day from (
+        select day::date day,public.school_worker_count_for_date(day::date) worker_count,
+          coalesce((select sum(case scheduled.work_size when 'large' then 2 else 1 end)
+            from (select distinct used.planner_group,used.work_size from public.cleaning_planner_occurrences used
+              where used.active and used.scheduled_for=day::date) scheduled),0)::integer load_units
+        from generate_series(greatest(group_row.due_from,target_from),least(target_from+100,greatest(target_to,group_row.due_to)),interval '1 day') day
+      ) shift
+      where shift.worker_count>=case when group_row.work_size='large' then 3 else 2 end
+      order by case when group_row.work_size='weekly-special' then (shift.load_units+1>least(shift.worker_count,3))::integer else 0 end,
+        shift.worker_count desc,shift.load_units,shift.day
     loop
-      select count(distinct planner_group) into used_count from public.cleaning_planner_occurrences used where used.active and used.scheduled_for=candidate and used.work_size in ('small','large');
-      if group_row.work_size='weekly-special' or (group_row.work_size='large' and used_count=0)
-        or (group_row.work_size='small' and used_count<case when public.school_worker_count_for_date(candidate)>=3 then 2 else 1 end
-          and not exists(select 1 from public.cleaning_planner_occurrences used where used.active and used.scheduled_for=candidate and used.work_size='large')) then exit; end if;
+      select count(*) filter(where scheduled.work_size='weekly-special'),count(*) filter(where scheduled.work_size='small'),
+        count(*) filter(where scheduled.work_size='large'),coalesce(sum(case scheduled.work_size when 'large' then 2 else 1 end),0)
+      into weekly_count,small_count,large_count,load_units
+      from (select distinct used.planner_group,used.work_size from public.cleaning_planner_occurrences used
+        where used.active and used.scheduled_for=candidate) scheduled;
+      if group_row.work_size='weekly-special'
+        or (group_row.work_size='large' and large_count=0 and small_count=0
+          and load_units+2<=least(public.school_worker_count_for_date(candidate),3))
+        or (group_row.work_size='small' and large_count=0
+          and small_count<case when public.school_worker_count_for_date(candidate)>=3 then 2 else 1 end
+          and load_units+1<=least(public.school_worker_count_for_date(candidate),3)) then exit; end if;
       candidate:=null;
     end loop;
     if candidate is not null then update public.cleaning_planner_occurrences set scheduled_for=candidate,updated_at=now()
@@ -226,6 +243,20 @@ begin
       and slot.active and slot.valid_from<=occurrence.scheduled_for and (slot.valid_to is null or slot.valid_to>=occurrence.scheduled_for)
     order by slot.valid_from desc limit 1),updated_at=now()
   where occurrence.active and occurrence.planner_group like 'fourth|%' and occurrence.scheduled_for between target_from and target_to;
+end $$;
+
+create or replace function public.get_dynamic_school_cleaning_plan(target_from date,target_to date)
+returns table(task_id uuid,scheduled_date date,plan_reason text,due_from date,due_to date,assigned_worker_id uuid,planner_priority integer)
+language plpgsql security definer set search_path=public as $$
+begin
+  perform public.refresh_dynamic_school_cleaning_plan(target_from,target_to);
+  return query with dates as (select day::date plan_date,public.school_worker_count_for_date(day::date) worker_count from generate_series(target_from,target_to,interval '1 day') day),
+  school_tasks as (select task.*,room.name room_name,room.sort_order room_sort,floor.name floor_name,floor.sort_order floor_sort from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.floors floor on floor.id=room.floor_id join public.buildings building on building.id=room.building_id where task.active and room.active and task.plan_key like 'v2026|%' and building.name='Škola'),
+  routine as (select task.id,dates.plan_date,case when dates.worker_count=1 and task.room_name like 'WC %' then 'wc-queue' else 'routine' end reason,
+    case when dates.worker_count=1 and task.room_name like 'WC %' then task.floor_sort*10000+task.room_sort*100+task.sort_order else null end priority
+    from dates join school_tasks task on dates.worker_count>0 and ((task.floor_name='1. patro' and task.activity_type in ('vacuum','mop')) or (task.room_name like 'WC %' and task.activity_type not in ('windows','doors','tiles','tables','surfaces','deep_clean','laundry')) or (dates.worker_count=2 and task.floor_name=public.school_rotating_floor_for_date(dates.plan_date) and task.activity_type in ('vacuum','mop')) or (dates.worker_count>=3 and task.floor_name in ('2. patro','3. patro') and task.activity_type in ('vacuum','mop')))),
+  planned as (select o.task_id,o.scheduled_for,case when o.due_to<o.scheduled_for then 'overdue' else o.work_size end,o.due_from,o.due_to,o.assigned_worker_id,null::integer from public.cleaning_planner_occurrences o where o.active and o.scheduled_for between target_from and target_to)
+  select routine.id,routine.plan_date,routine.reason,routine.plan_date,routine.plan_date,null::uuid,routine.priority from routine union all select * from planned;
 end $$;
 
 -- Completion autorizace používá stejný serverový planner. testCleaningDay zůstává
@@ -264,18 +295,6 @@ returns boolean language sql security definer set search_path=public volatile as
       )
     );
 $$;
-
-create or replace function public.get_dynamic_school_cleaning_plan(target_from date,target_to date)
-returns table(task_id uuid,scheduled_date date,plan_reason text,due_from date,due_to date,assigned_worker_id uuid)
-language plpgsql security definer set search_path=public as $$
-begin
-  perform public.refresh_dynamic_school_cleaning_plan(target_from,target_to);
-  return query with dates as (select day::date plan_date,public.school_worker_count_for_date(day::date) worker_count from generate_series(target_from,target_to,interval '1 day') day),
-  school_tasks as (select task.*,room.name room_name,floor.name floor_name from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.floors floor on floor.id=room.floor_id join public.buildings building on building.id=room.building_id where task.active and room.active and task.plan_key like 'v2026|%' and building.name='Škola'),
-  routine as (select task.id,dates.plan_date,case when dates.worker_count=1 and task.room_name like 'WC %' then 'wc-queue' else 'routine' end reason from dates join school_tasks task on dates.worker_count>0 and ((task.floor_name='1. patro' and task.activity_type in ('vacuum','mop')) or (task.room_name like 'WC %' and task.activity_type not in ('windows','doors','tiles','tables','surfaces','deep_clean','laundry')) or (dates.worker_count=2 and task.floor_name=public.school_rotating_floor_for_date(dates.plan_date) and task.activity_type in ('vacuum','mop')) or (dates.worker_count>=3 and task.floor_name in ('2. patro','3. patro') and task.activity_type in ('vacuum','mop')))),
-  planned as (select o.task_id,o.scheduled_for,case when o.due_to<o.scheduled_for then 'overdue' else o.work_size end,o.due_from,o.due_to,o.assigned_worker_id from public.cleaning_planner_occurrences o where o.active and o.scheduled_for between target_from and target_to)
-  select routine.id,routine.plan_date,routine.reason,routine.plan_date,routine.plan_date,null::uuid from routine union all select * from planned;
-end $$;
 
 create or replace function public.admin_set_cleaning_rotation_slot(target_rotation_key text,target_slot_index smallint,target_worker_id uuid,target_effective_from date)
 returns uuid language plpgsql security definer set search_path=public as $$
