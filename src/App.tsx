@@ -44,12 +44,10 @@ import { forBuilding, roomForBuilding } from "./buildingScope";
 import { applyBulkUndo, bulkTasks, findUndoableRoomAction, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
 import { createLatestRequestGate } from "./latestRequest";
 import {
-  floorKindLabel,
   isExtraCleaningTask,
   isStandardCleaningTask,
   roomIsComplete,
   roomPresentationState,
-  summarizeCleaningDay,
 } from "./cleaningPresentation";
 import { buildCalendarDaySummary, calendarWorkerOptions, filterCalendarTasks, type CalendarDaySummary } from "./cleaningCalendar";
 import { assignmentOverlapsMonth, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
@@ -924,9 +922,6 @@ export default function App() {
       ? tasks.filter((task) => task.active && task.dueToday)
       : tasks;
   const visibleDone = visible.filter((task) => task.done).length;
-  const todaySummary = summarizeCleaningDay(visible.filter((task) => !isFinalCheckTask(task)));
-  const todayRooms = todaySummary.reduce((sum, building) => sum + building.roomCount, 0);
-  const todayRoomsDone = todaySummary.reduce((sum, building) => sum + building.completedRoomCount, 0);
   const todayExtras = visible.filter((task) => !isFinalCheckTask(task) && isExtraCleaningTask(task));
   const todayExtrasDone = todayExtras.filter((task) => task.done).length;
   const todayBuildingIds = [...new Set(visible.map((task) => task.buildingId).filter((id): id is string => Boolean(id)))];
@@ -1006,14 +1001,6 @@ export default function App() {
           ) : <>
           {todayPlanStatus === "refreshing" && <p className="plan-refreshing" aria-live="polite">Aktualizuji dnešní plán…</p>}
           {todayPlanStatus === "error" && <section className="plan-stale-error" role="alert"><span>Aktualizace plánu se nezdařila. Zobrazuji poslední načtený stav.</span><button onClick={retryTodayPlan}>Zkusit znovu</button></section>}
-          {visible.length > 0 && <section className={visibleDone === visible.length ? "today-work-overview cleaning-complete" : "today-work-overview"}>
-            {todaySummary.map((building) => <article key={building.name}>
-              <span><b>{building.name === "Školka" ? "🌱" : "🏫"} {building.name}</b><small>{building.floors.map((floor) => floor.name).join(" · ")}</small></span>
-              <strong>{building.completedRoomCount} / {building.roomCount} místností</strong>
-              <ProgressBar value={building.completedRoomCount} total={building.roomCount} label={`Dokončené místnosti: ${building.name}`} />
-            </article>)}
-            {todaySummary.length > 1 && <p>Celkem {todayRoomsDone} / {todayRooms} místností</p>}
-          </section>}
           {displayCleaningDay.kind !== "preview" && visible.length > 0 && (
             <ArrivalReminders entries={manual.entries.filter((entry) => entry.entryType === "arrival" && entry.active)} />
           )}
@@ -1030,9 +1017,6 @@ export default function App() {
             pendingTaskIds={pendingTaskIds}
             guides={manual.entries.filter((entry) => entry.entryType === "guide" && entry.active)}
           />
-          {canWork(profile) && displayCleaningDay.kind !== "preview" && (
-            <ShiftRoomCompletion tasks={visible} onCompleteAll={completeMany} />
-          )}
           <DepartureChecks
             tasks={visible}
             onComplete={complete}
@@ -2134,7 +2118,7 @@ function FloorGroup({
         <span>
           <b>{label}</b>
           <small>
-            {[...rooms.values()].filter(roomIsComplete).length} / {rooms.size} místností · {floorKindLabel(tasks.some((task) => (task.cleaningCycleLength ?? 0) > 1) ? "rotation" : tasks.some(isStandardCleaningTask) ? "standard" : "additional")}
+            {[...rooms.values()].filter(roomIsComplete).length} / {rooms.size} místností
           </small>
         </span>
         <i>{open ? "⌃" : "⌄"}</i>
@@ -2252,52 +2236,6 @@ function DepartureChecks({ tasks, onComplete, pendingTaskIds, guides }: {
     </summary>
     <TaskRows tasks={finalChecks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} />
   </details>;
-}
-
-function ShiftRoomCompletion({ tasks, onCompleteAll }: { tasks: Task[]; onCompleteAll: (tasks: Task[]) => Promise<void> }) {
-  const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [saving, setSaving] = useState(false);
-  const rooms = new Map<string, { label: string; tasks: Task[] }>();
-  for (const task of tasks.filter((item) => item.roomId && !isFinalCheckTask(item))) {
-    const key = `${task.buildingId ?? task.building}|${task.roomId}`;
-    const entry = rooms.get(key) ?? { label: `${task.building} · ${task.floor} · ${task.room}`, tasks: [] };
-    entry.tasks.push(task);
-    rooms.set(key, entry);
-  }
-  const available = [...rooms.entries()].filter(([, entry]) => bulkTasks(entry.tasks).some((task) => !task.done));
-  if (!available.length) return null;
-  const toggle = (key: string) => setSelected((current) => {
-    const next = new Set(current);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    return next;
-  });
-  return (
-    <section className="shift-room-completion">
-      <button className="shift-room-trigger" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-        <span><b>Co jsem dnes udělal/a</b><small>Vyberte místnosti a uložte je najednou</small></span><i>{open ? "⌃" : "⌄"}</i>
-      </button>
-      {open && <div className="shift-room-body">
-        {available.map(([key, entry]) => {
-          const routine = bulkTasks(entry.tasks);
-          return <label className="shift-room-option" key={key}>
-            <input type="checkbox" checked={selected.has(key)} onChange={() => toggle(key)} />
-            <span><b>{entry.label}</b><small>{routine.filter((task) => task.done).length}/{routine.length} hotovo · speciální úkoly se neoznačí</small></span>
-          </label>;
-        })}
-        <button className="primary-action" disabled={!selected.size || saving} onClick={async () => {
-          const chosen = available.filter(([key]) => selected.has(key)).flatMap(([, entry]) => bulkTasks(entry.tasks));
-          if (!window.confirm(`Označit běžný úklid ve ${selected.size} vybraných místnostech jako hotový?`)) return;
-          setSaving(true);
-          try {
-            await onCompleteAll(chosen);
-            setSelected(new Set());
-            setOpen(false);
-          } finally { setSaving(false); }
-        }}>{saving ? "Ukládám…" : "Označit vybrané jako hotové"}</button>
-      </div>}
-    </section>
-  );
 }
 
 function TaskRows({

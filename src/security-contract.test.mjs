@@ -165,7 +165,7 @@ test('rychlé dokončení místností je serverově atomické a nevztahuje se na
   assert.match(migration27, /activity_type not in \('windows', 'deep_clean', 'laundry', 'disinfect'\)/i)
   assert.match(migration27, /perform public\.set_cleaning_task_completion/i)
   assert.match(repository, /rpc\('complete_cleaning_tasks_bulk'/)
-  assert.match(app, /Co jsem dnes udělal\/a/)
+  assert.doesNotMatch(app, /Co jsem dnes udělal\/a/)
   assert.match(app, /Označit vše jako hotové/)
 })
 
