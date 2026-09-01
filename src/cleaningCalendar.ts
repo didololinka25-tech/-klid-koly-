@@ -1,7 +1,7 @@
 import type { Task } from './types'
 import type { CleaningDayContext } from './scheduling'
 import { isExtraCleaningTask, summarizeCleaningDay } from './cleaningPresentation.ts'
-import { workersForDate, type PlannedWorker, type WorkerPlanningData } from './workerPlanning.ts'
+import { cleaningRotationForDate, workersForDate, type PlannedWorker, type RotationForDate, type WorkerPlanningData } from './workerPlanning.ts'
 
 export type CalendarExceptionInput = {
   kind: 'extraordinary' | 'rescheduled'
@@ -50,6 +50,7 @@ export type CalendarDaySummary = {
   cancelledExceptions: string[]
   context: CleaningDayContext
   tasks: Task[]
+  fourthFloorRotation: RotationForDate | null
   // Rezervované místo pro budoucí sekundární vrstvu školních akcí.
   // Google Calendar ani jeho data se v této iteraci neimplementují.
   schoolEvents: Array<{ id: string; title: string; collision: boolean }>
@@ -101,7 +102,8 @@ export function buildCalendarDaySummary({
   tasks,
   context,
   exceptions = [],
-  planning = { assignments: [], exceptions: [], available: false },
+  planning = { assignments: [], exceptions: [], rotationDefinitions: [], rotationSlots: [], available: false },
+  workerId = 'all',
 }: {
   date: string
   today: string
@@ -109,8 +111,17 @@ export function buildCalendarDaySummary({
   context: CleaningDayContext
   exceptions?: CalendarExceptionInput[]
   planning?: WorkerPlanningData
+  workerId?: string
 }): CalendarDaySummary {
-  const cleaningTasks = tasks
+  const allWorkers = workersForDate(date, planning)
+  const rotation = cleaningRotationForDate(date, planning)
+  const workers = workerId === 'all' ? allWorkers : allWorkers.filter((worker) => worker.workerId === workerId)
+  const selectedAssignments = workers.filter((worker) => worker.workerId === workerId)
+  const cleaningTasks = workerId === 'all' ? tasks : tasks.filter((task) => {
+    if (task.floor === '4. patro') return rotation?.assignment?.workerId === workerId
+    return selectedAssignments.some((worker) => worker.buildingId === task.buildingId && (!worker.floorId || !task.floorId || worker.floorId === task.floorId))
+  })
+  const visibleRotation = cleaningTasks.some((task) => task.floor === '4. patro') ? rotation : null
   const buildingSummary = summarizeCleaningDay(cleaningTasks)
   const sections = buildingSummary.flatMap((workplace) => workplace.floors.map((floor) => ({
     workplace: workplace.name,
@@ -136,7 +147,7 @@ export function buildCalendarDaySummary({
     date,
     isToday: date === today,
     isWeekend: isWeekend(date),
-    workers: workersForDate(date, planning),
+    workers,
     workplaces: buildingSummary.map((workplace) => ({
       name: workplace.name,
       icon: workplace.name === 'Školka' ? 'MŠ' : 'Š',
@@ -151,9 +162,17 @@ export function buildCalendarDaySummary({
     movedTo: context.kind === 'moved_away' ? context.movedTo : undefined,
     cancelledExceptions: cancelled.map((item) => item.title),
     context,
-    tasks,
+    tasks: cleaningTasks,
+    fourthFloorRotation: visibleRotation,
     schoolEvents: [],
   }
+}
+
+export function calendarWorkerOptions(planning: WorkerPlanningData) {
+  const values = new Map<string, string>()
+  planning.assignments.filter((item) => item.active).forEach((item) => values.set(item.workerId, item.workerName));
+  (planning.rotationSlots ?? []).filter((item) => item.active && item.workerId).forEach((item) => values.set(item.workerId!, item.workerName || 'Pracovník'))
+  return [...values.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'cs'))
 }
 
 export function filterCalendarTasks(tasks: Task[], buildingId: string) {

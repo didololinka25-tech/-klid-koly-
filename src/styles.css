@@ -1323,6 +1323,11 @@ h2 {
 .calendar-filter { width: fit-content; max-width: 100%; display: flex; gap: 3px; padding: 3px; border: 1px solid #d4e3df; border-radius: 11px; background: #edf4f2; }
 .calendar-filter button { min-width: 68px; min-height: 38px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: #42665f; font-size: 12px; font-weight: 800; }
 .calendar-filter button.active { border-color: #165e56; background: #165e56; color: #fff; }
+.calendar-worker-filter { display: grid; gap: 4px; max-width: 360px; font-size: 12px; font-weight: 900; color: #42665f; }
+.calendar-worker-filter select, .rotation-editor select, .rotation-editor input { min-height: 44px; width: 100%; box-sizing: border-box; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; padding: 8px 10px; color: #173d38; font: inherit; }
+.calendar-rotation { display: block; color: #165e56; font-weight: 900; }
+.calendar-rotation-detail p { display: grid; gap: 3px; margin: 0; }
+.calendar-rotation-detail span { color: #42665f; }
 .period-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .period-fields label:last-child { grid-column: 1 / -1; }
 .month-calendar { display: grid; gap: 8px; min-width: 0; padding: 10px; border: 1px solid #dbe8e4; border-radius: 15px; background: #fff; }
@@ -1409,6 +1414,12 @@ h2 {
 .work-assignment-screen { display: grid; gap: 12px; }
 .worker-plan-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .worker-plan-actions button { min-height: 44px; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; color: #165e56; font-weight: 900; }
+.rotation-editor { display: grid; gap: 10px; }
+.rotation-editor > label { display: grid; gap: 4px; font-size: 12px; font-weight: 900; }
+.rotation-slots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.rotation-slots > div { min-width: 0; display: grid; gap: 6px; padding: 10px; border: 1px solid #d4e3df; border-radius: 10px; background: #f8fbfa; }
+.rotation-slots button { min-height: 44px; border: 0; border-radius: 8px; background: #165e56; color: #fff; font-weight: 900; }
+@media (max-width: 600px) { .rotation-slots { grid-template-columns: 1fr; } }
 .worker-plan-month { display: grid; gap: 4px; font-size: 12px; font-weight: 900; }
 .worker-plan-month input { min-height: 44px; width: 100%; box-sizing: border-box; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; padding: 8px 10px; color: #173d38; font: inherit; }
 .worker-assignment-list { display: grid; gap: 8px; }

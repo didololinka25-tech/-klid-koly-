@@ -11,7 +11,7 @@ import { isSameTaskDefinition } from './taskValidation'
 import { pragueDateKey, validateAttendanceInterval } from './attendanceTime'
 import { attendanceStartValues } from './buildingScope'
 import { inferredBulkCompletable, isBulkCompletableTask } from './cleaningBulk'
-import type { WorkerPlanningData, WorkerScheduleException, WorkerWorkAssignment } from './workerPlanning'
+import type { CleaningRotationSlot, WorkerPlanningData, WorkerScheduleException, WorkerWorkAssignment } from './workerPlanning'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -111,6 +111,10 @@ const mapScheduleException = (row: any): WorkerScheduleException => ({
   planned: Boolean(row.planned), buildingId: row.building_id, buildingName: row.building_name,
   floorId: row.floor_id, floorName: row.floor_name, areaLabel: row.area_label,
   note: row.note ?? '', active: Boolean(row.active),
+})
+const mapRotationSlot = (row: any): CleaningRotationSlot => ({
+  id: row.id, rotationKey: row.rotation_key, slotIndex: Number(row.slot_index), workerId: row.worker_id,
+  workerName: row.worker_name, validFrom: row.valid_from, validTo: row.valid_to, active: Boolean(row.active),
 })
 
 const localToday = () => pragueDateKey(new Date())
@@ -252,7 +256,7 @@ export const schoolRepository = {
       const building: any = room?.building_id ? buildingById.get(room.building_id) : null
       const scheduleDays = Array.isArray(row.schedule_days) ? row.schedule_days.map(Number) : []
       const mapped: Task = {
-        id: row.id, planKey: row.plan_key ?? null, roomId: room?.id, room: room?.name ?? 'Společný úkol', floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1,
+        id: row.id, planKey: row.plan_key ?? null, roomId: room?.id, room: room?.name ?? 'Společný úkol', floorId: floor?.id ?? null, floor: floor?.name ?? 'Společné úkoly', floorSort: floor?.sort_order ?? -1,
         buildingId: building?.id ?? defaultBuildingId, building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
         assignedTo: 'Úklidový tým', done: completionByTask.get(row.id)?.completed ?? false, prerequisite: row.requires_task_id,
         canComplete: canWork(profile) && !isTestCleaningDay && (!(completionByTask.get(row.id)?.completed ?? false) || completionByTask.get(row.id)?.worker_id === profile.id || accessRole(profile) === 'admin'),
@@ -545,12 +549,17 @@ export const schoolRepository = {
   },
   workerPlanning: async (): Promise<WorkerPlanningData> => {
     const { data, error } = await client().rpc('get_worker_work_planning')
-    if (missingFunction(error)) return { assignments: [], exceptions: [], available: false }
+    if (missingFunction(error)) return { assignments: [], exceptions: [], rotationDefinitions: [], rotationSlots: [], available: false }
     if (error) throw error
-    const payload = (data ?? {}) as { assignments?: any[]; exceptions?: any[] }
+    const payload = (data ?? {}) as { assignments?: any[]; exceptions?: any[]; rotation_definitions?: any[]; rotation_slots?: any[] }
     return {
       assignments: (payload.assignments ?? []).map(mapWorkAssignment),
       exceptions: (payload.exceptions ?? []).map(mapScheduleException),
+      rotationDefinitions: (payload.rotation_definitions ?? []).map((row) => ({
+        rotationKey: row.rotation_key, title: row.title, anchorDate: row.anchor_date, weekday: Number(row.weekday),
+        slotCount: Number(row.slot_count), active: Boolean(row.active),
+      })),
+      rotationSlots: (payload.rotation_slots ?? []).map(mapRotationSlot),
       available: true,
     }
   },
@@ -570,6 +579,14 @@ export const schoolRepository = {
       target_area_label: item.areaLabel || null, target_note: item.note || '', target_active: item.active,
     })
     if (missingFunction(error)) throw new Error('Výjimky pracovního rozvrhu ještě nejsou v databázi aktivní. Aplikujte migraci 03100.')
+    if (error) throw error
+  },
+  saveCleaningRotationSlot: async (slotIndex: number, workerId: string | null, effectiveFrom: string) => {
+    const { error } = await client().rpc('admin_set_cleaning_rotation_slot', {
+      target_rotation_key: 'school-fourth-floor', target_slot_index: slotIndex,
+      target_worker_id: workerId || null, target_effective_from: effectiveFrom,
+    })
+    if (missingFunction(error)) throw new Error('Rotace 4. patra ještě není v databázi aktivní. Aplikujte migraci 03300.')
     if (error) throw error
   },
   undoBulkCompletion: async (actionId: string) => {

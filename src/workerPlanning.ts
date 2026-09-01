@@ -31,7 +31,29 @@ export type WorkerScheduleException = {
 export type WorkerPlanningData = {
   assignments: WorkerWorkAssignment[]
   exceptions: WorkerScheduleException[]
+  rotationDefinitions: CleaningRotationDefinition[]
+  rotationSlots: CleaningRotationSlot[]
   available: boolean
+}
+
+export type CleaningRotationDefinition = {
+  rotationKey: string
+  title: string
+  anchorDate: string
+  weekday: number
+  slotCount: number
+  active: boolean
+}
+
+export type CleaningRotationSlot = {
+  id: string
+  rotationKey: string
+  slotIndex: number
+  workerId?: string | null
+  workerName?: string | null
+  validFrom: string
+  validTo?: string | null
+  active: boolean
 }
 
 export type PlannedWorker = {
@@ -41,6 +63,7 @@ export type PlannedWorker = {
   colorIndex: number
   buildingId: string
   buildingName: string
+  floorId?: string | null
   areaLabel: string
   exception: boolean
   note: string
@@ -78,13 +101,40 @@ export function workersForDate(date: string, planning: WorkerPlanningData): Plan
     .filter((item) => item.active && item.validFrom <= date && (!item.validTo || item.validTo >= date) && item.weekdays.includes(day) && !overriddenWorkers.has(item.workerId))
     .map((item) => plannedWorker({
       workerId: item.workerId, workerName: item.workerName, buildingId: item.buildingId, buildingName: item.buildingName,
-      areaLabel: item.areaLabel, exception: false, note: '',
+      floorId: item.floorId, areaLabel: item.areaLabel, exception: false, note: '',
     }))
   const exceptions = dateExceptions.filter((item) => item.planned && item.buildingId && item.buildingName).map((item) => plannedWorker({
     workerId: item.workerId, workerName: item.workerName, buildingId: item.buildingId!, buildingName: item.buildingName!,
-    areaLabel: item.areaLabel || item.floorName || 'Pracovní oblast', exception: true, note: item.note,
+    floorId: item.floorId, areaLabel: item.areaLabel || item.floorName || 'Pracovní oblast', exception: true, note: item.note,
   }))
   return [...regular, ...exceptions].sort((a, b) => a.workerName.localeCompare(b.workerName, 'cs') || a.buildingName.localeCompare(b.buildingName, 'cs'))
+}
+
+const utcDayNumber = (date: string) => {
+  const [year, month, day] = date.split('-').map(Number)
+  return Math.floor(Date.UTC(year, month - 1, day) / 86_400_000)
+}
+
+export type RotationForDate = {
+  definition: CleaningRotationDefinition
+  slotIndex: number
+  slotLabel: string
+  assignment?: CleaningRotationSlot
+}
+
+/** Stabilní A→B→C pořadí je odvozené jen z anchor date a UUID přiřazení, nikdy ze jména. */
+export function cleaningRotationForDate(date: string, planning: WorkerPlanningData, rotationKey = 'school-fourth-floor'): RotationForDate | null {
+  const definition = (planning.rotationDefinitions ?? []).find((item) => item.rotationKey === rotationKey && item.active)
+  if (!definition || date < definition.anchorDate) return null
+  const [year, month, day] = date.split('-').map(Number)
+  const weekdayValue = new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7
+  if (weekdayValue !== definition.weekday) return null
+  const weeks = Math.floor((utcDayNumber(date) - utcDayNumber(definition.anchorDate)) / 7)
+  const slotIndex = ((weeks % definition.slotCount) + definition.slotCount) % definition.slotCount
+  const assignment = (planning.rotationSlots ?? [])
+    .filter((item) => item.active && item.rotationKey === rotationKey && item.slotIndex === slotIndex && item.validFrom <= date && (!item.validTo || item.validTo >= date))
+    .sort((a, b) => b.validFrom.localeCompare(a.validFrom))[0]
+  return { definition, slotIndex, slotLabel: String.fromCharCode(65 + slotIndex), assignment }
 }
 
 export function assignmentOverlapsMonth(assignment: WorkerWorkAssignment, month: string) {

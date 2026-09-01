@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { assignmentAppliesInMonth, assignmentOverlapsMonth, scheduleExceptionsConflict, stableWorkerColor, workAssignmentsConflict, workerInitials, workersForDate } from './workerPlanning.ts'
+import { assignmentAppliesInMonth, assignmentOverlapsMonth, cleaningRotationForDate, scheduleExceptionsConflict, stableWorkerColor, workAssignmentsConflict, workerInitials, workersForDate } from './workerPlanning.ts'
 
 const assignment = (overrides = {}) => ({
   id: 'assignment-1', workerId: 'worker-dana', workerName: 'Dana Nováková',
@@ -77,4 +77,21 @@ test('pro pracovníka a datum je nejvýše jedna aktivní výjimka', () => {
   assert.equal(scheduleExceptionsConflict(first, { ...second, date: '2026-09-10' }), false, 'jediná výjimka pro jiné datum projde')
   assert.equal(scheduleExceptionsConflict(first, second), true)
   assert.equal(scheduleExceptionsConflict({ ...first, active: false }, second), false, 'deaktivovaná historie neblokuje novou výjimku')
+})
+
+test('4. patro rotuje A → B → C souvisle přes hranici měsíce a podle UUID', () => {
+  const data = {
+    ...planning([]),
+    rotationDefinitions: [{ rotationKey: 'school-fourth-floor', title: '4. patro', anchorDate: '2026-09-04', weekday: 5, slotCount: 3, active: true }],
+    rotationSlots: [
+      { id: 'a', rotationKey: 'school-fourth-floor', slotIndex: 0, workerId: 'uuid-a', workerName: 'Dana', validFrom: '2026-09-04', validTo: null, active: true },
+      { id: 'b', rotationKey: 'school-fourth-floor', slotIndex: 1, workerId: null, workerName: null, validFrom: '2026-09-04', validTo: null, active: true },
+      { id: 'c', rotationKey: 'school-fourth-floor', slotIndex: 2, workerId: 'uuid-c', workerName: 'Cyril', validFrom: '2026-09-04', validTo: null, active: true },
+    ],
+  }
+  assert.deepEqual(['2026-09-04','2026-09-11','2026-09-18','2026-09-25','2026-10-02','2026-10-09'].map((date) => cleaningRotationForDate(date, data)?.slotLabel), ['A','B','C','A','B','C'])
+  assert.equal(cleaningRotationForDate('2026-09-11', data)?.assignment?.workerId, null, 'prázdná pozice je validní')
+  data.rotationSlots[0].workerName = 'Nové zobrazované jméno'
+  assert.equal(cleaningRotationForDate('2026-09-25', data)?.assignment?.workerId, 'uuid-a', 'přejmenování nemění identitu rotace')
+  assert.equal(cleaningRotationForDate('2026-09-05', data), null, 'rotace platí jen v nakonfigurovaný den')
 })

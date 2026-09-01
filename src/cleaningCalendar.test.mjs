@@ -180,3 +180,29 @@ test('kalendář má čitelné mobilní a desktop varianty bez horizontálního 
   assert.match(css, /\.calendar-day \{ min-width: 0;[\s\S]*overflow: hidden/)
   assert.match(css, /text-overflow: ellipsis/)
 })
+
+test('filtr pracovníka spojí UUID, pracovní oblast, pracoviště a jeho rotační 4. patro', () => {
+  const date = '2026-09-04'
+  const planning = {
+    available: true,
+    assignments: [
+      { id: 'd', workerId: 'didi-uuid', workerName: 'Didi', buildingId: 'school', buildingName: 'Škola', floorId: 'f1', floorName: '1. patro', areaLabel: '1. patro', weekdays: [5], validFrom: '2026-09-01', validTo: null, active: true },
+      { id: 'm', workerId: 'martina-uuid', workerName: 'Martina', buildingId: 'school', buildingName: 'Škola', floorId: 'f2', floorName: '2. patro', areaLabel: '2. patro', weekdays: [5], validFrom: '2026-09-01', validTo: null, active: true },
+    ],
+    exceptions: [],
+    rotationDefinitions: [{ rotationKey: 'school-fourth-floor', title: '4. patro', anchorDate: date, weekday: 5, slotCount: 3, active: true }],
+    rotationSlots: [{ id: 'slot-a', rotationKey: 'school-fourth-floor', slotIndex: 0, workerId: 'didi-uuid', workerName: 'Didi', validFrom: date, validTo: null, active: true }],
+  }
+  const tasks = [
+    task({ id: 'didi-extra', floorId: 'f1', floor: '1. patro', activityType: 'doors', frequency: 'měsíčně', monthlyDay: 4, scheduleDays: [] }),
+    task({ id: 'martina-extra', floorId: 'f2', floor: '2. patro', activityType: 'tiles', frequency: 'měsíčně', monthlyDay: 4, scheduleDays: [] }),
+    task({ id: 'fourth', floorId: 'f4', floor: '4. patro', activityType: 'vacuum', frequency: 'týdně', scheduleDays: [5] }),
+  ]
+  const didi = buildCalendarDaySummary({ date, today: date, tasks, context: resolveCleaningDay(date, []), planning, workerId: 'didi-uuid' })
+  assert.deepEqual(didi.workers.map((item) => item.workerId), ['didi-uuid'])
+  assert.deepEqual(didi.tasks.map((item) => item.id).sort(), ['didi-extra','fourth'])
+  assert.equal(didi.fourthFloorRotation?.assignment?.workerId, 'didi-uuid')
+  const martina = buildCalendarDaySummary({ date, today: date, tasks, context: resolveCleaningDay(date, []), planning, workerId: 'martina-uuid' })
+  assert.deepEqual(martina.tasks.map((item) => item.id), ['martina-extra'])
+  assert.equal(martina.fourthFloorRotation, null, 'pracovník nevidí cizí rotační 4. patro')
+})
