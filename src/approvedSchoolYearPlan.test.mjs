@@ -25,6 +25,16 @@ test('schválené frekvence používají splatnost bez pevné středy nebo pátk
   assert.doesNotMatch(migration, /work_part|task_assignment/i)
 })
 
+test('periodické změny 03300 jsou omezené na Školu a zachovají odchodové kontroly', () => {
+  const schoolScopes = migration.match(/building\.name\s*=\s*'Škola'/g) ?? []
+  assert.ok(schoolScopes.length >= 10, 'Každá periodická větev i závěrečný assertion musí být scoped na Školu.')
+  assert.match(migration, /plan_key\s*=\s*'v2026\|school\|common\|laundry'/i)
+  assert.match(migration, /plan_key\s*=\s*'v2026\|school\|common\|final-close-windows'[\s\S]*frequency\s*=\s*'cleaning_day'/i)
+  assert.match(migration, /plan_key\s*=\s*'v2026\|school\|common\|final-laundry'[\s\S]*frequency\s*=\s*'cleaning_day'/i)
+  assert.doesNotMatch(migration, /where active and plan_key like 'v2026\|%' and activity_type='laundry'/i)
+  assert.doesNotMatch(migration, /from public\.cleaning_tasks where active and plan_key like 'v2026\|%' and activity_type='windows'/i)
+})
+
 test('rotace používá UUID, RLS a admin RPC; frontend ji skutečně načítá a ukládá', () => {
   assert.match(migration, /anchor_date[\s\S]*date '2026-09-04'/i)
   assert.match(migration, /worker_id uuid references public\.profiles\(id\)/i)

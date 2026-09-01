@@ -2,10 +2,11 @@ begin;
 
 -- Dynamický školní planner. Historické tasks/completions nemaže a Školku nemění.
 update public.cleaning_tasks set active=false
-where active and plan_key like 'v2026|%' and activity_type='laundry';
-update public.cleaning_tasks task set active=false from public.rooms room
+where active and plan_key='v2026|school|common|laundry' and activity_type='laundry';
+update public.cleaning_tasks task set active=false
+from public.rooms room join public.buildings building on building.id=room.building_id
 where task.room_id=room.id and task.active and task.plan_key like 'v2026|%'
-  and room.name='Jídelna' and task.activity_type='mirror';
+  and building.name='Škola' and room.name='Jídelna' and task.activity_type='mirror';
 
 -- Periodická práce má období splatnosti; konkrétní směnu vybírá planner.
 update public.cleaning_tasks task
@@ -13,46 +14,55 @@ set frequency='weekly',schedule_days=array[1,2,3,4,5,6,7]::smallint[],monthly_da
     period_months=null,period_week=null,period_anchor_month=null,
     cleaning_cycle_length=null,cleaning_cycle_offset=null
 from public.rooms room join public.floors floor on floor.id=room.floor_id
+  join public.buildings building on building.id=room.building_id
 where task.room_id=room.id and task.active and task.plan_key like 'v2026|%'
+  and building.name='Škola'
   and ((floor.name='Schodiště' and task.activity_type<>'windows') or (floor.name='4. patro' and task.frequency='weekly')
     or task.activity_type='tables' or (task.activity_type='surfaces' and task.frequency='weekly'));
 
 with ranked as (
   select task.id,row_number() over(order by floor.sort_order,room.sort_order,task.sort_order,task.id)-1 pos
   from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.floors floor on floor.id=room.floor_id
-  where task.active and task.plan_key like 'v2026|%' and task.activity_type='doors'
+    join public.buildings building on building.id=room.building_id
+  where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and task.activity_type='doors'
 ) update public.cleaning_tasks task set frequency='monthly',schedule_days=array[1,2,3,4,5,6,7]::smallint[],monthly_day=null,
   period_months=1,period_week=(1+(ranked.pos%4))::smallint,period_anchor_month=date '2026-09-01',cleaning_cycle_length=null,cleaning_cycle_offset=null
 from ranked where task.id=ranked.id;
 with ranked as (
   select task.id,row_number() over(order by floor.sort_order,room.sort_order,task.sort_order,task.id)-1 pos
   from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.floors floor on floor.id=room.floor_id
-  where task.active and task.plan_key like 'v2026|%' and task.activity_type='windows'
+    join public.buildings building on building.id=room.building_id
+  where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and task.activity_type='windows'
 ) update public.cleaning_tasks task set frequency='monthly',schedule_days=array[1,2,3,4,5,6,7]::smallint[],monthly_day=null,
   period_months=3,period_week=(1+(ranked.pos%4))::smallint,period_anchor_month=date '2026-09-01',cleaning_cycle_length=null,cleaning_cycle_offset=null
 from ranked where task.id=ranked.id;
-update public.cleaning_tasks set frequency='monthly',schedule_days=array[1,2,3,4,5,6,7]::smallint[],monthly_day=null,
+update public.cleaning_tasks task set frequency='monthly',schedule_days=array[1,2,3,4,5,6,7]::smallint[],monthly_day=null,
   period_months=1,period_week=3,period_anchor_month=date '2026-09-01',cleaning_cycle_length=null,cleaning_cycle_offset=null
-where active and plan_key like 'v2026|%' and activity_type='tiles';
+from public.rooms room join public.buildings building on building.id=room.building_id
+where task.room_id=room.id and task.active and task.plan_key like 'v2026|%'
+  and building.name='Škola' and task.activity_type='tiles';
 with ranked as (
   select task.id,row_number() over(order by floor.sort_order,room.sort_order,task.sort_order,task.id)-1 pos
   from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.floors floor on floor.id=room.floor_id
-  where task.active and task.plan_key like 'v2026|%' and task.activity_type='surfaces' and task.frequency='monthly'
+    join public.buildings building on building.id=room.building_id
+  where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and task.activity_type='surfaces' and task.frequency='monthly'
 ) update public.cleaning_tasks task set schedule_days=array[1,2,3,4,5,6,7]::smallint[],monthly_day=null,
   period_months=1,period_week=(1+(ranked.pos%4))::smallint,period_anchor_month=date '2026-09-01',cleaning_cycle_length=null,cleaning_cycle_offset=null
 from ranked where task.id=ranked.id;
 with ranked as (
   select task.id,row_number() over(order by floor.sort_order,room.sort_order,task.sort_order,task.id)-1 pos
   from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.floors floor on floor.id=room.floor_id
-  where task.active and task.plan_key like 'v2026|%' and task.activity_type='deep_clean'
+    join public.buildings building on building.id=room.building_id
+  where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and task.activity_type='deep_clean'
     and room.name in ('Vstup','Šatna / chodba','Společenská místnost','Mediační místnost')
 ) update public.cleaning_tasks task set frequency='monthly',schedule_days=array[1,2,3,4,5,6,7]::smallint[],monthly_day=null,
   period_months=3,period_week=(1+(ranked.pos%4))::smallint,period_anchor_month=date '2026-10-01',cleaning_cycle_length=null,cleaning_cycle_offset=null
 from ranked where task.id=ranked.id;
 update public.cleaning_tasks task set frequency='monthly',schedule_days=array[1,2,3,4,5,6,7]::smallint[],monthly_day=null,
   period_months=2,period_week=4,period_anchor_month=date '2026-09-01',cleaning_cycle_length=null,cleaning_cycle_offset=null
-from public.rooms room where task.room_id=room.id and task.active and task.plan_key like 'v2026|%'
-  and room.name='Řadírna' and task.activity_type='deep_clean';
+from public.rooms room join public.buildings building on building.id=room.building_id
+where task.room_id=room.id and task.active and task.plan_key like 'v2026|%'
+  and building.name='Škola' and room.name='Řadírna' and task.activity_type='deep_clean';
 
 create table if not exists public.cleaning_rotation_definitions (
   rotation_key text primary key,title text not null,anchor_date date not null,
@@ -372,10 +382,12 @@ revoke all on function public.can_complete_task(uuid,date) from public,anon;
 grant execute on function public.can_complete_task(uuid,date) to authenticated;
 
 do $$ begin
-  if exists(select 1 from public.cleaning_tasks where active and plan_key like 'v2026|%' and activity_type='laundry') then raise exception 'Praní nesmí být aktivní kalendářní práce.'; end if;
-  if exists(select 1 from public.cleaning_tasks task join public.rooms room on room.id=task.room_id where task.active and task.plan_key like 'v2026|%' and room.name='Jídelna' and task.activity_type='mirror') then raise exception 'Zrcadlo Jídelny nesmí být aktivní.'; end if;
-  if exists(select 1 from public.cleaning_tasks where active and plan_key like 'v2026|%' and activity_type='windows' and period_months is distinct from 3::smallint) then raise exception 'Okna musí být čtvrtletní.'; end if;
-  if exists(select 1 from public.cleaning_tasks where active and plan_key like 'v2026|%' and activity_type in ('tables','doors','tiles','surfaces','windows','deep_clean') and schedule_days is distinct from array[1,2,3,4,5,6,7]::smallint[]) then raise exception 'Periodické práce nesmí mít pevný den.'; end if;
+  if exists(select 1 from public.cleaning_tasks where active and plan_key='v2026|school|common|laundry' and activity_type='laundry') then raise exception 'Praní nesmí být aktivní kalendářní práce.'; end if;
+  if exists(select 1 from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.buildings building on building.id=room.building_id where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and room.name='Jídelna' and task.activity_type='mirror') then raise exception 'Zrcadlo Jídelny nesmí být aktivní.'; end if;
+  if exists(select 1 from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.buildings building on building.id=room.building_id where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and task.activity_type='windows' and task.period_months is distinct from 3::smallint) then raise exception 'Okna školy musí být čtvrtletní.'; end if;
+  if exists(select 1 from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.buildings building on building.id=room.building_id where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and task.activity_type in ('tables','doors','tiles','surfaces','windows','deep_clean') and task.schedule_days is distinct from array[1,2,3,4,5,6,7]::smallint[]) then raise exception 'Periodické práce školy nesmí mít pevný den.'; end if;
+  if not exists(select 1 from public.cleaning_tasks where active and plan_key='v2026|school|common|final-close-windows' and activity_type='windows' and frequency='cleaning_day' and period_months is null) then raise exception 'Odchodová kontrola oken musí zůstat aktivní.'; end if;
+  if not exists(select 1 from public.cleaning_tasks where active and plan_key='v2026|school|common|final-laundry' and activity_type='laundry' and frequency='cleaning_day') then raise exception 'Odchodová kontrola použitých hadrů musí zůstat aktivní.'; end if;
   if (select weekday from public.cleaning_rotation_definitions where rotation_key='school-fourth-floor') is not null then raise exception 'Rotace 4. patra nesmí mít pevný den.'; end if;
   if not (select relrowsecurity from pg_class where oid='public.cleaning_planner_occurrences'::regclass) then raise exception 'RLS planneru musí být zapnuté.'; end if;
   if not (select relrowsecurity from pg_class where oid='public.cleaning_planner_schedule_audit'::regclass) then raise exception 'RLS auditu planneru musí být zapnuté.'; end if;
