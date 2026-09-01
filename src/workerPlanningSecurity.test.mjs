@@ -32,3 +32,15 @@ test('frontend používá UUID a RPC, ne task assignment nebo jméno jako identi
   const planningSlice = app.slice(app.indexOf('function WorkAssignmentOverview'), app.indexOf('function MoreScreen'))
   assert.doesNotMatch(planningSlice, /task_assignments|work_part|assignedTo/)
 })
+
+test('03100 serverově odmítá nejednoznačné intervaly a duplicitní aktivní výjimky', () => {
+  assert.match(migration, /existing\.weekdays && new\.weekdays/)
+  assert.match(migration, /daterange\(existing\.valid_from,[\s\S]*daterange\(new\.valid_from/)
+  assert.match(migration, /Pracovní období se překrývá s existujícím rozdělením\./)
+  assert.match(migration, /worker_schedule_exceptions_one_active_day_idx/)
+  assert.match(migration, /where active/)
+  assert.match(migration, /Pro pracovníka už je na tento den uložená aktivní výjimka\./)
+  assert.match(migration, /pg_advisory_xact_lock/)
+  assert.match(migration, /worker_work_assignments_unambiguous/)
+  assert.match(migration, /worker_schedule_exceptions_unambiguous/)
+})

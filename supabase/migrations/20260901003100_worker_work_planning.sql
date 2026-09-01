@@ -48,6 +48,73 @@ create index if not exists worker_work_assignments_calendar_idx
   on public.worker_work_assignments(active, valid_from, valid_to, worker_id);
 create index if not exists worker_schedule_exceptions_calendar_idx
   on public.worker_schedule_exceptions(active, exception_date, worker_id);
+create unique index if not exists worker_schedule_exceptions_one_active_day_idx
+  on public.worker_schedule_exceptions(worker_id, exception_date)
+  where active;
+
+create or replace function public.enforce_worker_work_assignment_unambiguous()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not new.active then return new; end if;
+  -- Serializuje souběžné zápisy stejného pracovníka; samotná trigger kontrola tak nemá race condition.
+  perform pg_advisory_xact_lock(hashtextextended(new.worker_id::text, 3100));
+  if exists (
+    select 1
+    from public.worker_work_assignments existing
+    where existing.worker_id = new.worker_id
+      and existing.active
+      and existing.id <> new.id
+      and existing.weekdays && new.weekdays
+      and daterange(existing.valid_from, coalesce(existing.valid_to, 'infinity'::date), '[]')
+          && daterange(new.valid_from, coalesce(new.valid_to, 'infinity'::date), '[]')
+  ) then
+    raise exception 'Pracovní období se překrývá s existujícím rozdělením.' using errcode = '23505';
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.enforce_worker_schedule_exception_unambiguous()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not new.active then return new; end if;
+  perform pg_advisory_xact_lock(hashtextextended(new.worker_id::text || '|' || new.exception_date::text, 3101));
+  if exists (
+    select 1
+    from public.worker_schedule_exceptions existing
+    where existing.worker_id = new.worker_id
+      and existing.exception_date = new.exception_date
+      and existing.active
+      and existing.id <> new.id
+  ) then
+    raise exception 'Pro pracovníka už je na tento den uložená aktivní výjimka.' using errcode = '23505';
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.enforce_worker_work_assignment_unambiguous() from public;
+revoke all on function public.enforce_worker_schedule_exception_unambiguous() from public;
+
+drop trigger if exists worker_work_assignments_unambiguous on public.worker_work_assignments;
+create trigger worker_work_assignments_unambiguous
+  before insert or update of worker_id, weekdays, valid_from, valid_to, active
+  on public.worker_work_assignments
+  for each row execute function public.enforce_worker_work_assignment_unambiguous();
+
+drop trigger if exists worker_schedule_exceptions_unambiguous on public.worker_schedule_exceptions;
+create trigger worker_schedule_exceptions_unambiguous
+  before insert or update of worker_id, exception_date, active
+  on public.worker_schedule_exceptions
+  for each row execute function public.enforce_worker_schedule_exception_unambiguous();
 
 alter table public.worker_work_assignments enable row level security;
 alter table public.worker_schedule_exceptions enable row level security;
@@ -157,6 +224,18 @@ begin
   if char_length(btrim(coalesce(target_area_label,''))) not between 1 and 120 then raise exception 'Vyplňte oblast práce.'; end if;
   if cardinality(target_weekdays) not between 1 and 7 or not target_weekdays <@ array[1,2,3,4,5,6,7]::smallint[] then raise exception 'Vyberte platné pracovní dny.'; end if;
   if target_valid_to is not null and target_valid_to < target_valid_from then raise exception 'Konec platnosti nesmí být před začátkem.'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(target_worker_id::text, 3100));
+  if target_active and exists (
+    select 1 from public.worker_work_assignments existing
+    where existing.worker_id = target_worker_id
+      and existing.active
+      and existing.id <> saved_id
+      and existing.weekdays && target_weekdays
+      and daterange(existing.valid_from, coalesce(existing.valid_to, 'infinity'::date), '[]')
+          && daterange(target_valid_from, coalesce(target_valid_to, 'infinity'::date), '[]')
+  ) then
+    raise exception 'Pracovní období se překrývá s existujícím rozdělením.' using errcode = '23505';
+  end if;
   insert into public.worker_work_assignments(id,worker_id,building_id,floor_id,area_label,weekdays,valid_from,valid_to,active,created_by,updated_by)
   values(saved_id,target_worker_id,target_building_id,target_floor_id,btrim(target_area_label),target_weekdays,target_valid_from,target_valid_to,target_active,auth.uid(),auth.uid())
   on conflict(id) do update set worker_id=excluded.worker_id, building_id=excluded.building_id, floor_id=excluded.floor_id,
@@ -188,6 +267,16 @@ begin
   if not exists (select 1 from public.profiles where id = target_worker_id and active and access_role in ('cleaning_team','admin')) then raise exception 'Vybraný pracovník není aktivní.'; end if;
   if target_planned and not exists (select 1 from public.buildings where id = target_building_id and active) then raise exception 'Pro mimořádnou směnu vyberte aktivní pracoviště.'; end if;
   if target_floor_id is not null and not exists (select 1 from public.floors where id = target_floor_id and building_id = target_building_id) then raise exception 'Vybrané patro nepatří do pracoviště.'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(target_worker_id::text || '|' || target_exception_date::text, 3101));
+  if target_active and exists (
+    select 1 from public.worker_schedule_exceptions existing
+    where existing.worker_id = target_worker_id
+      and existing.exception_date = target_exception_date
+      and existing.active
+      and existing.id <> saved_id
+  ) then
+    raise exception 'Pro pracovníka už je na tento den uložená aktivní výjimka.' using errcode = '23505';
+  end if;
   insert into public.worker_schedule_exceptions(id,worker_id,exception_date,planned,building_id,floor_id,area_label,note,active,created_by,updated_by)
   values(saved_id,target_worker_id,target_exception_date,target_planned,case when target_planned then target_building_id end,case when target_planned then target_floor_id end,
     case when target_planned then nullif(btrim(coalesce(target_area_label,'')),'') end,btrim(coalesce(target_note,'')),target_active,auth.uid(),auth.uid())
@@ -217,6 +306,44 @@ begin
      or to_regprocedure('public.admin_save_worker_work_assignment(uuid,uuid,uuid,uuid,text,smallint[],date,date,boolean)') is null
      or to_regprocedure('public.admin_save_worker_schedule_exception(uuid,uuid,date,boolean,uuid,uuid,text,text,boolean)') is null then
     raise exception 'RPC pracovního rozdělení nebyla vytvořena.';
+  end if;
+  if not exists (
+    select 1
+    from pg_class index_class
+    join pg_index index_definition on index_definition.indexrelid = index_class.oid
+    where index_class.oid = to_regclass('public.worker_schedule_exceptions_one_active_day_idx')
+      and index_definition.indisunique
+      and index_definition.indpred is not null
+  ) then
+    raise exception 'Chybí DB ochrana jediné aktivní výjimky pracovníka pro den.';
+  end if;
+  if not exists (
+    select 1 from pg_trigger where tgrelid = 'public.worker_work_assignments'::regclass
+      and tgname = 'worker_work_assignments_unambiguous' and not tgisinternal and tgenabled <> 'D'
+  ) or not exists (
+    select 1 from pg_trigger where tgrelid = 'public.worker_schedule_exceptions'::regclass
+      and tgname = 'worker_schedule_exceptions_unambiguous' and not tgisinternal and tgenabled <> 'D'
+  ) then
+    raise exception 'Chybí trigger ochrana proti nejednoznačnému pracovnímu plánu.';
+  end if;
+  if exists (
+    select 1
+    from public.worker_work_assignments first_assignment
+    join public.worker_work_assignments second_assignment
+      on second_assignment.worker_id = first_assignment.worker_id
+     and second_assignment.id > first_assignment.id
+     and second_assignment.active and first_assignment.active
+     and second_assignment.weekdays && first_assignment.weekdays
+     and daterange(second_assignment.valid_from, coalesce(second_assignment.valid_to, 'infinity'::date), '[]')
+         && daterange(first_assignment.valid_from, coalesce(first_assignment.valid_to, 'infinity'::date), '[]')
+  ) then
+    raise exception 'Pracovní rozdělení obsahuje překrývající se aktivní období.';
+  end if;
+  if exists (
+    select 1 from public.worker_schedule_exceptions
+    where active group by worker_id, exception_date having count(*) > 1
+  ) then
+    raise exception 'Pracovní rozvrh obsahuje více aktivních výjimek pro stejný den.';
   end if;
 end $$;
 

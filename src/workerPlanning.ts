@@ -97,3 +97,14 @@ export function assignmentOverlapsMonth(assignment: WorkerWorkAssignment, month:
 export function assignmentAppliesInMonth(assignment: WorkerWorkAssignment, month: string) {
   return assignment.active && assignmentOverlapsMonth(assignment, month)
 }
+
+export function workAssignmentsConflict(first: WorkerWorkAssignment, second: WorkerWorkAssignment) {
+  if (!first.active || !second.active || first.id === second.id || first.workerId !== second.workerId) return false
+  const datesOverlap = first.validFrom <= (second.validTo || '9999-12-31') && second.validFrom <= (first.validTo || '9999-12-31')
+  const weekdaysOverlap = first.weekdays.some((day) => second.weekdays.includes(day))
+  return datesOverlap && weekdaysOverlap
+}
+
+export function scheduleExceptionsConflict(first: WorkerScheduleException, second: WorkerScheduleException) {
+  return first.active && second.active && first.id !== second.id && first.workerId === second.workerId && first.date === second.date
+}
