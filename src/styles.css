@@ -149,17 +149,21 @@ h1 {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 12px;
+  gap: 7px 10px;
   margin-bottom: 12px;
-  padding: 11px 12px;
+  padding: 9px 11px;
   border-radius: 15px;
   background: #165e56;
   color: #fff;
 }
 .today-attendance > div:first-child {
+  grid-column: 1 / -1;
   display: grid;
-  gap: 3px;
+  grid-template-columns: repeat(2, minmax(0, max-content));
+  gap: 2px 10px;
 }
+.today-attendance > div:first-child small,
+.today-attendance > div:first-child strong { grid-column: 1 / -1; }
 .today-attendance small {
   color: #bfe5dc;
   font-size: 10px;
@@ -167,7 +171,7 @@ h1 {
   letter-spacing: 0.08em;
 }
 .today-attendance strong {
-  font-size: 15px;
+  font-size: 14px;
 }
 .today-attendance button {
   min-height: 44px;
@@ -198,6 +202,31 @@ h1 {
 .today-attendance .attendance-alert {
   grid-column: 1 / -1;
 }
+.today-day-context { margin: 0 0 10px; padding: 9px 11px; display: grid; gap: 2px; border-radius: 11px; background: #fff3dd; color: #714900; }
+.today-day-context small { color: #806c4a; }
+.today-work-overview { margin: 0 0 8px; display: grid; gap: 7px; }
+.today-work-overview > article { min-width: 0; padding: 9px 11px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; border: 1px solid #d5e6e1; border-radius: 12px; background: #fff; }
+.today-work-overview > article > span { min-width: 0; display: grid; gap: 1px; }
+.today-work-overview > article > span b { color: #173d38; font-size: 15px; }
+.today-work-overview > article > span small { color: #67817c; font-size: 11px; overflow-wrap: anywhere; }
+.today-work-overview > article > strong { color: #245e55; font-size: 12px; white-space: nowrap; }
+.today-work-overview .cleaning-progress { grid-column: 1 / -1; height: 6px; }
+.today-work-overview > p { margin: 0; padding: 0 2px; color: #568078; font-size: 11px; font-weight: 800; text-align: right; }
+.today-work-overview.cleaning-complete > article { border-color: #78b9ad; background: #f1faf7; }
+.today-extras { margin: 0 0 10px; padding: 8px 10px; border-left: 3px solid #d8a24c; border-radius: 0 9px 9px 0; background: #fffaf0; }
+.today-extras > header { display: flex; justify-content: space-between; gap: 8px; color: #8a5700; font-size: 10px; letter-spacing: .07em; }
+.today-extras > header small { color: #806c4a; letter-spacing: 0; }
+.today-extras > p { margin: 4px 0 0; color: #6d715f; font-size: 12px; }
+.today-extras ul { margin: 6px 0 0; padding: 0; display: grid; gap: 5px; list-style: none; }
+.today-extras li { min-width: 0; }
+.today-extras li > button { width: 100%; min-height: 44px; padding: 4px 2px; border: 0; display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 5px; background: transparent; color: inherit; text-align: left; }
+.today-extras li > button > span:last-child { min-width: 0; display: grid; gap: 1px; }
+.today-extras li b { color: #3f4f4b; font-size: 12px; overflow-wrap: anywhere; }
+.today-extras li small { color: #806c4a; font-size: 10px; overflow-wrap: anywhere; }
+.today-extras li.done { opacity: .6; }
+.today-extras li.done b { text-decoration: line-through; }
+.today-extras li > button:disabled { opacity: .55; }
+.today-all-done { margin: 12px 0 0; padding: 12px; border-radius: 12px; background: #e5f6f0; color: #165e56; font-weight: 900; text-align: center; }
 .attendance-dashboard {
   display: grid;
   gap: 14px;
@@ -766,10 +795,12 @@ h2 {
 .section-heading span { display: grid; gap: 2px; }
 .section-heading small { color: #6d827d; font-size: 11px; }
 .final-checks { margin-top: 14px; padding: 12px; border: 1px solid #d6e5e1; border-radius: 14px; background: #f8fbfa; }
-.arrival-reminders { margin: -8px 0 16px; padding: 12px 14px; border: 1px solid #cfe3de; border-radius: 14px; background: #f6fbf9; }
-.arrival-reminders > p:not(.eyebrow) { margin: 7px 0 0; display: grid; grid-template-columns: 28px 1fr; gap: 2px 7px; align-items: center; }
-.arrival-reminders > p span { grid-row: 1 / 3; font-size: 20px; }
-.arrival-reminders small { color: #5d7771; }
+.arrival-reminders { margin: 0 0 8px; padding: 6px 9px; border-radius: 9px; background: #edf6f3; }
+.arrival-reminders > .eyebrow { display: none; }
+.arrival-reminders > p:not(.eyebrow) { margin: 0; display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 1px 5px; align-items: center; }
+.arrival-reminders > p span { grid-row: 1 / 3; font-size: 15px; }
+.arrival-reminders > p b { font-size: 12px; }
+.arrival-reminders small { color: #5d7771; font-size: 10px; }
 
 .manual-menu-link { padding: 0; overflow: hidden; }
 .manual-menu-link > button { width: 100%; border: 0; background: #fff; color: #164f46; padding: 15px; display: flex; justify-content: space-between; text-align: left; }
@@ -1504,6 +1535,7 @@ nav button {
 .building-task-group { display: grid; gap: 10px; margin: 0 0 18px; min-width: 0; }
 .building-task-heading { align-items: center; padding: 4px 2px 0; }
 .building-task-heading h2 { margin: 0; font-size: 22px; }
+.building-divider { margin: 8px 2px 0; font-size: 17px; color: #174d45; }
 .calendar-detail-building { display: grid; gap: 8px; }
 .calendar-detail-building > h3 { margin: 10px 0 0; color: #174d45; }
 .admin-building-cards { display: grid; gap: 10px; }
@@ -1587,8 +1619,8 @@ nav .active {
 }
 
 @media (min-width: 800px) {
-  .app:has(.today-overview) { max-width: 1000px; }
-  .app:has(.today-overview) .room-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .app:has(.today-work-overview) { max-width: 1000px; }
+  .app:has(.today-work-overview) .room-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .app:has(.cleaning-calendar) { max-width: 1000px; }
   .calendar-day { min-height: 112px; padding: 9px; gap: 5px; }
   .calendar-day > strong { font-size: 14px; }

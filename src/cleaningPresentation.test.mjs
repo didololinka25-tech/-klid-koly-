@@ -101,7 +101,7 @@ test('UI používá místnost jako hlavní jednotku a jednotlivé úkoly necháv
   assert.match(source, /✓ Hotovo/)
   assert.match(source, /› Podrobnosti/)
   assert.match(source, /Vrátit dokončení místnosti/)
-  assert.match(source, /room-today-extra/)
+  assert.match(source, /today-extras/)
   assert.match(source, /DNES NAVÍC/)
   assert.match(source, /compact-task-list/)
   assert.doesNotMatch(source, /běžných hotovo/)
@@ -133,6 +133,17 @@ test('mobilní redesign drží touch targety a na desktopu rozšíří měsíčn
   assert.match(css, /\.room-group:has\(\.room-detail-toggle\[aria-expanded="true"\]\) \{ grid-column: 1 \/ -1; \}/)
   assert.match(css, /\.compact-task-list[\s\S]*grid-template-columns: minmax\(0, 1fr\)/)
   assert.match(css, /@media \(min-width: 800px\)[\s\S]*\.app:has\(\.cleaning-calendar\)/)
-  assert.match(css, /\.app:has\(\.today-overview\) \.room-list \{ grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/)
+  assert.match(css, /\.app:has\(\.today-work-overview\) \.room-list \{ grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/)
   assert.match(css, /overflow-x: hidden/)
+})
+
+test('Dnes má kompaktní pracovní pořadí bez duplicitní standardní hero karty', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const today = source.match(/\{section === "Dnes"[\s\S]*?\{section === "Správa"/)?.[0] ?? ''
+  assert.doesNotMatch(today, /className=\{visible\.length > 0[\s\S]*?hero today-overview/)
+  assert.match(today, /today-work-overview/)
+  assert.match(today, /<TodayExtras tasks=\{todayExtras\}/)
+  assert.ok(today.indexOf('<TaskHierarchy') < today.indexOf('<ShiftRoomCompletion'))
+  assert.ok(today.indexOf('<ShiftRoomCompletion') < today.indexOf('<DepartureChecks'))
+  assert.doesNotMatch(source, /className="room-today-extra"/)
 })

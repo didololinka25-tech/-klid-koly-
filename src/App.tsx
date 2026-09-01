@@ -44,7 +44,6 @@ import { forBuilding, roomForBuilding } from "./buildingScope";
 import { applyBulkUndo, bulkTasks, findUndoableRoomAction, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
 import { createLatestRequestGate } from "./latestRequest";
 import {
-  extraActivityTypes,
   floorKindLabel,
   isExtraCleaningTask,
   isStandardCleaningTask,
@@ -996,6 +995,10 @@ export default function App() {
               onBuildingChange={setAttendanceBuildingId}
             />
           )}
+          {displayCleaningDay.kind !== "standard" && <section className={`today-day-context ${displayCleaningDay.kind}`}>
+            <b>{cleaningDayHeading(displayCleaningDay, visible.length)}</b>
+            <small>{cleaningDayDescription(displayCleaningDay)}</small>
+          </section>}
           {!todayPlanLoaded.current && todayPlanStatus === "loading" ? (
             <section className="plan-state" aria-live="polite"><span className="loading-spinner" /><h2>Načítám dnešní plán…</h2></section>
           ) : !todayPlanLoaded.current && todayPlanStatus === "error" ? (
@@ -1003,30 +1006,20 @@ export default function App() {
           ) : <>
           {todayPlanStatus === "refreshing" && <p className="plan-refreshing" aria-live="polite">Aktualizuji dnešní plán…</p>}
           {todayPlanStatus === "error" && <section className="plan-stale-error" role="alert"><span>Aktualizace plánu se nezdařila. Zobrazuji poslední načtený stav.</span><button onClick={retryTodayPlan}>Zkusit znovu</button></section>}
-          <section className={visible.length > 0 && visibleDone === visible.length ? "hero today-overview cleaning-complete" : "hero today-overview"}>
-            <span className="hero-copy">
-              <b>{cleaningDayHeading(displayCleaningDay, visible.length)}</b>
-              <small>{cleaningDayDescription(displayCleaningDay)}</small>
-            </span>
-            <strong>{todayRoomsDone} / {todayRooms} místností</strong>
-            <ProgressBar value={todayRoomsDone} total={todayRooms} label="Dokončené místnosti" />
-            <div className="today-plan-summary">
-              {todaySummary.map((building) => <section key={building.name}>
-                <h2>{building.name === "Školka" ? "🌱" : "🏫"} {building.name}</h2>
-                <div>{building.floors.map((floor) => <span className={`plan-floor ${floor.kind}`} key={floor.name}><b>{floor.name}</b><small>{floorKindLabel(floor.kind)}</small></span>)}</div>
-              </section>)}
-              {todayExtras.length > 0 ? <p><b>DNES NAVÍC</b><span>{extraActivityTypes(todayExtras).map((type) => `${activityTypes[type]?.icon ?? "✓"} ${activityTypes[type]?.label ?? type}`).join(" · ")}</span><small>{todayExtrasDone}/{todayExtras.length} hotovo</small></p> : visible.length > 0 ? <p><b>DNES NAVÍC</b><span>Dnes bez dalších periodických prací.</span></p> : null}
-            </div>
-            {visible.length > 0 && visibleDone === visible.length && <p>Všechno hotovo – můžete odejít.</p>}
-          </section>
+          {visible.length > 0 && <section className={visibleDone === visible.length ? "today-work-overview cleaning-complete" : "today-work-overview"}>
+            {todaySummary.map((building) => <article key={building.name}>
+              <span><b>{building.name === "Školka" ? "🌱" : "🏫"} {building.name}</b><small>{building.floors.map((floor) => floor.name).join(" · ")}</small></span>
+              <strong>{building.completedRoomCount} / {building.roomCount} místností</strong>
+              <ProgressBar value={building.completedRoomCount} total={building.roomCount} label={`Dokončené místnosti: ${building.name}`} />
+            </article>)}
+            {todaySummary.length > 1 && <p>Celkem {todayRoomsDone} / {todayRooms} místností</p>}
+          </section>}
           {displayCleaningDay.kind !== "preview" && visible.length > 0 && (
             <ArrivalReminders entries={manual.entries.filter((entry) => entry.entryType === "arrival" && entry.active)} />
           )}
+          {visible.length > 0 && <TodayExtras tasks={todayExtras} done={todayExtrasDone} onComplete={complete} pendingTaskIds={pendingTaskIds} />}
           {accessRole(profile) === "visitor" && (
             <p className="readonly-note">Návštěvnický přístup je pouze pro čtení.</p>
-          )}
-          {canWork(profile) && displayCleaningDay.kind !== "preview" && (
-            <ShiftRoomCompletion tasks={visible} onCompleteAll={completeMany} />
           )}
           <TaskHierarchy
             tasks={visible}
@@ -1037,6 +1030,16 @@ export default function App() {
             pendingTaskIds={pendingTaskIds}
             guides={manual.entries.filter((entry) => entry.entryType === "guide" && entry.active)}
           />
+          {canWork(profile) && displayCleaningDay.kind !== "preview" && (
+            <ShiftRoomCompletion tasks={visible} onCompleteAll={completeMany} />
+          )}
+          <DepartureChecks
+            tasks={visible}
+            onComplete={complete}
+            pendingTaskIds={pendingTaskIds}
+            guides={manual.entries.filter((entry) => entry.entryType === "guide" && entry.active)}
+          />
+          {visible.length > 0 && visibleDone === visible.length && <p className="today-all-done">Všechno hotovo – můžete odejít.</p>}
           </>}
         </>
       )}
@@ -2065,7 +2068,6 @@ function TaskHierarchy({
   pendingTaskIds: Set<string>;
   guides: ManualEntry[];
 }) {
-  const finalChecks = tasks.filter(isFinalCheckTask);
   const workTasks = tasks.filter((task) => !isFinalCheckTask(task));
   const buildings = new Map<string, Task[]>();
   workTasks.forEach((task) => buildings.set(task.building, [...(buildings.get(task.building) ?? []), task]));
@@ -2074,7 +2076,6 @@ function TaskHierarchy({
       {[...buildings.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([building, buildingTasks]) => {
         const common = buildingTasks.filter((task) => !task.roomId);
         const commonStandard = common.filter(isStandardCleaningTask);
-        const commonExtra = common.filter(isExtraCleaningTask);
         const floorGroups = new Map<string, Task[]>();
         buildingTasks.filter((task) => task.roomId).forEach((task) => floorGroups.set(task.floor, [...(floorGroups.get(task.floor) ?? []), task]));
         const rooms = new Map<string, Task[]>();
@@ -2082,27 +2083,15 @@ function TaskHierarchy({
           const key = task.roomId ?? task.room;
           rooms.set(key, [...(rooms.get(key) ?? []), task]);
         });
-        const doneRooms = [...rooms.values()].filter(roomIsComplete).length;
         return <section className="building-task-group" key={building}>
-          <header className="building-task-heading"><span><p className="eyebrow">PRACOVIŠTĚ</p><h2>{building}</h2></span><b>{doneRooms}/{rooms.size} místností</b></header>
-          <ProgressBar value={doneRooms} total={rooms.size} label={`Dokončené místnosti: ${building}`} />
+          {buildings.size > 1 && <h2 className="building-divider">{building}</h2>}
           {commonStandard.length > 0 && <section className="shared-tasks compact-shared"><p className="eyebrow">PŘED ÚKLIDEM</p><TaskRows tasks={commonStandard} onComplete={onComplete} pendingTaskIds={pendingTaskIds} guides={guides} /></section>}
-          {commonExtra.length > 0 && <section className="shared-tasks compact-shared today-extra-shared"><p className="eyebrow">DNES NAVÍC</p><TaskRows tasks={commonExtra} onComplete={onComplete} pendingTaskIds={pendingTaskIds} guides={guides} /></section>}
           {[...floorGroups.entries()].sort(([, a], [, b]) => a[0].floorSort - b[0].floorSort).map(([floor, floorTasks]) => (
             <FloorGroup key={`${building}|${floor}`} label={floor} tasks={floorTasks} bulkActions={bulkActions} onComplete={onComplete} onCompleteAll={onCompleteAll} onUndoBulk={onUndoBulk} pendingTaskIds={pendingTaskIds} guides={guides} />
           ))}
         </section>;
       })}
-      {finalChecks.length > 0 && (
-        <details className="shared-tasks final-checks" open={workTasks.length > 0 && workTasks.every((task) => task.done)}>
-          <summary className="section-heading">
-            <span><h2>Před odchodem ze školy</h2><small>Povinná společná kontrola</small></span>
-            <b>{finalChecks.filter((task) => task.done).length}/{finalChecks.length}</b>
-          </summary>
-          <TaskRows tasks={finalChecks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} />
-        </details>
-      )}
-      {tasks.length === 0 && (
+      {workTasks.length === 0 && (
         <section className="empty">
           <span>✓</span>
           <h2>Pro tento den nejsou naplánované úkoly.</h2>
@@ -2198,8 +2187,6 @@ function RoomActivityGroup({
   const allRoutineDone = routine.length > 0 && completed === routine.length;
   const allRequiredDone = roomIsComplete(tasks);
   const presentationState = roomPresentationState(tasks, routine);
-  const extraTasks = tasks.filter(isExtraCleaningTask);
-  const extraRemaining = extraTasks.filter((task) => !task.done);
   const completion = allRoutineDone ? routine.find((task) => task.completedBy) : undefined;
   const completedBy = bulkAction?.workerName ?? completion?.completedBy;
   const completedAt = bulkAction?.createdAt ?? completion?.completedAt;
@@ -2211,7 +2198,6 @@ function RoomActivityGroup({
         {presentationState === "partial" && <b className="room-status">Část hotová</b>}
         {completedBy && <small className="room-author">{completedBy}{completedAt ? ` · ${new Date(completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
       </header>
-      {extraTasks.length > 0 && <div className="room-today-extra"><b>{extraTasks.some((task) => task.frequency === "mimořádně") ? "⚠ MIMOŘÁDNĚ" : "DNES NAVÍC"}</b><div>{extraTasks.map((task) => <span className={task.done ? "done" : ""} key={task.id}>{activityTypes[task.activityType]?.icon ?? "✓"} {task.title}</span>)}</div>{allRoutineDone && extraRemaining.length > 0 && <small>Běžný úklid je hotový, zbývá {extraRemaining.length} práce navíc.</small>}</div>}
       <div className="room-primary-action">
         {bulkAction?.canUndo && allRoutineDone ? <button
           className="undo-room"
@@ -2248,6 +2234,24 @@ function RoomActivityGroup({
       {detailsOpen && <TaskRows tasks={tasks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} compact />}
     </section>
   );
+}
+
+function DepartureChecks({ tasks, onComplete, pendingTaskIds, guides }: {
+  tasks: Task[];
+  onComplete: (id: string) => Promise<void>;
+  pendingTaskIds: Set<string>;
+  guides: ManualEntry[];
+}) {
+  const finalChecks = tasks.filter(isFinalCheckTask);
+  const workTasks = tasks.filter((task) => !isFinalCheckTask(task));
+  if (!finalChecks.length) return null;
+  return <details className="shared-tasks final-checks" open={workTasks.length > 0 && workTasks.every((task) => task.done)}>
+    <summary className="section-heading">
+      <span><h2>Před odchodem ze školy</h2><small>Povinná společná kontrola</small></span>
+      <b>{finalChecks.filter((task) => task.done).length}/{finalChecks.length}</b>
+    </summary>
+    <TaskRows tasks={finalChecks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} />
+  </details>;
 }
 
 function ShiftRoomCompletion({ tasks, onCompleteAll }: { tasks: Task[]; onCompleteAll: (tasks: Task[]) => Promise<void> }) {
@@ -3210,6 +3214,32 @@ function formatTaskSchedule(task: Task) {
   const days = task.scheduleDays.map((day) => weekdays[day - 1]).filter(Boolean).join(" / ");
   const frequency = task.frequency === "denně" ? "Každý úklidový den" : task.frequency === "týdně" ? "1× týdně" : task.frequency;
   return `${frequency}${days ? ` · ${days}` : ""}${floorVisit}${task.active ? "" : " · neaktivní"}`;
+}
+
+function TodayExtras({ tasks, done, onComplete, pendingTaskIds }: {
+  tasks: Task[];
+  done: number;
+  onComplete: (id: string) => Promise<void>;
+  pendingTaskIds: Set<string>;
+}) {
+  return <section className="today-extras" aria-label="Dnešní práce navíc">
+    <header><b>DNES NAVÍC</b>{tasks.length > 0 && <small>{done}/{tasks.length} hotovo</small>}</header>
+    {tasks.length === 0 ? <p>Dnes nic navíc.</p> : <ul>{tasks
+      .slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((task) => {
+        const pending = pendingTaskIds.has(task.id);
+        return <li className={task.done ? "done" : ""} key={task.id}><button
+          disabled={!task.canComplete || pending}
+          onClick={() => void onComplete(task.id)}
+          aria-pressed={task.done}
+          aria-label={`${task.done ? "Zrušit dokončení" : "Dokončit"}: ${task.title}`}
+        >
+          <span aria-hidden="true">{pending ? "…" : task.done ? "✓" : activityTypes[task.activityType]?.icon ?? "✓"}</span>
+          <span><b>{task.title}</b><small>{[task.building, task.floor, task.roomId ? task.room : null].filter(Boolean).join(" · ")}</small></span>
+        </button></li>;
+      })}</ul>}
+  </section>;
 }
 
 function ArrivalReminders({ entries }: { entries: ManualEntry[] }) {
