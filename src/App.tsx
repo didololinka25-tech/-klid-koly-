@@ -49,7 +49,6 @@ import {
   isExtraCleaningTask,
   isStandardCleaningTask,
   roomIsComplete,
-  roomPresentationLabel,
   roomPresentationState,
   summarizeCleaningDay,
 } from "./cleaningPresentation";
@@ -2108,7 +2107,6 @@ function FloorGroup({
             <RoomActivityGroup
               key={room}
               room={room}
-              floor={label}
               tasks={roomTasks}
               bulkAction={findUndoableRoomAction(roomTasks, bulkActions)}
               onComplete={onComplete}
@@ -2126,7 +2124,6 @@ function FloorGroup({
 
 function RoomActivityGroup({
   room,
-  floor,
   tasks,
   bulkAction,
   onComplete,
@@ -2136,7 +2133,6 @@ function RoomActivityGroup({
   guides,
 }: {
   room: string;
-  floor: string;
   tasks: Task[];
   bulkAction?: BulkCompletionAction;
   onComplete: (id: string) => Promise<void>;
@@ -2161,8 +2157,8 @@ function RoomActivityGroup({
     <section className={`room-group${allRequiredDone ? " room-done" : allRoutineDone ? " room-routine-done" : ""}`}>
       <header className="room-heading">
         <h3>{allRequiredDone && <span aria-hidden="true">✓ </span>}{room}</h3>
-        <small className="room-floor">{floor}</small>
-        <b className="room-status">{roomPresentationLabel(presentationState)}</b>
+        {presentationState === "done" && <b className="room-status">Hotovo</b>}
+        {presentationState === "partial" && <b className="room-status">Část hotová</b>}
         {completedBy && <small className="room-author">{completedBy}{completedAt ? ` · ${new Date(completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
       </header>
       {extraTasks.length > 0 && <div className="room-today-extra"><b>{extraTasks.some((task) => task.frequency === "mimořádně") ? "⚠ MIMOŘÁDNĚ" : "DNES NAVÍC"}</b><div>{extraTasks.map((task) => <span className={task.done ? "done" : ""} key={task.id}>{activityTypes[task.activityType]?.icon ?? "✓"} {task.title}</span>)}</div>{allRoutineDone && extraRemaining.length > 0 && <small>Běžný úklid je hotový, zbývá {extraRemaining.length} práce navíc.</small>}</div>}
@@ -2175,7 +2171,7 @@ function RoomActivityGroup({
             setSaving(true);
             try { await onUndoBulk(bulkAction); } finally { setSaving(false); }
           }}
-        >{saving ? "Vracím…" : "Vrátit dokončení místnosti"}</button> : <button
+        aria-label="Vrátit dokončení místnosti">{saving ? "Vracím…" : "Vrátit ›"}</button> : <button
           className="complete-room"
           aria-label={`Označit vše jako hotové: ${room}`}
           disabled={
@@ -2193,11 +2189,11 @@ function RoomActivityGroup({
             }
           }}
         >
-          {saving ? "Ukládám…" : allRoutineDone ? "✓ Běžný úklid hotový" : "✓ Hotová místnost"}
+          {saving ? "Ukládám…" : "✓ Hotovo"}
         </button>}
       </div>
       <button className="room-detail-toggle" onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen}>
-        {detailsOpen ? "Skrýt podrobnosti" : "Podrobnosti ›"}
+        {detailsOpen ? "Skrýt podrobnosti" : "› Podrobnosti"}
       </button>
       {detailsOpen && <TaskRows tasks={tasks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} compact />}
     </section>

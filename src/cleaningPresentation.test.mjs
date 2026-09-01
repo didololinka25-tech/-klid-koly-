@@ -98,13 +98,14 @@ test('úterní souhrn ukáže Školku a výjimka je odvozena stejným resolverem
 
 test('UI používá místnost jako hlavní jednotku a jednotlivé úkoly nechává sbalené', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  assert.match(source, /✓ Hotová místnost/)
-  assert.match(source, /Podrobnosti ›/)
+  assert.match(source, /✓ Hotovo/)
+  assert.match(source, /› Podrobnosti/)
   assert.match(source, /Vrátit dokončení místnosti/)
   assert.match(source, /room-today-extra/)
   assert.match(source, /DNES NAVÍC/)
   assert.match(source, /compact-task-list/)
   assert.doesNotMatch(source, /běžných hotovo/)
+  assert.doesNotMatch(source, /className="room-floor"/)
 })
 
 test('detail používá skutečný název prerequisite a nikoli technickou obecnou hlášku', () => {
@@ -125,8 +126,11 @@ test('kalendář a Dnes sdílejí scheduling resolver a kalendář defaultně ne
 test('mobilní redesign drží touch targety a na desktopu rozšíří měsíční mřížku', () => {
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
   assert.match(css, /@media \(max-width: 430px\)/)
-  assert.match(css, /\.room-primary-action \.complete-room,[\s\S]*min-height: 50px/)
+  assert.match(css, /\.room-list \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
+  assert.match(css, /\.room-primary-action \.complete-room,[\s\S]*min-height: 46px/)
+  assert.match(css, /\.room-group:has\(\.room-detail-toggle\[aria-expanded="true"\]\) \{ grid-column: 1 \/ -1; \}/)
   assert.match(css, /\.compact-task-list[\s\S]*grid-template-columns: minmax\(0, 1fr\)/)
   assert.match(css, /@media \(min-width: 800px\)[\s\S]*\.app:has\(\.cleaning-calendar\)/)
+  assert.match(css, /\.app:has\(\.today-overview\) \.room-list \{ grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/)
   assert.match(css, /overflow-x: hidden/)
 })

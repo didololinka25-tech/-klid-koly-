@@ -626,56 +626,59 @@ h2 {
 .room-list {
   padding: 10px;
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
+  align-items: start;
   background: #f5f9f7;
 }
 .room-group {
   min-width: 0;
-  padding: 14px;
+  padding: 12px;
   border: 1px solid #d6e5e1;
   border-radius: 14px;
   background: #fff;
   box-shadow: 0 2px 8px rgba(23, 77, 69, .06);
 }
+.room-group:has(.room-detail-toggle[aria-expanded="true"]) { grid-column: 1 / -1; }
 .room-group.room-done { border-color: #8bc5b8; background: #edf8f4; }
 .room-group.room-routine-done { border-color: #b4d8cf; background: #f5fbf8; }
 .room-group h3 {
-  font-size: 17px;
+  font-size: 15px;
+  line-height: 1.25;
   margin: 0;
   color: #173f39;
   overflow-wrap: anywhere;
 }
 .room-heading {
   display: grid;
-  gap: 3px;
-  margin-bottom: 12px;
+  gap: 2px;
+  margin-bottom: 7px;
 }
-.room-floor { color: #6a7e79 !important; font-weight: 700 !important; }
-.room-status { margin-top: 9px; color: #245e55; font-size: 13px; }
+.room-status { margin-top: 3px; color: #245e55; font-size: 12px; }
 .room-author { margin-top: 2px; color: #1f725f !important; }
 .room-heading small {
   color: #6d827d;
   font-size: 12px;
   font-weight: 800;
 }
-.room-primary-action { margin-top: 12px; }
+.room-primary-action { margin-top: 8px; }
 .complete-room {
   width: 100%;
-  min-height: 50px;
+  min-height: 46px;
   border: 1px solid #b9d6cf;
   border-radius: 11px;
-  padding: 0 14px;
+  padding: 0 8px;
   background: #165e56;
   color: #fff;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 900;
 }
-.room-detail-toggle { border: 0; background: transparent; color: #376c63; min-height: 44px; padding: 8px 2px 0; font-weight: 800; text-align: left; }
+.room-detail-toggle { width: 100%; border: 0; background: transparent; color: #376c63; min-height: 44px; padding: 7px 1px 0; font-size: 12px; font-weight: 800; text-align: left; }
 .room-detail-toggle + .activity-grid { margin-top: 7px; }
-.room-today-extra { margin: 0; padding: 10px 11px; display: grid; gap: 7px; border: 1px solid #f1d6a3; border-radius: 10px; background: #fff4dc; }
-.room-today-extra > b { color: #8a5200; font-size: 11px; letter-spacing: .08em; }
+.room-today-extra { margin: 0; padding: 7px 8px; display: grid; gap: 5px; border: 1px solid #f1d6a3; border-radius: 9px; background: #fff4dc; }
+.room-today-extra > b { color: #8a5200; font-size: 9px; letter-spacing: .08em; }
 .room-today-extra > div { display: flex; flex-wrap: wrap; gap: 5px; }
-.room-today-extra span { padding: 5px 7px; border-radius: 8px; background: #fff; color: #5b5040; font-size: 11px; font-weight: 800; }
+.room-today-extra span { padding: 3px 5px; border-radius: 7px; background: #fff; color: #5b5040; font-size: 10px; font-weight: 800; overflow-wrap: anywhere; }
 .room-today-extra span.done { color: #25705f; text-decoration: line-through; opacity: .72; }
 .room-today-extra small { color: #806c4a; font-size: 10px; }
 .final-checks { padding: 0; overflow: hidden; }
@@ -700,7 +703,7 @@ h2 {
 .complete-room:disabled {
   opacity: 0.45;
 }
-.undo-room { width: 100%; min-height: 48px; border: 1px solid #c99575; border-radius: 10px; padding: 0 12px; background: #fff8f3; color: #844522; font-size: 13px; font-weight: 900; }
+.undo-room { width: 100%; min-height: 46px; border: 1px solid #c99575; border-radius: 10px; padding: 0 8px; background: #fff8f3; color: #844522; font-size: 12px; font-weight: 900; }
 .undo-room:disabled { opacity: .5; }
 .activity-grid {
   display: grid;
@@ -1491,10 +1494,10 @@ nav .active {
 
 @media (max-width: 430px) {
   .app { padding-left: 12px; padding-right: 12px; }
-  .room-list { padding: 9px; gap: 9px; }
-  .room-group { padding: 13px; }
+  .room-list { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 8px; gap: 8px; }
+  .room-group { padding: 10px; }
   .room-primary-action .complete-room,
-  .room-primary-action .undo-room { width: 100%; min-height: 50px; }
+  .room-primary-action .undo-room { width: 100%; min-height: 46px; }
   .compact-task-list .activity-card { grid-template-columns: minmax(0, 1fr) auto; }
   .today-overview { grid-template-columns: minmax(0, 1fr); }
   .today-overview > strong { justify-self: start; }
@@ -1504,6 +1507,8 @@ nav .active {
 }
 
 @media (min-width: 800px) {
+  .app:has(.today-overview) { max-width: 1000px; }
+  .app:has(.today-overview) .room-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .app:has(.cleaning-calendar) { max-width: 1000px; }
   .calendar-day { min-height: 112px; padding: 9px; gap: 5px; }
   .calendar-day > b { font-size: 14px; }
