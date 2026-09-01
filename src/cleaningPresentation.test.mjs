@@ -114,11 +114,13 @@ test('detail používá skutečný název prerequisite a nikoli technickou obecn
   assert.doesNotMatch(source, /Nejdříve předchozí činnost/)
 })
 
-test('kalendář a Dnes sdílejí scheduling resolver a kalendář defaultně nesype celý checklist', () => {
+test('kalendář a Dnes sdílejí scheduling resolver a kalendář nezobrazuje běžný checklist', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   assert.match(source, /function dueTasksForDate[\s\S]*isTaskDueForCleaningDay/)
   assert.match(source, /dueToday/)
-  assert.match(source, /Zobrazit celý plán dne/)
+  assert.match(source, /Běžný úklid probíhá podle pracovního rozdělení/)
+  assert.match(source, /DNES NAVÍC/)
+  assert.doesNotMatch(source, /Zobrazit celý plán dne/)
   assert.match(source, /summarizeCleaningDay/)
   assert.match(source, /calendar-filter/)
 })

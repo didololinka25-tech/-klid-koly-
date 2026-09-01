@@ -52,7 +52,8 @@ import {
   roomPresentationState,
   summarizeCleaningDay,
 } from "./cleaningPresentation";
-import { buildCalendarDaySummary, circledFloor, filterCalendarTasks, type CalendarDaySummary } from "./cleaningCalendar";
+import { buildCalendarDaySummary, filterCalendarTasks, type CalendarDaySummary } from "./cleaningCalendar";
+import { assignmentOverlapsMonth, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
 
 type Section =
   | "Dnes"
@@ -61,6 +62,7 @@ type Section =
   | "Provoz"
   | "Více"
   | "Manuál"
+  | "Rozdělení práce"
   | "Správa"
   | "Uživatelé";
 const sections: Section[] = ["Dnes", "Docházka", "Kalendář", "Provoz", "Více"];
@@ -71,6 +73,7 @@ const icon: Record<Section, string> = {
   Provoz: "⚠",
   Více: "•••",
   Manuál: "ⓘ",
+  "Rozdělení práce": "♙",
   Správa: "✓",
   Uživatelé: "♙",
 };
@@ -145,6 +148,7 @@ export default function App() {
     compensationAvailable: false,
   });
   const [workplaces, setWorkplaces] = useState<Workplace[]>([]);
+  const [workerPlanning, setWorkerPlanning] = useState<WorkerPlanningData>({ assignments: [], exceptions: [], available: false });
   const [attendanceBuildingId, setAttendanceBuildingId] = useState("");
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
@@ -198,6 +202,7 @@ export default function App() {
         setAttendanceWorkers([]);
         setUsers([]);
         setWorkplaces([]);
+        setWorkerPlanning({ assignments: [], exceptions: [], available: false });
         return;
       }
       const [workplacesResult, appSettingsResult] = await Promise.allSettled([
@@ -276,10 +281,11 @@ export default function App() {
         ]);
         setUsers([]);
       }
-      const [daysResult, operationsResult, manualResult] = await Promise.allSettled([
+      const [daysResult, operationsResult, manualResult, planningResult] = await Promise.allSettled([
         schoolRepository.cleaningDays(),
         schoolRepository.operations(),
         schoolRepository.manuals(activeProfile),
+        schoolRepository.workerPlanning(),
       ]);
       if (daysResult.status === "fulfilled") {
         setCleaningDays(daysResult.value.records);
@@ -288,6 +294,7 @@ export default function App() {
       }
       if (operationsResult.status === "fulfilled") setOperations(operationsResult.value);
       if (manualResult.status === "fulfilled") setManual(manualResult.value);
+      if (planningResult.status === "fulfilled") setWorkerPlanning(planningResult.value);
     },
     [],
   );
@@ -320,6 +327,7 @@ export default function App() {
         setSelectedAttendanceWorker("");
         setWorkplaces([]);
         setManual({ entries: [], available: false, editable: false });
+        setWorkerPlanning({ assignments: [], exceptions: [], available: false });
         setAttendanceBuildingId("");
       }
       if (next) load(next).catch((error) => setNotice(error.message));
@@ -739,6 +747,29 @@ export default function App() {
       throw error;
     }
   };
+  const refreshWorkerPlanning = async () => setWorkerPlanning(await schoolRepository.workerPlanning());
+  const saveWorkerAssignment = async (item: WorkerWorkAssignment) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveWorkerWorkAssignment(item);
+      await refreshWorkerPlanning();
+      setNotice("Pracovní rozdělení bylo uloženo.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Pracovní rozdělení se nepodařilo uložit.");
+      throw error;
+    }
+  };
+  const saveScheduleException = async (item: WorkerScheduleException) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveWorkerScheduleException(item);
+      await refreshWorkerPlanning();
+      setNotice("Výjimka rozvrhu byla uložena.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Výjimku rozvrhu se nepodařilo uložit.");
+      throw error;
+    }
+  };
   const saveTask = async (task: Task) => {
     try {
       setNotice("");
@@ -1051,11 +1082,16 @@ export default function App() {
           available={cleaningDaysAvailable}
           taskSelectionAvailable={cleaningTaskSelectionAvailable}
           canManage={canManageOperations(profile)}
-          buildings={planOptions.buildings}
+          buildings={workplaces.filter((item) => item.active).map(({ id, name }) => ({ id, name }))}
           tasks={tasks}
+          planning={workerPlanning}
+          onOpenAssignments={() => setSection("Rozdělení práce")}
           onSave={saveCleaningDay}
           onCancel={cancelCleaningDay}
         />
+      )}
+      {section === "Rozdělení práce" && (
+        <WorkAssignmentOverview data={workerPlanning} workers={attendanceWorkers} options={planOptions} canManage={canManageOperations(profile)} onSaveAssignment={saveWorkerAssignment} onSaveException={saveScheduleException} />
       )}
       {section === "Provoz" && (
         <OperationsScreen
@@ -1091,6 +1127,7 @@ export default function App() {
             setSection("Uživatelé");
           }}
           onOpenCleaningDays={() => setSection("Kalendář")}
+          onOpenAssignments={() => setSection("Rozdělení práce")}
           onOpenManual={() => setSection("Manuál")}
           workplaces={workplaces}
           appSettings={appSettings}
@@ -3246,6 +3283,59 @@ function ManualEntryEditor({ entry, onCancel, onSave }: { entry: ManualEntry; on
   </form>;
 }
 
+function WorkerAssignmentEditor({ item, workers, options, onCancel, onSave }: { item: WorkerWorkAssignment; workers: AttendanceWorker[]; options: PlanOptions; onCancel: () => void; onSave: (item: WorkerWorkAssignment) => Promise<void> }) {
+  const [draft, setDraft] = useState(item);
+  const [saving, setSaving] = useState(false);
+  const floors = options.floors.filter((floor) => floor.buildingId === draft.buildingId);
+  const update = <K extends keyof WorkerWorkAssignment>(key: K, value: WorkerWorkAssignment[K]) => setDraft((current) => ({ ...current, [key]: value }));
+  return <form className="task-editor worker-plan-editor" onSubmit={async (event) => { event.preventDefault(); if (saving) return; setSaving(true); try { await onSave(draft); onCancel(); } finally { setSaving(false); } }}>
+    <h2>{item.id ? "Upravit pracovní období" : "Nové pracovní období"}</h2>
+    <label>Pracovník<select required value={draft.workerId} onChange={(event) => update("workerId", event.target.value)}><option value="">Vyberte pracovníka</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></label>
+    <label>Pracoviště<select required value={draft.buildingId} onChange={(event) => setDraft((current) => ({ ...current, buildingId: event.target.value, floorId: null }))}><option value="">Vyberte pracoviště</option>{options.buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>
+    <label>Patro / sekce<select value={draft.floorId ?? ""} onChange={(event) => { const floor = floors.find((value) => value.id === event.target.value); setDraft((current) => ({ ...current, floorId: floor?.id ?? null, floorName: floor?.name ?? null, areaLabel: floor?.name || current.areaLabel })); }}><option value="">Vlastní oblast</option>{floors.map((floor) => <option key={floor.id} value={floor.id}>{floor.name}</option>)}</select></label>
+    <label>Oblast<input required maxLength={120} value={draft.areaLabel} onChange={(event) => update("areaLabel", event.target.value)} placeholder="Např. 1. patro" /></label>
+    <fieldset><legend>Pracovní dny</legend><div className="weekday-checks">{weekdays.map((day, index) => <label key={day}><input type="checkbox" checked={draft.weekdays.includes(index + 1)} onChange={(event) => update("weekdays", event.target.checked ? [...draft.weekdays, index + 1].sort() : draft.weekdays.filter((value) => value !== index + 1))} />{day}</label>)}</div></fieldset>
+    <div className="period-fields"><label>Platí od<input required type="date" value={draft.validFrom} onChange={(event) => update("validFrom", event.target.value)} /></label><label>Platí do<input type="date" value={draft.validTo ?? ""} min={draft.validFrom} onChange={(event) => update("validTo", event.target.value || null)} /></label></div>
+    <label className="switch"><input type="checkbox" checked={draft.active} onChange={(event) => update("active", event.target.checked)} /> Aktivní</label>
+    <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving || !draft.weekdays.length}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+  </form>;
+}
+
+function WorkerExceptionEditor({ item, workers, options, onCancel, onSave }: { item: WorkerScheduleException; workers: AttendanceWorker[]; options: PlanOptions; onCancel: () => void; onSave: (item: WorkerScheduleException) => Promise<void> }) {
+  const [draft, setDraft] = useState(item);
+  const [saving, setSaving] = useState(false);
+  const floors = options.floors.filter((floor) => floor.buildingId === draft.buildingId);
+  const update = <K extends keyof WorkerScheduleException>(key: K, value: WorkerScheduleException[K]) => setDraft((current) => ({ ...current, [key]: value }));
+  return <form className="task-editor worker-plan-editor" onSubmit={async (event) => { event.preventDefault(); if (saving) return; setSaving(true); try { await onSave(draft); onCancel(); } finally { setSaving(false); } }}>
+    <h2>{item.id ? "Upravit výjimku" : "Nová výjimka rozvrhu"}</h2>
+    <label>Pracovník<select required value={draft.workerId} onChange={(event) => update("workerId", event.target.value)}><option value="">Vyberte pracovníka</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></label>
+    <label>Datum<input required type="date" value={draft.date} onChange={(event) => update("date", event.target.value)} /></label>
+    <label>Typ změny<select value={draft.planned ? "planned" : "absent"} onChange={(event) => update("planned", event.target.value === "planned")}><option value="absent">Nepřijde</option><option value="planned">Výjimečně přijde / jiné pracoviště</option></select></label>
+    {draft.planned && <><label>Pracoviště<select required value={draft.buildingId ?? ""} onChange={(event) => setDraft((current) => ({ ...current, buildingId: event.target.value, floorId: null }))}><option value="">Vyberte pracoviště</option>{options.buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label><label>Patro / sekce<select value={draft.floorId ?? ""} onChange={(event) => { const floor = floors.find((value) => value.id === event.target.value); setDraft((current) => ({ ...current, floorId: floor?.id ?? null, floorName: floor?.name ?? null, areaLabel: floor?.name || current.areaLabel })); }}><option value="">Vlastní oblast</option>{floors.map((floor) => <option key={floor.id} value={floor.id}>{floor.name}</option>)}</select></label><label>Oblast<input value={draft.areaLabel ?? ""} onChange={(event) => update("areaLabel", event.target.value)} /></label></>}
+    <label>Poznámka<textarea rows={2} value={draft.note} onChange={(event) => update("note", event.target.value)} /></label>
+    <label className="switch"><input type="checkbox" checked={draft.active} onChange={(event) => update("active", event.target.checked)} /> Aktivní</label>
+    <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+  </form>;
+}
+
+function WorkAssignmentOverview({ data, workers, options, canManage, onSaveAssignment, onSaveException }: { data: WorkerPlanningData; workers: AttendanceWorker[]; options: PlanOptions; canManage: boolean; onSaveAssignment: (item: WorkerWorkAssignment) => Promise<void>; onSaveException: (item: WorkerScheduleException) => Promise<void> }) {
+  const today = localDateKey();
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const [assignment, setAssignment] = useState<WorkerWorkAssignment | null>(null);
+  const [exception, setException] = useState<WorkerScheduleException | null>(null);
+  const current = data.assignments.filter((item) => assignmentOverlapsMonth(item, month));
+  const blankAssignment = (): WorkerWorkAssignment => ({ id: "", workerId: "", workerName: "", buildingId: "", buildingName: "", floorId: null, floorName: null, areaLabel: "", weekdays: [1, 3, 5], validFrom: today, validTo: null, active: true });
+  const blankException = (): WorkerScheduleException => ({ id: "", workerId: "", workerName: "", date: today, planned: false, buildingId: null, buildingName: null, floorId: null, floorName: null, areaLabel: null, note: "", active: true });
+  return <div className="work-assignment-screen">
+    <section className="panel"><p className="eyebrow">ROZDĚLENÍ PRÁCE</p><h2>Stabilní pracovní oblasti</h2><p className="hint">Určuje, kdo běžně pracuje v jednotlivé dny. Jednotlivé úkoly zůstávají společné pro celý tým.</p>{!data.available && <div className="notice">Databázový model ještě není aktivní. Nejprve zkontrolujte a aplikujte migraci 03100.</div>}{canManage && data.available && <div className="worker-plan-actions"><button onClick={() => setAssignment(blankAssignment())}>+ Přidat nové období</button><button onClick={() => setException(blankException())}>+ Přidat výjimku</button></div>}</section>
+    {assignment && <WorkerAssignmentEditor item={assignment} workers={workers} options={options} onCancel={() => setAssignment(null)} onSave={onSaveAssignment} />}
+    {exception && <WorkerExceptionEditor item={exception} workers={workers} options={options} onCancel={() => setException(null)} onSave={onSaveException} />}
+    <label className="worker-plan-month">Zobrazený měsíc<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label>
+    <section className="worker-assignment-list">{current.map((item) => <button className={item.active ? "" : "inactive"} key={item.id} disabled={!canManage} onClick={() => setAssignment(item)}><span><b>{item.workerName}{!item.active ? " · Neaktivní" : ""}</b><small>{item.buildingName} · {item.areaLabel}</small><i>{item.validFrom}{item.validTo ? ` – ${item.validTo}` : " – bez konce"}</i></span><em>{weekdays.filter((_, index) => item.weekdays.includes(index + 1)).join(" · ")}</em></button>)}{data.available && current.length === 0 && <p className="hint">Pro tento měsíc zatím není uložené žádné pracovní rozdělení.</p>}</section>
+    {data.exceptions.length > 0 && <details className="worker-exception-list"><summary>Výjimky rozvrhu</summary>{data.exceptions.slice().sort((a, b) => b.date.localeCompare(a.date)).map((item) => <button key={item.id} disabled={!canManage} onClick={() => setException(item)}><b>{formatDate(item.date)} · {item.workerName}</b><span>{item.planned ? `Výjimečně: ${item.buildingName ?? "pracoviště"} · ${item.areaLabel ?? "oblast"}` : "Nepřijde"}</span>{item.note && <small>{item.note}</small>}</button>)}</details>}
+  </div>;
+}
+
 function MoreScreen({
   profile,
   pendingCount,
@@ -3253,6 +3343,7 @@ function MoreScreen({
   onOpenRooms,
   onOpenUsers,
   onOpenCleaningDays,
+  onOpenAssignments,
   onOpenManual,
   workplaces,
   appSettings,
@@ -3266,6 +3357,7 @@ function MoreScreen({
   onOpenRooms: () => void;
   onOpenUsers: () => Promise<void>;
   onOpenCleaningDays: () => void;
+  onOpenAssignments: () => void;
   onOpenManual: () => void;
   workplaces: Workplace[];
   appSettings: AppSettings;
@@ -3291,6 +3383,7 @@ function MoreScreen({
           <button onClick={onOpenPlan}><span><b>Plán úklidu</b><small>Patra, místnosti a činnosti</small></span><i>›</i></button>
           <button onClick={onOpenRooms}><span><b>Místnosti</b><small>Struktura školy a aktivní místnosti</small></span><i>›</i></button>
           <button onClick={onOpenCleaningDays}><span><b>Úklidové dny</b><small>Mimořádné úklidy a přesuny</small></span><i>›</i></button>
+          <button onClick={onOpenAssignments}><span><b>Pracovní rozdělení</b><small>Pracovníci, oblasti, dny a výjimky</small></span><i>›</i></button>
           {profile.is_owner && (
             <button onClick={() => void onOpenUsers()}>
               <span><b>Uživatelé</b><small>Role a čekající účty</small></span>
@@ -3657,49 +3750,36 @@ function calendarContextForDate(tasks: Task[], records: CleaningDayRecord[], dat
 
 function CalendarDayCell({ summary, month, selected, onSelect }: { summary: CalendarDaySummary; month: string; selected: boolean; onSelect: (date: string, outside: boolean) => void }) {
   const outside = summary.date.slice(0, 7) !== month;
-  const visibleSections = summary.sections.filter((section) => !section.staircase && /^[1-4]$/.test(section.marker));
-  const hasStaircase = summary.sections.some((section) => section.staircase);
   const aria = [
     formatDate(summary.date),
-    ...summary.workplaces.map((workplace) => workplace.name),
-    ...summary.sections.map((section) => `${section.name}${section.rotating ? " – rotace" : ""}`),
+    ...summary.workers.map((worker) => `${worker.workerName}, ${worker.buildingName}`),
     ...summary.extraCategories.map((category) => category.label),
     ...summary.extraordinary.map((title) => `Mimořádně: ${title}`),
     ...summary.rescheduled.map((title) => `Přesunuto: ${title}`),
   ].join(", ");
   return <button
-    className={`calendar-day${outside ? " outside" : ""}${summary.isWeekend ? " weekend" : ""}${summary.isToday ? " today" : ""}${selected ? " selected" : ""}${summary.workplaces.length ? " has-work" : ""}${summary.workplaces.some((item) => item.name === "Školka") ? " kindergarten-day" : ""}`}
+    className={`calendar-day${outside ? " outside" : ""}${summary.isWeekend ? " weekend" : ""}${summary.isToday ? " today" : ""}${selected ? " selected" : ""}${summary.workers.length || summary.extraCategories.length ? " has-work" : ""}${summary.workers.some((item) => item.buildingName === "Školka") ? " kindergarten-day" : ""}`}
     onClick={() => onSelect(summary.date, outside)}
     aria-label={aria}
   >
     <strong>{Number(summary.date.slice(8, 10))}</strong>
-    {summary.workplaces.length > 0 && <span className="calendar-workplaces">{summary.workplaces.map((workplace) => <i key={workplace.name} title={workplace.name}>{workplace.icon}</i>)}</span>}
-    {visibleSections.length > 0 && <span className="calendar-sections">{visibleSections.map((section) => <i className={section.rotating ? "rotation" : ""} key={`${section.workplace}|${section.name}`}>{section.rotating ? circledFloor(section.marker) : section.marker}</i>)}</span>}
-    {(summary.extraordinary.length > 0 || summary.rescheduled.length > 0 || summary.cancelledExceptions.length > 0 || summary.movedTo || hasStaircase || summary.extraCategories.length > 0) && <span className="calendar-specials">
+    {summary.workers.length > 0 && <span className="calendar-workers">{summary.workers.slice(0, 3).map((worker) => <i className={`worker-color-${worker.colorIndex}`} key={`${worker.workerId}|${worker.buildingId}`} title={`${worker.workerName} · ${worker.buildingName}`}>{worker.initials}</i>)}</span>}
+    {(summary.extraordinary.length > 0 || summary.rescheduled.length > 0 || summary.cancelledExceptions.length > 0 || summary.movedTo || summary.extraCategories.length > 0) && <span className="calendar-specials">
       {summary.extraordinary.length > 0 && <i title="Mimořádný úklid">⚠</i>}
       {summary.rescheduled.length > 0 && <i title="Přesunutý úklid">↪</i>}
       {summary.cancelledExceptions.length > 0 && <i title="Zrušený úklid">×</i>}
       {summary.movedTo && <i title={`Přesunuto na ${formatDate(summary.movedTo)}`}>↗</i>}
-      {hasStaircase && <i title="Schodiště">🪜</i>}
       {summary.extraCategories.slice(0, 3).map((category) => <i key={category.key} title={category.label}>{category.icon}</i>)}
     </span>}
   </button>;
 }
 
 function CalendarLegend() {
-  return <details className="calendar-legend"><summary>ⓘ Legenda</summary><div><span>🏫 Škola</span><span>🌱 Školka</span><span>②/③ rotace</span><span>🪜 schody</span><span>🧺 praní</span><span>⚠ mimořádně</span><small>Další symboly označují práci navíc.</small></div></details>;
+  return <details className="calendar-legend"><summary>ⓘ Legenda</summary><div><span>Iniciály = pracovníci</span><span>🪟 okna</span><span>🚪 dveře</span><span>🪜 schody</span><span>🧺 praní</span><span>⚠ mimořádně</span><small>Kalendář ukazuje jen pracovní rozdělení a práci navíc.</small></div></details>;
 }
 
-function CalendarDayDetail({ summary }: { summary: CalendarDaySummary }) {
-  const { date, tasks, context } = summary;
-  const buildings = new Map<string, Map<string, Map<string, Task[]>>>();
-  tasks.forEach((task) => {
-    const floors = buildings.get(task.building) ?? new Map<string, Map<string, Task[]>>();
-    const rooms = floors.get(task.floor) ?? new Map<string, Task[]>();
-    rooms.set(task.room, [...(rooms.get(task.room) ?? []), task]);
-    floors.set(task.floor, rooms);
-    buildings.set(task.building, floors);
-  });
+function CalendarDayDetail({ summary, onOpenAssignments }: { summary: CalendarDaySummary; onOpenAssignments: () => void }) {
+  const { date, context } = summary;
   return (
     <section className="calendar-day-detail">
       <header><small>{summary.extraordinary.length ? "MIMOŘÁDNÝ ÚKLID" : summary.rescheduled.length ? "PŘESUNUTÝ ÚKLID" : context.kind === "moved_away" ? "PŘESUNUTÝ TERMÍN" : "PLÁN DNE"}</small><h2>{todayLabel(date)}</h2></header>
@@ -3708,24 +3788,9 @@ function CalendarDayDetail({ summary }: { summary: CalendarDaySummary }) {
       {summary.rescheduled.map((title) => <p className="calendar-rescheduled" key={title}><b>↪ PŘESUNUTÝ ÚKLID</b><span>{title}</span></p>)}
       {summary.cancelledExceptions.map((title) => <p className="calendar-cancelled" key={title}><b>× ZRUŠENÝ ÚKLID</b><span>{title}</span></p>)}
       {summary.movedTo && <p className="calendar-rescheduled"><b>ÚKLID PŘESUNUT</b><span>Nový termín: {formatDate(summary.movedTo)}</span></p>}
-      {summary.workplaces.map((workplace) => <section className="calendar-day-summary" key={workplace.name}>
-        <h3>{workplace.icon} {workplace.name}</h3>
-        <b className="calendar-detail-label">DNES UKLÍZÍME</b>
-        <div className="calendar-plan-lines">
-          {workplace.sections.map((section) => <span key={section.name}><b>{section.rotating ? "ROTACE" : section.staircase ? "SAMOSTATNĚ" : ""}</b><i>{section.name}</i></span>)}
-        </div>
-        {workplace.extraCategories.length > 0 && <div className="calendar-extra-summary"><b>DNES NAVÍC</b><div>{workplace.extraCategories.map((category) => <span key={category.key}><i>{category.icon}</i>{category.label}</span>)}</div></div>}
-      </section>)}
-      {tasks.length > 0 && <details className="calendar-full-plan"><summary>Zobrazit celý plán dne</summary>
-        {[...buildings.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([building, floors]) => <section className="calendar-detail-building" key={building}><h3>{building}</h3>
-          {[...floors.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([floor, rooms]) => (
-            <details key={floor} className="calendar-detail-floor"><summary><b>{floor}</b><span>{[...rooms.values()].reduce((sum, items) => sum + items.length, 0)} činností</span></summary>
-              {[...rooms.entries()].map(([room, roomTasks]) => <article key={room} className="calendar-detail-room"><b>{room}</b><div>{roomTasks.sort((a, b) => a.sortOrder - b.sortOrder).map((task) => <span key={task.id}><i>{activityTypes[task.activityType]?.icon ?? "✓"}</i>{task.title}</span>)}</div></article>)}
-            </details>
-          ))}
-        </section>)}
-      </details>}
-      {!tasks.length && !summary.movedTo && !summary.extraordinary.length && <p className="hint">V tento den není naplánovaný úklid.</p>}
+      <section className="calendar-day-summary"><b className="calendar-detail-label">V PRÁCI</b>{summary.workers.length > 0 ? <div className="calendar-worker-list">{summary.workers.map((worker) => <span key={`${worker.workerId}|${worker.buildingId}`}><i className={`worker-color-${worker.colorIndex}`}>{worker.initials}</i><b>{worker.workerName}</b><small>{worker.buildingName === "Školka" ? "🌱" : "🏫"} {worker.buildingName} · {worker.areaLabel}{worker.exception ? " · výjimečně" : ""}</small></span>)}</div> : <p className="hint">Nikdo není podle rozvrhu naplánovaný.</p>}</section>
+      {summary.extraCategories.length > 0 && <section className="calendar-day-summary"><b className="calendar-detail-label">DNES NAVÍC</b><div className="calendar-extra-detail">{summary.extraCategories.map((category) => <article key={category.key}><i>{category.icon}</i><span><b>{category.label}</b><small>{category.scopes.slice(0, 3).join(" · ")}{category.scopes.length > 3 ? ` · +${category.scopes.length - 3}` : ""}</small></span></article>)}</div></section>}
+      <p className="calendar-routine-note">Běžný úklid probíhá podle pracovního rozdělení. <button onClick={onOpenAssignments}>Zobrazit rozdělení práce</button></p>
     </section>
   );
 }
@@ -3737,6 +3802,8 @@ function CleaningCalendar({
   canManage,
   buildings,
   tasks,
+  planning,
+  onOpenAssignments,
   onSave,
   onCancel,
 }: {
@@ -3746,6 +3813,8 @@ function CleaningCalendar({
   canManage: boolean;
   buildings: PlanOptions["buildings"];
   tasks: Task[];
+  planning: WorkerPlanningData;
+  onOpenAssignments: () => void;
   onSave: (draft: CleaningDayDraft) => Promise<void>;
   onCancel: (id: string) => Promise<void>;
 }) {
@@ -3759,6 +3828,11 @@ function CleaningCalendar({
     () => buildingFilter === "all" ? records : records.filter((record) => record.buildingId === buildingFilter),
     [records, buildingFilter],
   );
+  const visiblePlanning = useMemo(() => buildingFilter === "all" ? planning : ({
+    ...planning,
+    assignments: planning.assignments.filter((item) => item.buildingId === buildingFilter),
+    exceptions: planning.exceptions.filter((item) => !item.planned || item.buildingId === buildingFilter),
+  }), [planning, buildingFilter]);
   const future = records.filter((item) => item.executionDate >= today).sort((a, b) => a.executionDate.localeCompare(b.executionDate));
   const resolvedCalendarDays = useMemo(() => monthGridDates(month).map((date) => ({
     date,
@@ -3767,12 +3841,12 @@ function CleaningCalendar({
   const calendarDays = useMemo(() => resolvedCalendarDays.map((item) => {
     const visibleTasks = filterCalendarTasks(item.tasks, buildingFilter);
     const context = calendarContextForDate(visibleTasks, visibleRecords, item.date);
-    return buildCalendarDaySummary({ date: item.date, today, tasks: visibleTasks, context, exceptions: visibleRecords });
-  }), [resolvedCalendarDays, buildingFilter, visibleRecords, today]);
+    return buildCalendarDaySummary({ date: item.date, today, tasks: visibleTasks, context, exceptions: visibleRecords, planning: visiblePlanning });
+  }), [resolvedCalendarDays, buildingFilter, visibleRecords, visiblePlanning, today]);
   const selected = calendarDays.find((item) => item.date === selectedDate)
     ?? (() => {
       const due = filterCalendarTasks(dueTasksForDate(planTasks, records, selectedDate), buildingFilter);
-      return buildCalendarDaySummary({ date: selectedDate, today, tasks: due, context: calendarContextForDate(due, visibleRecords, selectedDate), exceptions: visibleRecords });
+      return buildCalendarDaySummary({ date: selectedDate, today, tasks: due, context: calendarContextForDate(due, visibleRecords, selectedDate), exceptions: visibleRecords, planning: visiblePlanning });
     })();
   const moveMonth = (amount: number) => {
     const [year, monthNumber] = month.split("-").map(Number);
@@ -3787,9 +3861,10 @@ function CleaningCalendar({
     <div className="cleaning-calendar">
       <section className="panel calendar-intro">
         <p className="eyebrow">KALENDÁŘ ÚKLIDU</p>
-        <b>Stručně ukazuje pracoviště, prostory na řadě a práci navíc.</b>
-        <small>Po otevření dne lze zobrazit celý detail. Plán vychází ze stejného resolveru jako obrazovka Dnes.</small>
+        <b>Kdo je v práci a co se dělá navíc.</b>
+        <small>Běžný úklid se řídí stabilním pracovním rozdělením a v kalendáři se neopakuje.</small>
       </section>
+      {!planning.available && <div className="notice">Pracovní rozdělení se zobrazí po zkontrolování a aplikaci migrace 03100. Práce navíc zůstává dostupná.</div>}
       <div className="calendar-filter" role="group" aria-label="Filtrovat pracoviště"><button className={buildingFilter === "all" ? "active" : ""} onClick={() => setBuildingFilter("all")}>Vše</button>{buildings.map((building) => <button className={buildingFilter === building.id ? "active" : ""} key={building.id} onClick={() => setBuildingFilter(building.id)}>{building.name}</button>)}</div>
       {!available && (
         <div className="notice">Správa skutečných mimořádných a přesunutých dnů bude dostupná po zkontrolování a aplikaci migrace 01300.</div>
@@ -3813,7 +3888,7 @@ function CleaningCalendar({
         </div>
         <CalendarLegend />
       </section>
-      <CalendarDayDetail summary={selected} />
+      <CalendarDayDetail summary={selected} onOpenAssignments={onOpenAssignments} />
       <section className="calendar-list">
         <h2>Plánované výjimky</h2>
         {future.map((item) => (

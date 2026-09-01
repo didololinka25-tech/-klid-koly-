@@ -62,7 +62,7 @@ test('pátek agreguje 4F, Schodiště a praní bez taskových počtů v buňce',
   const summary = buildCalendarDaySummary({ date: '2026-09-04', today: '2026-09-01', tasks: due(fridayTasks, '2026-09-04'), context: resolveCleaningDay('2026-09-04', []) })
   assert.ok(summary.sections.some((item) => item.marker === '4'))
   assert.ok(summary.sections.some((item) => item.staircase))
-  assert.deepEqual(summary.extraCategories.map((item) => item.key), ['laundry'])
+  assert.deepEqual(summary.extraCategories.map((item) => item.key), ['staircase', 'laundry'])
 })
 
 test('Škola a Školka mohou být ve stejném dni a filtr pouze skryje druhé pracoviště', () => {
@@ -123,4 +123,23 @@ test('UI má 7 sloupců, today/selected/outside stavy, kompaktní legendu a žá
   assert.match(app, /function CalendarLegend/)
   assert.match(model, /schoolEvents: \[\]/)
   assert.doesNotMatch(app.slice(app.indexOf('function CalendarDayCell'), app.indexOf('function CalendarLegend')), /tasks\.length|úkolů/)
+  assert.doesNotMatch(app.slice(app.indexOf('function CalendarDayCell'), app.indexOf('function CalendarLegend')), /summary\.sections|summary\.workplaces/)
+})
+
+test('kalendář propojí skutečný pracovní rozvrh s extra prací a skryje standardní práci', () => {
+  const date = '2026-09-02'
+  const planning = {
+    available: true,
+    assignments: [{ id: 'a', workerId: 'worker-dana', workerName: 'Dana Nováková', buildingId: 'school', buildingName: 'Škola', floorId: 'f1', floorName: '1. patro', areaLabel: '1. patro', weekdays: [1, 3, 5], validFrom: '2026-09-01', validTo: null, active: true }],
+    exceptions: [],
+  }
+  const tasks = [
+    task({ id: 'standard', title: 'Vytřít podlahu', activityType: 'mop' }),
+    task({ id: 'windows', title: 'Umýt okna', activityType: 'windows', frequency: 'měsíčně', monthlyDay: 2, scheduleDays: [] }),
+  ]
+  const summary = buildCalendarDaySummary({ date, today: date, tasks: due(tasks, date), context: resolveCleaningDay(date, []), planning })
+  assert.equal(summary.workers.length, 1)
+  assert.equal(summary.workers[0].workerId, 'worker-dana')
+  assert.equal(summary.workers[0].initials, 'DN')
+  assert.deepEqual(summary.extraCategories.map((item) => item.key), ['windows'])
 })

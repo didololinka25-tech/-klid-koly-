@@ -1,6 +1,7 @@
 import type { Task } from './types'
 import type { CleaningDayContext } from './scheduling'
 import { isExtraCleaningTask, summarizeCleaningDay } from './cleaningPresentation.ts'
+import { workersForDate, type PlannedWorker, type WorkerPlanningData } from './workerPlanning.ts'
 
 export type CalendarExceptionInput = {
   kind: 'extraordinary' | 'rescheduled'
@@ -11,10 +12,11 @@ export type CalendarExceptionInput = {
 }
 
 export type CalendarExtraCategory = {
-  key: 'windows' | 'doors' | 'laundry' | 'furniture' | 'tiles' | 'deep_clean' | 'surfaces'
+  key: 'windows' | 'doors' | 'laundry' | 'furniture' | 'tiles' | 'deep_clean' | 'surfaces' | 'staircase'
   icon: string
   label: string
   taskCount: number
+  scopes: string[]
 }
 
 export type CalendarSectionSummary = {
@@ -36,6 +38,7 @@ export type CalendarDaySummary = {
   date: string
   isToday: boolean
   isWeekend: boolean
+  workers: PlannedWorker[]
   workplaces: CalendarWorkplaceSummary[]
   sections: CalendarSectionSummary[]
   rotatingSections: CalendarSectionSummary[]
@@ -51,7 +54,7 @@ export type CalendarDaySummary = {
   schoolEvents: Array<{ id: string; title: string; collision: boolean }>
 }
 
-const extraCategoryMeta: Record<CalendarExtraCategory['key'], Omit<CalendarExtraCategory, 'key' | 'taskCount'>> = {
+const extraCategoryMeta: Record<CalendarExtraCategory['key'], Pick<CalendarExtraCategory, 'icon' | 'label'>> = {
   windows: { icon: '🪟', label: 'Okna / skla' },
   doors: { icon: '🚪', label: 'Dveře' },
   laundry: { icon: '🧺', label: 'Praní' },
@@ -59,10 +62,12 @@ const extraCategoryMeta: Record<CalendarExtraCategory['key'], Omit<CalendarExtra
   tiles: { icon: '🧱', label: 'Obklady / sprcha' },
   deep_clean: { icon: '🧽', label: 'Hloubkový úklid' },
   surfaces: { icon: '🗄', label: 'Skříňky / povrchy' },
+  staircase: { icon: '🪜', label: 'Schodiště' },
 }
 
 function extraCategory(task: Task): CalendarExtraCategory['key'] | null {
   if (!isExtraCleaningTask(task)) return null
+  if (task.floor === 'Schodiště') return 'staircase'
   if (task.activityType === 'windows') return 'windows'
   if (task.activityType === 'doors') return 'doors'
   if (task.activityType === 'laundry') return 'laundry'
@@ -90,12 +95,14 @@ export function buildCalendarDaySummary({
   tasks,
   context,
   exceptions = [],
+  planning = { assignments: [], exceptions: [], available: false },
 }: {
   date: string
   today: string
   tasks: Task[]
   context: CleaningDayContext
   exceptions?: CalendarExceptionInput[]
+  planning?: WorkerPlanningData
 }): CalendarDaySummary {
   const cleaningTasks = tasks
   const buildingSummary = summarizeCleaningDay(cleaningTasks)
@@ -112,7 +119,10 @@ export function buildCalendarDaySummary({
       const category = extraCategory(task)
       if (category) categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1)
     })
-    return [...categoryCounts.entries()].map(([key, taskCount]) => ({ key, taskCount, ...extraCategoryMeta[key] }))
+    return [...categoryCounts.entries()].map(([key, taskCount]) => ({
+      key, taskCount, ...extraCategoryMeta[key],
+      scopes: [...new Set(items.filter((task) => extraCategory(task) === key).map((task) => `${task.building} · ${task.floor}${task.room && task.room !== 'Společné úkoly' ? ` · ${task.room}` : ''}`))],
+    }))
   }
   const activeExecuting = exceptions.filter((item) => item.status === 'active' && item.executionDate === date)
   const cancelled = exceptions.filter((item) => item.status === 'cancelled' && item.executionDate === date)
@@ -120,6 +130,7 @@ export function buildCalendarDaySummary({
     date,
     isToday: date === today,
     isWeekend: isWeekend(date),
+    workers: workersForDate(date, planning),
     workplaces: buildingSummary.map((workplace) => ({
       name: workplace.name,
       icon: workplace.name === 'Školka' ? '🌱' : '🏫',

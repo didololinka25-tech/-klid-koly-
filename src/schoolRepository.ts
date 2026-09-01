@@ -11,6 +11,7 @@ import { isSameTaskDefinition } from './taskValidation'
 import { pragueDateKey, validateAttendanceInterval } from './attendanceTime'
 import { attendanceStartValues } from './buildingScope'
 import { inferredBulkCompletable, isBulkCompletableTask } from './cleaningBulk'
+import type { WorkerPlanningData, WorkerScheduleException, WorkerWorkAssignment } from './workerPlanning'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -98,6 +99,19 @@ export type PlanOptions = {
   floors: { id: string; buildingId: string; name: string; sortOrder: number }[]
   rooms: { id: string; buildingId: string; floorId: string | null; name: string; floor: string; floorSort: number; building: string; active: boolean; sortOrder: number }[]
 }
+
+const mapWorkAssignment = (row: any): WorkerWorkAssignment => ({
+  id: row.id, workerId: row.worker_id, workerName: row.worker_name, buildingId: row.building_id,
+  buildingName: row.building_name, floorId: row.floor_id, floorName: row.floor_name,
+  areaLabel: row.area_label, weekdays: row.weekdays ?? [], validFrom: row.valid_from,
+  validTo: row.valid_to, active: Boolean(row.active),
+})
+const mapScheduleException = (row: any): WorkerScheduleException => ({
+  id: row.id, workerId: row.worker_id, workerName: row.worker_name, date: row.exception_date,
+  planned: Boolean(row.planned), buildingId: row.building_id, buildingName: row.building_name,
+  floorId: row.floor_id, floorName: row.floor_name, areaLabel: row.area_label,
+  note: row.note ?? '', active: Boolean(row.active),
+})
 
 const localToday = () => pragueDateKey(new Date())
 const missingRelation = (error: { code?: string; message?: string } | null) =>
@@ -528,6 +542,35 @@ export const schoolRepository = {
       rooms, buildings: (buildingResult.data ?? []).map((item: any) => ({ id: item.id, name: item.name, active: item.active })),
       editable: true, buildingScopeAvailable,
     }
+  },
+  workerPlanning: async (): Promise<WorkerPlanningData> => {
+    const { data, error } = await client().rpc('get_worker_work_planning')
+    if (missingFunction(error)) return { assignments: [], exceptions: [], available: false }
+    if (error) throw error
+    const payload = (data ?? {}) as { assignments?: any[]; exceptions?: any[] }
+    return {
+      assignments: (payload.assignments ?? []).map(mapWorkAssignment),
+      exceptions: (payload.exceptions ?? []).map(mapScheduleException),
+      available: true,
+    }
+  },
+  saveWorkerWorkAssignment: async (item: WorkerWorkAssignment) => {
+    const { error } = await client().rpc('admin_save_worker_work_assignment', {
+      target_id: item.id || null, target_worker_id: item.workerId, target_building_id: item.buildingId,
+      target_floor_id: item.floorId || null, target_area_label: item.areaLabel, target_weekdays: item.weekdays,
+      target_valid_from: item.validFrom, target_valid_to: item.validTo || null, target_active: item.active,
+    })
+    if (missingFunction(error)) throw new Error('Pracovní rozdělení ještě není v databázi aktivní. Aplikujte migraci 03100.')
+    if (error) throw error
+  },
+  saveWorkerScheduleException: async (item: WorkerScheduleException) => {
+    const { error } = await client().rpc('admin_save_worker_schedule_exception', {
+      target_id: item.id || null, target_worker_id: item.workerId, target_exception_date: item.date,
+      target_planned: item.planned, target_building_id: item.buildingId || null, target_floor_id: item.floorId || null,
+      target_area_label: item.areaLabel || null, target_note: item.note || '', target_active: item.active,
+    })
+    if (missingFunction(error)) throw new Error('Výjimky pracovního rozvrhu ještě nejsou v databázi aktivní. Aplikujte migraci 03100.')
+    if (error) throw error
   },
   undoBulkCompletion: async (actionId: string) => {
     const { error } = await client().rpc('undo_cleaning_tasks_bulk', { target_action_id: actionId })
