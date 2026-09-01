@@ -73,8 +73,11 @@ language plpgsql security definer set search_path=public as $$
 begin
   if not new.active then return new; end if;
   perform pg_advisory_xact_lock(hashtextextended(new.rotation_key||'|'||new.slot_index::text,3300));
-  if exists(select 1 from public.cleaning_rotation_slot_assignments old where old.rotation_key=new.rotation_key and old.slot_index=new.slot_index
-    and old.active and old.id<>new.id and daterange(old.valid_from,coalesce(old.valid_to,'infinity'::date),'[]') && daterange(new.valid_from,coalesce(new.valid_to,'infinity'::date),'[]'))
+  if exists(select 1 from public.cleaning_rotation_slot_assignments existing_slot
+    where existing_slot.rotation_key=new.rotation_key and existing_slot.slot_index=new.slot_index
+    and existing_slot.active and existing_slot.id<>new.id
+    and daterange(existing_slot.valid_from,coalesce(existing_slot.valid_to,'infinity'::date),'[]')
+      && daterange(new.valid_from,coalesce(new.valid_to,'infinity'::date),'[]'))
   then raise exception 'Platnost rotační pozice se překrývá s existujícím přiřazením.'; end if;
   return new;
 end $$;
@@ -87,7 +90,8 @@ values('school-fourth-floor','4. patro',date '2026-09-04',null,3)
 on conflict(rotation_key) do update set title=excluded.title,anchor_date=excluded.anchor_date,weekday=null,slot_count=excluded.slot_count,active=true,updated_at=now();
 insert into public.cleaning_rotation_slot_assignments(rotation_key,slot_index,worker_id,valid_from,active)
 select 'school-fourth-floor',slot,null,date '2026-09-04',true from generate_series(0,2) slot
-where not exists(select 1 from public.cleaning_rotation_slot_assignments old where old.rotation_key='school-fourth-floor' and old.slot_index=slot and old.active);
+where not exists(select 1 from public.cleaning_rotation_slot_assignments existing_slot
+  where existing_slot.rotation_key='school-fourth-floor' and existing_slot.slot_index=slot and existing_slot.active);
 
 -- Auditovatelná occurrence odděluje DUE od SCHEDULED FOR.
 create table if not exists public.cleaning_planner_occurrences (

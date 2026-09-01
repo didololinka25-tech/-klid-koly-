@@ -37,6 +37,14 @@ test('rotace používá UUID, RLS a admin RPC; frontend ji skutečně načítá 
   assert.match(app, /Pracovník<select/)
 })
 
+test('trigger rotace nekoliduje s PL/pgSQL OLD a NEW recordy', () => {
+  const triggerFunction = migration.match(/create or replace function public\.enforce_cleaning_rotation_slot_unambiguous\(\)[\s\S]*?end \$\$;/i)?.[0] ?? ''
+  assert.match(triggerFunction, /cleaning_rotation_slot_assignments existing_slot/i)
+  assert.match(triggerFunction, /existing_slot\.rotation_key\s*=\s*new\.rotation_key/i)
+  assert.doesNotMatch(triggerFunction, /\b(?:from|join)\s+public\.[a-z_]+\s+(?:old|new)\b/i)
+  assert.doesNotMatch(migration, /\b(?:from|join)\s+public\.[a-z_]+\s+(?:old|new)\b/i)
+})
+
 test('Dnes i Kalendář čtou stejný serverový planner a před 03300 mají bezpečný fallback', () => {
   assert.match(repository, /get_dynamic_school_cleaning_plan/)
   assert.match(repository, /dynamicSchoolPlan/)
