@@ -13,6 +13,8 @@ export type Task = {
   completedBy?: string | null
   completedById?: string | null
   completedAt?: string | null
+  plannerReason?: 'routine' | 'wc-queue' | 'small' | 'large' | 'weekly-special' | 'overdue' | null
+  plannerAssignedWorkerId?: string | null
 }
 export type Shift = { worker: Worker; start: string; end: string }
 export type Attendance = {

@@ -81,7 +81,10 @@ test('pro pracovníka a datum je nejvýše jedna aktivní výjimka', () => {
 
 test('4. patro rotuje A → B → C souvisle přes hranici měsíce a podle UUID', () => {
   const data = {
-    ...planning([]),
+    ...planning([
+      assignment({ id: 'worker-a-shifts', workerId: 'uuid-a', workerName: 'Dana', floorId: null, areaLabel: 'Škola', weekdays: [5] }),
+      assignment({ id: 'worker-c-shifts', workerId: 'uuid-c', workerName: 'Cyril', floorId: null, areaLabel: 'Škola', weekdays: [5] }),
+    ]),
     rotationDefinitions: [{ rotationKey: 'school-fourth-floor', title: '4. patro', anchorDate: '2026-09-04', weekday: 5, slotCount: 3, active: true }],
     rotationSlots: [
       { id: 'a', rotationKey: 'school-fourth-floor', slotIndex: 0, workerId: 'uuid-a', workerName: 'Dana', validFrom: '2026-09-04', validTo: null, active: true },
@@ -93,5 +96,5 @@ test('4. patro rotuje A → B → C souvisle přes hranici měsíce a podle UUID
   assert.equal(cleaningRotationForDate('2026-09-11', data)?.assignment?.workerId, null, 'prázdná pozice je validní')
   data.rotationSlots[0].workerName = 'Nové zobrazované jméno'
   assert.equal(cleaningRotationForDate('2026-09-25', data)?.assignment?.workerId, 'uuid-a', 'přejmenování nemění identitu rotace')
-  assert.equal(cleaningRotationForDate('2026-09-05', data), null, 'rotace platí jen v nakonfigurovaný den')
+  assert.equal(cleaningRotationForDate('2026-09-05', data), null, 'rotace platí jen v dynamicky vybrané nejlepší směně')
 })

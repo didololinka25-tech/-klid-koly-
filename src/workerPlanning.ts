@@ -122,15 +122,34 @@ export type RotationForDate = {
   assignment?: CleaningRotationSlot
 }
 
-/** Stabilní A→B→C pořadí je odvozené jen z anchor date a UUID přiřazení, nikdy ze jména. */
+function addDays(date: string, amount: number) {
+  return new Date((utcDayNumber(date) + amount) * 86_400_000).toISOString().slice(0, 10)
+}
+
+function monday(date: string) {
+  const [year, month, day] = date.split('-').map(Number)
+  const value = new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7
+  return addDays(date, 1 - value)
+}
+
+function bestSchoolShiftInWeek(weekMonday: string, planning: WorkerPlanningData) {
+  const candidates = Array.from({ length: 7 }, (_, index) => addDays(weekMonday, index)).map((date) => ({
+    date,
+    count: workersForDate(date, planning).filter((worker) => worker.buildingName === 'Škola').length,
+  })).filter((item) => item.count >= 2)
+  return candidates.sort((a, b) => b.count - a.count || a.date.localeCompare(b.date))[0]?.date ?? null
+}
+
+/** Stabilní pořadí je odvozené z týdenních výskytů 4. patra a UUID, nikdy ze jména ani pevného pátku. */
 export function cleaningRotationForDate(date: string, planning: WorkerPlanningData, rotationKey = 'school-fourth-floor'): RotationForDate | null {
   const definition = (planning.rotationDefinitions ?? []).find((item) => item.rotationKey === rotationKey && item.active)
   if (!definition || date < definition.anchorDate) return null
-  const [year, month, day] = date.split('-').map(Number)
-  const weekdayValue = new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7
-  if (weekdayValue !== definition.weekday) return null
-  const weeks = Math.floor((utcDayNumber(date) - utcDayNumber(definition.anchorDate)) / 7)
-  const slotIndex = ((weeks % definition.slotCount) + definition.slotCount) % definition.slotCount
+  if (bestSchoolShiftInWeek(monday(date), planning) !== date) return null
+  let occurrenceIndex = 0
+  for (let week = monday(definition.anchorDate); week < monday(date); week = addDays(week, 7)) {
+    if (bestSchoolShiftInWeek(week, planning)) occurrenceIndex += 1
+  }
+  const slotIndex = occurrenceIndex % definition.slotCount
   const assignment = (planning.rotationSlots ?? [])
     .filter((item) => item.active && item.rotationKey === rotationKey && item.slotIndex === slotIndex && item.validFrom <= date && (!item.validTo || item.validTo >= date))
     .sort((a, b) => b.validFrom.localeCompare(a.validFrom))[0]

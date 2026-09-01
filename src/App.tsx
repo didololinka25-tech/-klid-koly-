@@ -917,10 +917,9 @@ export default function App() {
   const pendingCount = profile.is_owner
     ? users.filter((user) => user.active && user.role === "pending").length
     : 0;
-  const visible =
-    section === "Dnes"
-      ? tasks.filter((task) => task.active && task.dueToday)
-      : tasks;
+  const visible = section === "Dnes"
+    ? tasks.filter((task) => task.active && task.dueToday)
+    : tasks;
   const visibleDone = visible.filter((task) => task.done).length;
   const todayExtras = visible.filter((task) => !isFinalCheckTask(task) && isExtraCleaningTask(task));
   const todayExtrasDone = todayExtras.filter((task) => task.done).length;
@@ -1005,6 +1004,7 @@ export default function App() {
             <ArrivalReminders entries={manual.entries.filter((entry) => entry.entryType === "arrival" && entry.active)} />
           )}
           {visible.length > 0 && <TodayExtras tasks={todayExtras} done={todayExtrasDone} onComplete={complete} pendingTaskIds={pendingTaskIds} />}
+          {visible.some((task) => task.plannerReason === "wc-queue") && <p className="today-planner-note"><b>WC jsou dnes pokračující fronta.</b> Začněte od nejnižšího patra a označte pouze to, co se skutečně stihlo. Planner neurčuje umělý pevný počet WC.</p>}
           {accessRole(profile) === "visitor" && (
             <p className="readonly-note">Návštěvnický přístup je pouze pro čtení.</p>
           )}
@@ -3310,7 +3310,7 @@ function FourthFloorRotationEditor({ data, workers, canManage, onSave }: { data:
     setDraft(Object.fromEntries(Array.from({ length: definition.slotCount }, (_, slot) => [slot, currentFor(slot)?.workerId ?? ""])));
   }, [data.rotationSlots, definition?.slotCount, effectiveFrom]);
   if (!definition) return <section className="panel rotation-editor"><p className="eyebrow">ROTACE 4. PATRA</p><p className="hint">Rotace bude dostupná po aplikaci migrace 03300.</p></section>;
-  return <section className="panel rotation-editor"><p className="eyebrow">ROTACE 4. PATRA</p><h2>A → B → C každý pátek</h2><p className="hint">Pořadí běží souvisle od 4. 9. 2026. Prázdná pozice je povolená; nevytváří se žádný falešný účet.</p>{canManage && <label>Platnost změny od<input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} /></label>}<div className="rotation-slots">{Array.from({ length: definition.slotCount }, (_, slot) => <div key={slot}><b>Pozice {String.fromCharCode(65 + slot)}</b><select disabled={!canManage || saving !== null} value={draft[slot] ?? currentFor(slot)?.workerId ?? ""} onChange={(event) => setDraft((value) => ({ ...value, [slot]: event.target.value }))}><option value="">Zatím nepřiřazena</option>{workers.map((worker) => <option value={worker.id} key={worker.id}>{worker.name}</option>)}</select>{canManage && <button disabled={saving !== null} onClick={async () => { setSaving(slot); try { await onSave(slot, draft[slot] || null, effectiveFrom); } finally { setSaving(null); } }}>{saving === slot ? "Ukládám…" : "Uložit pozici"}</button>}</div>)}</div></section>;
+  return <section className="panel rotation-editor"><p className="eyebrow">ROTACE 4. PATRA</p><h2>Férové pořadí A → B → C</h2><p className="hint">Planner vybere nejlepší směnu týdne podle počtu pracovníků. Pozice pouze určují pořadí skutečných UUID pracovníků, nikoli pevný pátek. Prázdná pozice je povolená.</p>{canManage && <label>Platnost změny od<input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} /></label>}<div className="rotation-slots">{Array.from({ length: definition.slotCount }, (_, slot) => <div key={slot}><b>Pozice {String.fromCharCode(65 + slot)}</b><select disabled={!canManage || saving !== null} value={draft[slot] ?? currentFor(slot)?.workerId ?? ""} onChange={(event) => setDraft((value) => ({ ...value, [slot]: event.target.value }))}><option value="">Zatím nepřiřazena</option>{workers.map((worker) => <option value={worker.id} key={worker.id}>{worker.name}</option>)}</select>{canManage && <button disabled={saving !== null} onClick={async () => { setSaving(slot); try { await onSave(slot, draft[slot] || null, effectiveFrom); } finally { setSaving(null); } }}>{saving === slot ? "Ukládám…" : "Uložit pozici"}</button>}</div>)}</div></section>;
 }
 
 function WorkAssignmentOverview({ data, workers, options, canManage, onSaveAssignment, onSaveException, onSaveRotation }: { data: WorkerPlanningData; workers: AttendanceWorker[]; options: PlanOptions; canManage: boolean; onSaveAssignment: (item: WorkerWorkAssignment) => Promise<void>; onSaveException: (item: WorkerScheduleException) => Promise<void>; onSaveRotation: (slotIndex: number, workerId: string | null, effectiveFrom: string) => Promise<void> }) {
@@ -3733,6 +3733,31 @@ function dueTasksForDate(tasks: Task[], records: CleaningDayRecord[], date: stri
     });
 }
 
+function plannedTasksForDate(
+  tasks: Task[],
+  records: CleaningDayRecord[],
+  date: string,
+  serverTaskIds?: ReadonlySet<string>,
+) {
+  const fixed = dueTasksForDate(tasks, records, date);
+  if (!serverTaskIds) return fixed;
+  const schoolException = records.find((record) => record.buildingId && record.executionDate === date && record.status === "active");
+  return tasks.filter((task) => task.active && task.roomActive !== false).filter((task) => {
+    if (task.building !== "Škola" || schoolException?.kind === "extraordinary") return fixed.some((item) => item.id === task.id);
+    return serverTaskIds.has(task.id);
+  });
+}
+
+function serverPlanForCalendarDate(date: string, records: CleaningDayRecord[], plan: Map<string, Set<string>> | null) {
+  if (!plan) return undefined;
+  const movedAway = records.some((record) => record.status === "active" && record.kind === "rescheduled" && record.sourceDate === date);
+  if (movedAway) return new Set<string>();
+  const ids = new Set(plan.get(date) ?? []);
+  const rescheduled = records.find((record) => record.status === "active" && record.kind === "rescheduled" && record.executionDate === date && record.sourceDate);
+  if (rescheduled?.sourceDate) for (const id of plan.get(rescheduled.sourceDate) ?? []) ids.add(id);
+  return ids;
+}
+
 function calendarContextForDate(tasks: Task[], records: CleaningDayRecord[], date: string) {
   const active = records.filter((record) => record.status === "active");
   const executing = active.find((record) => record.executionDate === date);
@@ -3826,6 +3851,7 @@ function CleaningCalendar({
   const [selectedDate, setSelectedDate] = useState(today);
   const [buildingFilter, setBuildingFilter] = useState("all");
   const [workerFilter, setWorkerFilter] = useState("all");
+  const [serverDynamicPlan, setServerDynamicPlan] = useState<Map<string, Set<string>> | null>(null);
   const workerOptions = useMemo(() => {
     const values = new Map(calendarWorkerOptions(planning).map((worker) => [worker.id, worker.name]));
     availableWorkers.forEach((worker) => values.set(worker.id, worker.name));
@@ -3842,10 +3868,42 @@ function CleaningCalendar({
     exceptions: planning.exceptions.filter((item) => !item.planned || item.buildingId === buildingFilter),
   }), [planning, buildingFilter]);
   const future = records.filter((item) => item.executionDate >= today).sort((a, b) => a.executionDate.localeCompare(b.executionDate));
-  const resolvedCalendarDays = useMemo(() => monthGridDates(month).map((date) => ({
+  const gridDates = useMemo(() => monthGridDates(month), [month]);
+  useEffect(() => {
+    let active = true;
+    if (!gridDates.length) return;
+    const gridFrom = gridDates[0];
+    const gridTo = gridDates[gridDates.length - 1];
+    const outsideSourceDates = [...new Set(records
+      .filter((record) => record.status === "active" && record.kind === "rescheduled"
+        && record.executionDate >= gridFrom && record.executionDate <= gridTo && record.sourceDate
+        && (record.sourceDate < gridFrom || record.sourceDate > gridTo))
+      .map((record) => record.sourceDate as string))];
+    Promise.all([
+      schoolRepository.dynamicSchoolPlan(gridFrom, gridTo),
+      ...outsideSourceDates.map((sourceDate) => schoolRepository.dynamicSchoolPlan(sourceDate, sourceDate)),
+    ])
+      .then((values) => {
+        if (!active) return;
+        if (values.some((value) => value === null)) {
+          setServerDynamicPlan(null);
+          return;
+        }
+        const merged = new Map<string, Set<string>>();
+        values.forEach((value) => value?.forEach((ids, date) => {
+          const current = merged.get(date) ?? new Set<string>();
+          ids.forEach((id) => current.add(id));
+          merged.set(date, current);
+        }));
+        setServerDynamicPlan(merged);
+      })
+      .catch((error) => { console.error("Dynamický plán kalendáře se nepodařilo načíst:", error); if (active) setServerDynamicPlan(null); });
+    return () => { active = false; };
+  }, [gridDates, records]);
+  const resolvedCalendarDays = useMemo(() => gridDates.map((date) => ({
     date,
-    tasks: dueTasksForDate(planTasks, records, date),
-  })), [month, records, planTasks]);
+    tasks: plannedTasksForDate(planTasks, records, date, serverPlanForCalendarDate(date, records, serverDynamicPlan)),
+  })), [gridDates, records, planTasks, planning, serverDynamicPlan]);
   const calendarDays = useMemo(() => resolvedCalendarDays.map((item) => {
     const visibleTasks = filterCalendarTasks(item.tasks, buildingFilter);
     const context = calendarContextForDate(visibleTasks, visibleRecords, item.date);
@@ -3853,7 +3911,7 @@ function CleaningCalendar({
   }), [resolvedCalendarDays, buildingFilter, visibleRecords, visiblePlanning, workerFilter, today]);
   const selected = calendarDays.find((item) => item.date === selectedDate)
     ?? (() => {
-      const due = filterCalendarTasks(dueTasksForDate(planTasks, records, selectedDate), buildingFilter);
+      const due = filterCalendarTasks(plannedTasksForDate(planTasks, records, selectedDate, serverPlanForCalendarDate(selectedDate, records, serverDynamicPlan)), buildingFilter);
       return buildCalendarDaySummary({ date: selectedDate, today, tasks: due, context: calendarContextForDate(due, visibleRecords, selectedDate), exceptions: visibleRecords, planning: visiblePlanning, workerId: workerFilter });
     })();
   const moveMonth = (amount: number) => {
@@ -3870,7 +3928,7 @@ function CleaningCalendar({
       <section className="panel calendar-intro">
         <p className="eyebrow">KALENDÁŘ ÚKLIDU</p>
         <b>Kdo je v práci a co se dělá navíc.</b>
-        <small>Běžný úklid se řídí stabilním pracovním rozdělením a v kalendáři se neopakuje.</small>
+        <small>Plán se automaticky přepočítá podle skutečně naplánovaných pracovníků. Rutinní mikroúkoly kalendář nezaplňují.</small>
       </section>
       {!planning.available && <div className="notice">Pracovní rozdělení se zobrazí po zkontrolování a aplikaci migrace 03100. Práce navíc zůstává dostupná.</div>}
       <div className="calendar-filter" role="group" aria-label="Filtrovat pracoviště"><button className={buildingFilter === "all" ? "active" : ""} onClick={() => setBuildingFilter("all")}>Vše</button>{buildings.map((building) => <button className={buildingFilter === building.id ? "active" : ""} key={building.id} onClick={() => setBuildingFilter(building.id)}>{building.name}</button>)}</div>

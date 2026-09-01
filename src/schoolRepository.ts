@@ -227,6 +227,15 @@ export const schoolRepository = {
     const exceptions = (exceptionResult.data ?? []).map((row: any) => mapCleaningDay(row, overrides.get(row.id)))
     const defaultBuildingId = (buildings ?? []).find((item: any) => item.name === 'Škola')?.id
     const cleaningDay = resolveCleaningDay(date, exceptions.filter((item) => item.buildingId === defaultBuildingId), isTestCleaningDay)
+    const dynamicDates = [...new Set([date, cleaningDay.kind === 'rescheduled' ? cleaningDay.scheduleDate : null].filter((value): value is string => Boolean(value)))]
+    const dynamicPlanResults = isTestCleaningDay ? [] : await Promise.all(dynamicDates.map((target) =>
+      db.rpc('get_dynamic_school_cleaning_plan', { target_from: target, target_to: target })))
+    const dynamicPlanError = dynamicPlanResults.find((result) => result.error && !missingFunction(result.error))?.error
+    if (dynamicPlanError) throw dynamicPlanError
+    const dynamicRows = dynamicPlanResults.flatMap((result) => result.error ? [] : (result.data ?? []) as any[])
+    const dynamicSchoolRows = dynamicPlanResults.some((result) => !result.error)
+      ? new Map(dynamicRows.map((item) => [item.task_id, item]))
+      : null
     const roomById = new Map((rooms ?? []).map((room: any) => [room.id, room]))
     const floorById = new Map((floors ?? []).map((floor: any) => [floor.id, floor]))
     const buildingById = new Map((buildings ?? []).map((building: any) => [building.id, building]))
@@ -260,18 +269,37 @@ export const schoolRepository = {
         buildingId: building?.id ?? defaultBuildingId, building: building?.name ?? 'Škola', title: row.name, activityType: row.activity_type ?? 'other', frequency: frequency[row.frequency] ?? 'mimořádně',
         assignedTo: 'Úklidový tým', done: completionByTask.get(row.id)?.completed ?? false, prerequisite: row.requires_task_id,
         canComplete: canWork(profile) && !isTestCleaningDay && (!(completionByTask.get(row.id)?.completed ?? false) || completionByTask.get(row.id)?.worker_id === profile.id || accessRole(profile) === 'admin'),
-        dueToday: room?.active !== false && isTaskDueForCleaningDay(row, resolveCleaningDay(date, exceptions.filter((item) => item.buildingId === (building?.id ?? defaultBuildingId)), isTestCleaningDay)), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
+        dueToday: room?.active !== false && (() => {
+          const context = resolveCleaningDay(date, exceptions.filter((item) => item.buildingId === (building?.id ?? defaultBuildingId)), isTestCleaningDay)
+          if (building?.name === 'Škola' && dynamicSchoolRows && ['standard', 'rescheduled'].includes(context.kind)) return dynamicSchoolRows.has(row.id)
+          return isTaskDueForCleaningDay(row, context)
+        })(), sortOrder: row.sort_order, scheduleDays, monthlyDay: row.monthly_day,
         active: row.active, roomActive: room?.active ?? true,
         cleaningCycleLength: row.cleaning_cycle_length, cleaningCycleOffset: row.cleaning_cycle_offset,
         periodMonths: row.period_months, periodWeek: row.period_week, periodAnchorMonth: row.period_anchor_month,
         completedBy: completionByTask.get(row.id)?.worker_name ?? null,
         completedById: completionByTask.get(row.id)?.worker_id ?? null,
         completedAt: completionByTask.get(row.id)?.completed_at ?? null,
+        plannerReason: dynamicSchoolRows?.get(row.id)?.plan_reason ?? null,
+        plannerAssignedWorkerId: dynamicSchoolRows?.get(row.id)?.assigned_worker_id ?? null,
       }
       mapped.bulkCompletable = typeof row.bulk_completable === 'boolean' ? row.bulk_completable : inferredBulkCompletable(mapped)
       return mapped
     })
     return { dateKey: date, tasks, bulkActions, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
+  },
+  dynamicSchoolPlan: async (from: string, to: string): Promise<Map<string, Set<string>> | null> => {
+    const result = await client().rpc('get_dynamic_school_cleaning_plan', { target_from: from, target_to: to })
+    if (missingFunction(result.error)) return null
+    if (result.error) throw result.error
+    const byDate = new Map<string, Set<string>>()
+    for (const row of result.data ?? []) {
+      const date = String((row as any).scheduled_date)
+      const ids = byDate.get(date) ?? new Set<string>()
+      ids.add(String((row as any).task_id))
+      byDate.set(date, ids)
+    }
+    return byDate
   },
   planOptions: async (buildingId?: string): Promise<PlanOptions> => {
     const db = client()
