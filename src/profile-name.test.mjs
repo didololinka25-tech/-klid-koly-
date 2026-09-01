@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const migration = readFileSync(new URL('../supabase/migrations/20260831002900_restore_own_profile_name_rpc.sql', import.meta.url), 'utf8')
+const preservationMigration = readFileSync(new URL('../supabase/migrations/20260901003200_preserve_profile_display_name.sql', import.meta.url), 'utf8')
 const repository = readFileSync(new URL('./schoolRepository.ts', import.meta.url), 'utf8')
 const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 const rpcBody = migration.match(/create or replace function public\.update_own_profile_name[\s\S]*?\n\$\$;/i)?.[0] ?? ''
@@ -46,4 +47,18 @@ test('chyba RPC zůstane uživateli čitelná a formulář se zavře jen po úsp
   assert.match(repository, /if \(error\) throw new Error\(error\.message/)
   assert.match(app, /const savedName = await schoolRepository\.updateOwnProfileName\(fullName\);[\s\S]*setProfileEditorOpen\(false\)/)
   assert.match(app, /catch \(error\)[\s\S]*error instanceof Error \? error\.message/)
+})
+
+test('auth refresh a další Google login zachovají uživatelem uložené full_name', () => {
+  assert.match(preservationMigration, /create or replace function public\.handle_new_user\(\)/i)
+  assert.match(preservationMigration, /coalesce\(nullif\(btrim\(profiles\.full_name\), ''\), excluded\.full_name\)/i)
+  assert.doesNotMatch(preservationMigration, /set full_name = excluded\.full_name,/i)
+  assert.match(preservationMigration, /after update of email, last_sign_in_at, raw_user_meta_data on auth\.users/i)
+})
+
+test('oprava auth synchronizace nemění role, owner ani existující profily hromadným updatem', () => {
+  assert.doesNotMatch(preservationMigration, /update public\.profiles\s+set/i)
+  assert.doesNotMatch(preservationMigration, /is_owner\s*=/i)
+  assert.doesNotMatch(preservationMigration, /access_role\s*=\s*excluded/i)
+  assert.match(preservationMigration, /revoke all on function public\.handle_new_user\(\) from public, anon, authenticated/i)
 })

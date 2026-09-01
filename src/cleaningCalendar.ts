@@ -12,8 +12,9 @@ export type CalendarExceptionInput = {
 }
 
 export type CalendarExtraCategory = {
-  key: 'windows' | 'doors' | 'laundry' | 'furniture' | 'tiles' | 'deep_clean' | 'surfaces' | 'staircase'
-  icon: string
+  key: 'windows' | 'doors' | 'laundry' | 'furniture' | 'tiles' | 'deep_clean' | 'surfaces' | 'staircase' | 'floors' | 'mirrors' | 'other'
+  /** Krátká ASCII značka; na rozdíl od emoji je spolehlivá v každé PWA fontové sadě. */
+  symbol: string
   label: string
   taskCount: number
   scopes: string[]
@@ -54,15 +55,18 @@ export type CalendarDaySummary = {
   schoolEvents: Array<{ id: string; title: string; collision: boolean }>
 }
 
-const extraCategoryMeta: Record<CalendarExtraCategory['key'], Pick<CalendarExtraCategory, 'icon' | 'label'>> = {
-  windows: { icon: '🪟', label: 'Okna / skla' },
-  doors: { icon: '🚪', label: 'Dveře' },
-  laundry: { icon: '🧺', label: 'Praní' },
-  furniture: { icon: '🪑', label: 'Stoly / lavičky' },
-  tiles: { icon: '🧱', label: 'Obklady / sprcha' },
-  deep_clean: { icon: '🧽', label: 'Hloubkový úklid' },
-  surfaces: { icon: '🗄', label: 'Skříňky / povrchy' },
-  staircase: { icon: '🪜', label: 'Schodiště' },
+const extraCategoryMeta: Record<CalendarExtraCategory['key'], Pick<CalendarExtraCategory, 'symbol' | 'label'>> = {
+  windows: { symbol: 'OK', label: 'Okna / skla' },
+  doors: { symbol: 'DV', label: 'Dveře' },
+  laundry: { symbol: 'PR', label: 'Praní' },
+  furniture: { symbol: 'ST', label: 'Stoly / lavičky' },
+  tiles: { symbol: 'OB', label: 'Obklady / sprcha' },
+  deep_clean: { symbol: 'HL', label: 'Hloubkový úklid' },
+  surfaces: { symbol: 'PO', label: 'Skříňky / povrchy' },
+  staircase: { symbol: 'SCH', label: 'Schodiště' },
+  floors: { symbol: 'PD', label: 'Podlahy / koberce' },
+  mirrors: { symbol: 'ZR', label: 'Zrcadla' },
+  other: { symbol: '+', label: 'Další práce' },
 }
 
 function extraCategory(task: Task): CalendarExtraCategory['key'] | null {
@@ -75,7 +79,9 @@ function extraCategory(task: Task): CalendarExtraCategory['key'] | null {
   if (task.activityType === 'tiles') return 'tiles'
   if (task.activityType === 'deep_clean') return 'deep_clean'
   if (task.activityType === 'surfaces') return 'surfaces'
-  return null
+  if (task.activityType === 'vacuum' || task.activityType === 'mop') return 'floors'
+  if (task.activityType === 'mirror') return 'mirrors'
+  return 'other'
 }
 
 function sectionMarker(name: string) {
@@ -133,7 +139,7 @@ export function buildCalendarDaySummary({
     workers: workersForDate(date, planning),
     workplaces: buildingSummary.map((workplace) => ({
       name: workplace.name,
-      icon: workplace.name === 'Školka' ? '🌱' : '🏫',
+      icon: workplace.name === 'Školka' ? 'MŠ' : 'Š',
       sections: sections.filter((section) => section.workplace === workplace.name),
       extraCategories: categoriesFor(cleaningTasks.filter((task) => task.building === workplace.name)),
     })),

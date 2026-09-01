@@ -44,7 +44,7 @@ test('summary ukáže Školu, 1F a skutečnou rotaci 2F/3F bez běžných mikroi
   ]
   const mondayTasks = due(plan, '2026-08-31')
   const monday = buildCalendarDaySummary({ date: '2026-08-31', today: '2026-08-31', tasks: mondayTasks, context: resolveCleaningDay('2026-08-31', []) })
-  assert.deepEqual(monday.workplaces.map((item) => [item.icon, item.name]), [['🏫', 'Škola']])
+  assert.deepEqual(monday.workplaces.map((item) => [item.icon, item.name]), [['Š', 'Škola']])
   assert.deepEqual(monday.sections.map((item) => [item.marker, item.rotating]), [['1', false], ['2', true]])
   assert.equal(circledFloor(monday.rotatingSections[0].marker), '②')
   assert.deepEqual(monday.extraCategories, [])
@@ -62,7 +62,20 @@ test('pátek agreguje 4F, Schodiště a praní bez taskových počtů v buňce',
   const summary = buildCalendarDaySummary({ date: '2026-09-04', today: '2026-09-01', tasks: due(fridayTasks, '2026-09-04'), context: resolveCleaningDay('2026-09-04', []) })
   assert.ok(summary.sections.some((item) => item.marker === '4'))
   assert.ok(summary.sections.some((item) => item.staircase))
-  assert.deepEqual(summary.extraCategories.map((item) => item.key), ['staircase', 'laundry'])
+  assert.deepEqual(summary.extraCategories.map((item) => item.key), ['floors', 'staircase', 'laundry'])
+})
+
+test('každá práce navíc dostane čitelnou kategorii a v kalendáři se neztratí', () => {
+  const date = '2026-09-04'
+  const tasks = [
+    task({ id: 'mirror', activityType: 'mirror', frequency: 'týdně', scheduleDays: [5], title: 'Vyčistit zrcadlo' }),
+    task({ id: 'floor', activityType: 'vacuum', frequency: 'týdně', scheduleDays: [5], title: 'Vysát koberec' }),
+    task({ id: 'unknown', activityType: 'other', frequency: 'týdně', scheduleDays: [5], title: 'Samostatná kontrola' }),
+  ]
+  const summary = buildCalendarDaySummary({ date, today: date, tasks: due(tasks, date), context: resolveCleaningDay(date, []) })
+  assert.deepEqual(summary.extraCategories.map((item) => [item.key, item.label]), [
+    ['mirrors', 'Zrcadla'], ['floors', 'Podlahy / koberce'], ['other', 'Další práce'],
+  ])
 })
 
 test('Škola a Školka mohou být ve stejném dni a filtr pouze skryje druhé pracoviště', () => {
@@ -70,7 +83,7 @@ test('Škola a Školka mohou být ve stejném dni a filtr pouze skryje druhé pr
   const kindergarten = task({ id: 'kg', buildingId: 'kg', building: 'Školka', floor: 'Prostory', roomId: 'kg-room', room: 'Kuchyň', scheduleDays: [2] })
   const tasks = [school, kindergarten]
   const summary = buildCalendarDaySummary({ date: '2026-09-01', today: '2026-09-01', tasks, context: resolveCleaningDay('2026-09-01', []) })
-  assert.deepEqual(summary.workplaces.map((item) => item.icon), ['🏫', '🌱'])
+  assert.deepEqual(summary.workplaces.map((item) => item.icon), ['Š', 'MŠ'])
   assert.deepEqual(filterCalendarTasks(tasks, 'kg').map((item) => item.id), ['kg'])
   assert.equal(filterCalendarTasks(tasks, 'all').length, 2)
 })
@@ -142,4 +155,28 @@ test('kalendář propojí skutečný pracovní rozvrh s extra prací a skryje st
   assert.equal(summary.workers[0].workerId, 'worker-dana')
   assert.equal(summary.workers[0].initials, 'DN')
   assert.deepEqual(summary.extraCategories.map((item) => item.key), ['windows'])
+  assert.deepEqual(summary.extraCategories.map((item) => [item.symbol, item.label]), [['OK', 'Okna / skla']])
+})
+
+test('month cell používá textové extra labely, omezení pracovníků a žádné emoji ikony', () => {
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const model = readFileSync(new URL('./cleaningCalendar.ts', import.meta.url), 'utf8')
+  const cell = app.slice(app.indexOf('function CalendarDayCell'), app.indexOf('function CalendarLegend'))
+  const detail = app.slice(app.indexOf('function CalendarDayDetail'), app.indexOf('function CleaningCalendar'))
+  assert.match(cell, /summary\.workers\.slice\(0, 2\)/)
+  assert.match(cell, /summary\.workers\.length - 2/)
+  assert.match(cell, /category\.label/)
+  assert.match(cell, /category\.symbol/)
+  assert.match(detail, /category\.scopes\.map/)
+  assert.doesNotMatch(cell, /\p{Extended_Pictographic}/u)
+  assert.doesNotMatch(model, /\p{Extended_Pictographic}/u)
+})
+
+test('kalendář má čitelné mobilní a desktop varianty bez horizontálního přetečení', () => {
+  const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
+  assert.match(css, /@media \(max-width: 430px\)[\s\S]*\.calendar-day \{ min-height: 88px/)
+  assert.match(css, /\.calendar-extras-mobile \{ display: grid/)
+  assert.match(css, /@media \(min-width: 800px\)[\s\S]*\.calendar-extras-desktop \{ display: grid/)
+  assert.match(css, /\.calendar-day \{ min-width: 0;[\s\S]*overflow: hidden/)
+  assert.match(css, /text-overflow: ellipsis/)
 })

@@ -3763,19 +3763,20 @@ function CalendarDayCell({ summary, month, selected, onSelect }: { summary: Cale
     aria-label={aria}
   >
     <strong>{Number(summary.date.slice(8, 10))}</strong>
-    {summary.workers.length > 0 && <span className="calendar-workers">{summary.workers.slice(0, 3).map((worker) => <i className={`worker-color-${worker.colorIndex}`} key={`${worker.workerId}|${worker.buildingId}`} title={`${worker.workerName} · ${worker.buildingName}`}>{worker.initials}</i>)}</span>}
+    {summary.workers.length > 0 && <span className="calendar-workers">{summary.workers.slice(0, 2).map((worker) => <i className={`worker-color-${worker.colorIndex}`} key={`${worker.workerId}|${worker.buildingId}`} title={`${worker.workerName} · ${worker.buildingName}`}>{worker.initials}</i>)}{summary.workers.length > 2 && <b>+{summary.workers.length - 2}</b>}</span>}
     {(summary.extraordinary.length > 0 || summary.rescheduled.length > 0 || summary.cancelledExceptions.length > 0 || summary.movedTo || summary.extraCategories.length > 0) && <span className="calendar-specials">
-      {summary.extraordinary.length > 0 && <i title="Mimořádný úklid">⚠</i>}
-      {summary.rescheduled.length > 0 && <i title="Přesunutý úklid">↪</i>}
-      {summary.cancelledExceptions.length > 0 && <i title="Zrušený úklid">×</i>}
-      {summary.movedTo && <i title={`Přesunuto na ${formatDate(summary.movedTo)}`}>↗</i>}
-      {summary.extraCategories.slice(0, 3).map((category) => <i key={category.key} title={category.label}>{category.icon}</i>)}
+      {summary.extraordinary.length > 0 && <em>Mimořádně</em>}
+      {summary.rescheduled.length > 0 && <em>Přesunuto</em>}
+      {summary.cancelledExceptions.length > 0 && <em>Zrušeno</em>}
+      {summary.movedTo && <em title={`Přesunuto na ${formatDate(summary.movedTo)}`}>Jiný termín</em>}
+      <span className="calendar-extras-mobile">{summary.extraCategories.slice(0, 1).map((category) => <em key={category.key}><i>{category.symbol}</i>{category.label}</em>)}{summary.extraCategories.length > 1 && <b>+{summary.extraCategories.length - 1}</b>}</span>
+      <span className="calendar-extras-desktop">{summary.extraCategories.slice(0, 2).map((category) => <em key={category.key}><i>{category.symbol}</i>{category.label}</em>)}{summary.extraCategories.length > 2 && <b>+{summary.extraCategories.length - 2} další</b>}</span>
     </span>}
   </button>;
 }
 
 function CalendarLegend() {
-  return <details className="calendar-legend"><summary>ⓘ Legenda</summary><div><span>Iniciály = pracovníci</span><span>🪟 okna</span><span>🚪 dveře</span><span>🪜 schody</span><span>🧺 praní</span><span>⚠ mimořádně</span><small>Kalendář ukazuje jen pracovní rozdělení a práci navíc.</small></div></details>;
+  return <details className="calendar-legend"><summary>Legenda</summary><div><span>Iniciály = pracovníci</span><span>OK = okna</span><span>DV = dveře</span><span>SCH = schodiště</span><span>PR = praní</span><small>Kalendář ukazuje jen pracovní rozdělení a práci navíc.</small></div></details>;
 }
 
 function CalendarDayDetail({ summary, onOpenAssignments }: { summary: CalendarDaySummary; onOpenAssignments: () => void }) {
@@ -3784,12 +3785,12 @@ function CalendarDayDetail({ summary, onOpenAssignments }: { summary: CalendarDa
     <section className="calendar-day-detail">
       <header><small>{summary.extraordinary.length ? "MIMOŘÁDNÝ ÚKLID" : summary.rescheduled.length ? "PŘESUNUTÝ ÚKLID" : context.kind === "moved_away" ? "PŘESUNUTÝ TERMÍN" : "PLÁN DNE"}</small><h2>{todayLabel(date)}</h2></header>
       {context.note && <p>{context.note}</p>}
-      {summary.extraordinary.map((title) => <p className="calendar-extraordinary" key={title}><b>⚠ MIMOŘÁDNĚ</b><span>{title}</span></p>)}
-      {summary.rescheduled.map((title) => <p className="calendar-rescheduled" key={title}><b>↪ PŘESUNUTÝ ÚKLID</b><span>{title}</span></p>)}
-      {summary.cancelledExceptions.map((title) => <p className="calendar-cancelled" key={title}><b>× ZRUŠENÝ ÚKLID</b><span>{title}</span></p>)}
+      {summary.extraordinary.map((title) => <p className="calendar-extraordinary" key={title}><b>MIMOŘÁDNĚ</b><span>{title}</span></p>)}
+      {summary.rescheduled.map((title) => <p className="calendar-rescheduled" key={title}><b>PŘESUNUTÝ ÚKLID</b><span>{title}</span></p>)}
+      {summary.cancelledExceptions.map((title) => <p className="calendar-cancelled" key={title}><b>ZRUŠENÝ ÚKLID</b><span>{title}</span></p>)}
       {summary.movedTo && <p className="calendar-rescheduled"><b>ÚKLID PŘESUNUT</b><span>Nový termín: {formatDate(summary.movedTo)}</span></p>}
-      <section className="calendar-day-summary"><b className="calendar-detail-label">V PRÁCI</b>{summary.workers.length > 0 ? <div className="calendar-worker-list">{summary.workers.map((worker) => <span key={`${worker.workerId}|${worker.buildingId}`}><i className={`worker-color-${worker.colorIndex}`}>{worker.initials}</i><b>{worker.workerName}</b><small>{worker.buildingName === "Školka" ? "🌱" : "🏫"} {worker.buildingName} · {worker.areaLabel}{worker.exception ? " · výjimečně" : ""}</small></span>)}</div> : <p className="hint">Nikdo není podle rozvrhu naplánovaný.</p>}</section>
-      {summary.extraCategories.length > 0 && <section className="calendar-day-summary"><b className="calendar-detail-label">DNES NAVÍC</b><div className="calendar-extra-detail">{summary.extraCategories.map((category) => <article key={category.key}><i>{category.icon}</i><span><b>{category.label}</b><small>{category.scopes.slice(0, 3).join(" · ")}{category.scopes.length > 3 ? ` · +${category.scopes.length - 3}` : ""}</small></span></article>)}</div></section>}
+      <section className="calendar-day-summary"><b className="calendar-detail-label">V PRÁCI</b>{summary.workers.length > 0 ? <div className="calendar-worker-list">{summary.workers.map((worker) => <span key={`${worker.workerId}|${worker.buildingId}`}><i className={`worker-color-${worker.colorIndex}`}>{worker.initials}</i><b>{worker.workerName}</b><small>{worker.buildingName} · {worker.areaLabel}{worker.exception ? " · výjimečně" : ""}</small></span>)}</div> : <p className="hint">Nikdo není podle rozvrhu naplánovaný.</p>}</section>
+      {summary.extraCategories.length > 0 && <section className="calendar-day-summary"><b className="calendar-detail-label">DNES NAVÍC</b><div className="calendar-extra-detail">{summary.extraCategories.map((category) => <article key={category.key}><i>{category.symbol}</i><span><b>{category.label}</b><small>{category.taskCount} {category.taskCount === 1 ? "úkol" : category.taskCount < 5 ? "úkoly" : "úkolů"}</small><ul>{category.scopes.map((scope) => <li key={scope}>{scope}</li>)}</ul></span></article>)}</div></section>}
       <p className="calendar-routine-note">Běžný úklid probíhá podle pracovního rozdělení. <button onClick={onOpenAssignments}>Zobrazit rozdělení práce</button></p>
     </section>
   );
