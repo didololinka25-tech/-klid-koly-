@@ -89,9 +89,10 @@ insert into public.cleaning_rotation_definitions(rotation_key,title,anchor_date,
 values('school-fourth-floor','4. patro',date '2026-09-04',null,3)
 on conflict(rotation_key) do update set title=excluded.title,anchor_date=excluded.anchor_date,weekday=null,slot_count=excluded.slot_count,active=true,updated_at=now();
 insert into public.cleaning_rotation_slot_assignments(rotation_key,slot_index,worker_id,valid_from,active)
-select 'school-fourth-floor',slot,null,date '2026-09-04',true from generate_series(0,2) slot
+select 'school-fourth-floor',generated_slot.slot_number,null,date '2026-09-04',true
+from generate_series(0,2) as generated_slot(slot_number)
 where not exists(select 1 from public.cleaning_rotation_slot_assignments existing_slot
-  where existing_slot.rotation_key='school-fourth-floor' and existing_slot.slot_index=slot and existing_slot.active);
+  where existing_slot.rotation_key='school-fourth-floor' and existing_slot.slot_index=generated_slot.slot_number and existing_slot.active);
 
 -- Auditovatelná occurrence odděluje DUE od SCHEDULED FOR.
 create table if not exists public.cleaning_planner_occurrences (
@@ -160,19 +161,24 @@ language sql security definer stable set search_path=public as $$
 $$;
 create or replace function public.best_school_shift_for_week(target_date date) returns date
 language sql security definer stable set search_path=public as $$
-  select day::date from generate_series(date_trunc('week',target_date)::date,date_trunc('week',target_date)::date+6,interval '1 day') day
-  where public.school_worker_count_for_date(day::date)>=2 order by public.school_worker_count_for_date(day::date) desc,day::date limit 1;
+  select generated_day.plan_timestamp::date
+  from generate_series(date_trunc('week',target_date)::date,date_trunc('week',target_date)::date+6,interval '1 day')
+    as generated_day(plan_timestamp)
+  where public.school_worker_count_for_date(generated_day.plan_timestamp::date)>=2
+  order by public.school_worker_count_for_date(generated_day.plan_timestamp::date) desc,generated_day.plan_timestamp::date limit 1;
 $$;
 create or replace function public.school_rotating_floor_for_date(target_date date) returns text
 language sql security definer stable set search_path=public as $$
-  select case when ((select count(*) from generate_series(date '2026-08-31',target_date,interval '1 day') day
-    where public.school_worker_count_for_date(day::date)>=2)-1)%2=0 then '2. patro' else '3. patro' end;
+  select case when ((select count(*)
+    from generate_series(date '2026-08-31',target_date,interval '1 day') as generated_day(plan_timestamp)
+    where public.school_worker_count_for_date(generated_day.plan_timestamp::date)>=2)-1)%2=0 then '2. patro' else '3. patro' end;
 $$;
 create or replace function public.school_fourth_floor_slot_for_date(target_date date) returns smallint
 language sql security definer stable set search_path=public as $$
-  select mod(greatest(0,(select count(*) from generate_series(date_trunc('week',date '2026-09-04')::date,
-    date_trunc('week',target_date)::date,interval '7 days') week
-    where public.best_school_shift_for_week(week::date) is not null)-1),
+  select mod(greatest(0,(select count(*)
+    from generate_series(date_trunc('week',date '2026-09-04')::date,date_trunc('week',target_date)::date,interval '7 days')
+      as generated_week(week_timestamp)
+    where public.best_school_shift_for_week(generated_week.week_timestamp::date) is not null)-1),
     (select slot_count from public.cleaning_rotation_definitions where rotation_key='school-fourth-floor' and active))::smallint;
 $$;
 
@@ -184,7 +190,11 @@ begin
   if not public.can_view_school_data() then raise exception 'Nemáte oprávnění zobrazit plán.'; end if;
   if target_from is null or target_to is null or target_to<target_from or target_to-target_from>100 then raise exception 'Neplatný interval planneru.'; end if;
   perform pg_advisory_xact_lock(3300,1);
-  for week_cursor in select generate_series(date_trunc('week',target_from)::date,date_trunc('week',target_to)::date,interval '7 days')::date loop
+  for week_cursor in
+    select generated_week.week_timestamp::date
+    from generate_series(date_trunc('week',target_from)::date,date_trunc('week',target_to)::date,interval '7 days')
+      as generated_week(week_timestamp)
+  loop
     insert into public.cleaning_planner_occurrences(task_id,due_from,due_to,planner_group,work_size)
     select task.id,week_cursor,week_cursor+6,case when floor.name='Schodiště' then 'stairs|'||week_cursor when floor.name='4. patro' then 'fourth|'||week_cursor else 'small|'||task.activity_type||'|'||floor.id||'|'||week_cursor end,
       case when floor.name in ('Schodiště','4. patro') then 'weekly-special' else 'small' end
@@ -192,7 +202,11 @@ begin
     where building.name='Škola' and task.active and room.active and task.plan_key like 'v2026|%' and task.frequency='weekly'
       and (floor.name in ('Schodiště','4. patro') or task.activity_type in ('tables','surfaces')) on conflict(task_id,due_from) do nothing;
   end loop;
-  for month_cursor in select generate_series(date_trunc('month',target_from-interval '5 months')::date,date_trunc('month',target_to)::date,interval '1 month')::date loop
+  for month_cursor in
+    select generated_month.month_timestamp::date
+    from generate_series(date_trunc('month',target_from-interval '5 months')::date,date_trunc('month',target_to)::date,interval '1 month')
+      as generated_month(month_timestamp)
+  loop
     insert into public.cleaning_planner_occurrences(task_id,due_from,due_to,planner_group,work_size)
     select task.id,month_cursor,(month_cursor+interval '1 month'-interval '1 day')::date,
       (case when task.activity_type in ('windows','deep_clean') then 'large|' else 'small|' end)||task.activity_type||'|'||floor.id||'|'||coalesce(task.period_week,0)||'|'||month_cursor,
@@ -206,30 +220,35 @@ begin
   end loop;
   update public.cleaning_planner_occurrences o set scheduled_for=null,updated_at=now()
   where o.active and o.scheduled_for<target_from and not exists(select 1 from public.cleaning_completions c where c.task_id=o.task_id and c.completed and c.completion_date between o.due_from and greatest(o.due_to,o.scheduled_for));
-  for group_row in select planner_group,due_from,min(due_to) due_to,work_size,min(id) stable_id from public.cleaning_planner_occurrences o
+  for group_row in
+    select o.planner_group,o.due_from,min(o.due_to) as group_due_to,o.work_size,min(o.id::text)::uuid as stable_id
+    from public.cleaning_planner_occurrences as o
     where o.active and o.scheduled_for is null and o.due_from<=target_to
       and not exists(select 1 from public.cleaning_completions c where c.task_id=o.task_id and c.completed and c.completion_date between o.due_from and greatest(o.due_to,target_from-1))
-    group by planner_group,due_from,work_size
-    order by (min(due_to)<target_from)::integer desc,due_from,case work_size when 'weekly-special' then 0 when 'large' then 1 else 2 end,stable_id
+    group by o.planner_group,o.due_from,o.work_size
+    order by (min(o.due_to)<target_from)::integer desc,o.due_from,
+      case o.work_size when 'weekly-special' then 0 when 'large' then 1 else 2 end,stable_id
   loop
     candidate:=null;
     for candidate in
-      select shift.day from (
-        select day::date day,public.school_worker_count_for_date(day::date) worker_count,
+      select candidate_shift.plan_day from (
+        select generated_day.plan_timestamp::date as plan_day,
+          public.school_worker_count_for_date(generated_day.plan_timestamp::date) as worker_count,
           coalesce((select sum(case scheduled.work_size when 'large' then 2 else 1 end)
             from (select distinct used.planner_group,used.work_size from public.cleaning_planner_occurrences used
-              where used.active and used.scheduled_for=day::date) scheduled),0)::integer load_units
-        from generate_series(greatest(group_row.due_from,target_from),least(target_from+100,greatest(target_to,group_row.due_to)),interval '1 day') day
-      ) shift
-      where shift.worker_count>=case when group_row.work_size='large' then 3 else 2 end
-      order by case when group_row.work_size='weekly-special' then (shift.load_units+1>least(shift.worker_count,3))::integer else 0 end,
-        shift.worker_count desc,shift.load_units,shift.day
+              where used.active and used.scheduled_for=generated_day.plan_timestamp::date) as scheduled),0)::integer as load_units
+        from generate_series(greatest(group_row.due_from,target_from),least(target_from+100,greatest(target_to,group_row.group_due_to)),interval '1 day')
+          as generated_day(plan_timestamp)
+      ) as candidate_shift
+      where candidate_shift.worker_count>=case when group_row.work_size='large' then 3 else 2 end
+      order by case when group_row.work_size='weekly-special' then (candidate_shift.load_units+1>least(candidate_shift.worker_count,3))::integer else 0 end,
+        candidate_shift.worker_count desc,candidate_shift.load_units,candidate_shift.plan_day
     loop
       select count(*) filter(where scheduled.work_size='weekly-special'),count(*) filter(where scheduled.work_size='small'),
         count(*) filter(where scheduled.work_size='large'),coalesce(sum(case scheduled.work_size when 'large' then 2 else 1 end),0)
       into weekly_count,small_count,large_count,load_units
       from (select distinct used.planner_group,used.work_size from public.cleaning_planner_occurrences used
-        where used.active and used.scheduled_for=candidate) scheduled;
+        where used.active and used.scheduled_for=candidate) as scheduled;
       if group_row.work_size='weekly-special'
         or (group_row.work_size='large' and large_count=0 and small_count=0
           and load_units+2<=least(public.school_worker_count_for_date(candidate),3))
@@ -254,7 +273,11 @@ returns table(task_id uuid,scheduled_date date,plan_reason text,due_from date,du
 language plpgsql security definer set search_path=public as $$
 begin
   perform public.refresh_dynamic_school_cleaning_plan(target_from,target_to);
-  return query with dates as (select day::date plan_date,public.school_worker_count_for_date(day::date) worker_count from generate_series(target_from,target_to,interval '1 day') day),
+  return query with dates as (
+    select generated_day.plan_timestamp::date as plan_date,
+      public.school_worker_count_for_date(generated_day.plan_timestamp::date) as worker_count
+    from generate_series(target_from,target_to,interval '1 day') as generated_day(plan_timestamp)
+  ),
   school_tasks as (select task.*,room.name room_name,room.sort_order room_sort,floor.name floor_name,floor.sort_order floor_sort from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.floors floor on floor.id=room.floor_id join public.buildings building on building.id=room.building_id where task.active and room.active and task.plan_key like 'v2026|%' and building.name='Škola'),
   routine as (select task.id,dates.plan_date,case when dates.worker_count=1 and task.room_name like 'WC %' then 'wc-queue' else 'routine' end reason,
     case when dates.worker_count=1 and task.room_name like 'WC %' then task.floor_sort*10000+task.room_sort*100+task.sort_order else null end priority

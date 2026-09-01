@@ -45,6 +45,18 @@ test('trigger rotace nekoliduje s PL/pgSQL OLD a NEW recordy', () => {
   assert.doesNotMatch(migration, /\b(?:from|join)\s+public\.[a-z_]+\s+(?:old|new)\b/i)
 })
 
+test('03300 používá jednoznačné generate_series aliasy a PostgreSQL kompatibilní UUID agregaci', () => {
+  assert.match(migration, /as generated_slot\(slot_number\)/i)
+  assert.match(migration, /as generated_day\(plan_timestamp\)/i)
+  assert.match(migration, /as generated_week\(week_timestamp\)/i)
+  assert.match(migration, /as generated_month\(month_timestamp\)/i)
+  assert.match(migration, /select candidate_shift\.plan_day[\s\S]*as candidate_shift/i)
+  assert.doesNotMatch(migration, /\bselect\s+day::date\s+day\b/i)
+  assert.doesNotMatch(migration, /\bfrom\s+generate_series\([^\n]+\)\s+(?:day|week|month|old|new)\b/i)
+  assert.doesNotMatch(migration, /\bmin\(o\.id\)/i)
+  assert.match(migration, /min\(o\.id::text\)::uuid as stable_id/i)
+})
+
 test('Dnes i Kalendář čtou stejný serverový planner a před 03300 mají bezpečný fallback', () => {
   assert.match(repository, /get_dynamic_school_cleaning_plan/)
   assert.match(repository, /dynamicSchoolPlan/)
@@ -68,7 +80,7 @@ test('kapacita počítá weekly special, small a large společně a WC fronta m�
   assert.match(migration, /case scheduled\.work_size when 'large' then 2 else 1 end/)
   assert.match(migration, /load_units\+1<=least\(public\.school_worker_count_for_date\(candidate\),3\)/)
   assert.match(migration, /load_units\+2<=least\(public\.school_worker_count_for_date\(candidate\),3\)/)
-  assert.match(migration, /shift\.load_units\+1>least\(shift\.worker_count,3\)[\s\S]*shift\.worker_count desc,shift\.load_units,shift\.day/)
+  assert.match(migration, /candidate_shift\.load_units\+1>least\(candidate_shift\.worker_count,3\)[\s\S]*candidate_shift\.worker_count desc,candidate_shift\.load_units,candidate_shift\.plan_day/)
   assert.match(migration, /planner_priority integer/)
   assert.match(migration, /task\.floor_sort\*10000\+task\.room_sort\*100\+task\.sort_order/)
   assert.match(repository, /plannerPriority: dynamicSchoolRows\?\.get\(row\.id\)\?\.planner_priority/)
