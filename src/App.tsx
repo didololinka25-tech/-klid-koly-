@@ -48,7 +48,7 @@ import {
   isExtraCleaningTask,
   isStandardCleaningTask,
 } from "./cleaningPresentation";
-import { buildCalendarDaySummary, calendarWorkerOptions, filterCalendarTasks, type CalendarDaySummary } from "./cleaningCalendar";
+import { buildCalendarDaySummary, calendarWorkerOptions, filterCalendarTasks, projectDynamicSchoolPlan, type CalendarDaySummary } from "./cleaningCalendar";
 import { assignmentOverlapsMonth, scheduleExceptionsConflict, workAssignmentsConflict, workerPlanningSaveError, type PlanningWorker, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
 import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
 
@@ -3749,18 +3749,12 @@ function plannedTasksForDate(
   if (!serverTasks) return fixed;
   const schoolBuildingIds = new Set(tasks.filter((task) => task.building === "Škola" && task.buildingId).map((task) => task.buildingId as string));
   const schoolException = records.find((record) => schoolBuildingIds.has(record.buildingId) && record.executionDate === date && record.status === "active");
-  return tasks.filter((task) => task.active && task.roomActive !== false).filter((task) => {
-    if (task.building !== "Škola" || schoolException?.kind === "extraordinary") return fixed.some((item) => item.id === task.id);
-    return serverTasks.has(task.id);
-  }).map((task) => {
-    const planned = task.building === "Škola" && schoolException?.kind !== "extraordinary" ? serverTasks.get(task.id) : null;
-    return planned ? {
-      ...task,
-      plannerReason: planned.planReason,
-      plannerAssignedWorkerId: planned.assignedWorkerId,
-      plannerPriority: planned.plannerPriority,
-    } : { ...task, plannerReason: null, plannerAssignedWorkerId: null, plannerPriority: null };
-  });
+  if (schoolException?.kind === "extraordinary") return fixed;
+  const dynamicSchool = projectDynamicSchoolPlan(tasks.filter((task) => task.building === "Škola"), serverTasks);
+  const fixedOutsideSchool = fixed.filter((task) => task.building !== "Škola").map((task) => ({
+    ...task, plannerReason: null, plannerAssignedWorkerId: null, plannerPriority: null,
+  }));
+  return [...dynamicSchool, ...fixedOutsideSchool];
 }
 
 function serverPlanForCalendarDate(date: string, records: CleaningDayRecord[], plan: Map<string, Map<string, DynamicSchoolPlanItem>> | null) {

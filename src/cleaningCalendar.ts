@@ -74,7 +74,11 @@ const extraCategoryMeta: Record<CalendarExtraCategory['key'], Pick<CalendarExtra
 }
 
 function extraCategory(task: Task): CalendarExtraCategory['key'] | null {
-  if (!isExtraCleaningTask(task)) return null
+  // The server planner is the source of truth. A planned occurrence can be
+  // overdue or capacity-sized even when its canonical task still carries a
+  // legacy frequency value, so do not discard it based on frequency alone.
+  const plannedExtra = ['small', 'large', 'weekly-special', 'overdue'].includes(task.plannerReason ?? '')
+  if (!plannedExtra && !isExtraCleaningTask(task)) return null
   if (task.floor === 'Schodiště') return 'staircase'
   if (task.activityType === 'windows') return 'windows'
   if (task.activityType === 'doors') return 'doors'
@@ -120,10 +124,16 @@ export function buildCalendarDaySummary({
   const hasFourthFloor = tasks.some((task) => task.floor === '4. patro')
   const rotation = hasFourthFloor ? cleaningRotationForOccurrence(date, planning) : null
   const workers = workerId === 'all' ? allWorkers : allWorkers.filter((worker) => worker.workerId === workerId)
-  const selectedAssignments = workers.filter((worker) => worker.workerId === workerId)
+  const workerBuildingIds = new Set(workers.map((worker) => worker.buildingId))
+  // Stable work areas determine planner capacity; they are not assignments of
+  // shared cleaning tasks to an individual. A worker filter must therefore keep
+  // the complete shared server plan and may only hide work explicitly assigned
+  // by the planner (currently the 4th-floor rotation).
   const cleaningTasks = workerId === 'all' ? tasks : tasks.filter((task) => {
-    if (task.floor === '4. patro') return task.plannerAssignedWorkerId === workerId || rotation?.assignment?.workerId === workerId
-    return selectedAssignments.some((worker) => worker.buildingId === task.buildingId && (!worker.floorId || !task.floorId || worker.floorId === task.floorId))
+    if (!task.buildingId || !workerBuildingIds.has(task.buildingId)) return false
+    if (task.floor === '4. patro' && !task.plannerAssignedWorkerId) return rotation?.assignment?.workerId === workerId
+    if (!task.plannerAssignedWorkerId) return true
+    return task.plannerAssignedWorkerId === workerId
   })
   const visibleRotation = cleaningTasks.some((task) => task.floor === '4. patro') ? rotation : null
   const buildingSummary = summarizeCleaningDay(cleaningTasks)
@@ -172,6 +182,28 @@ export function buildCalendarDaySummary({
     fourthFloorRotation: visibleRotation,
     schoolEvents: [],
   }
+}
+
+/**
+ * Projects the authoritative RPC result onto the locally loaded task catalog.
+ * It intentionally performs no scheduling of its own.
+ */
+export function projectDynamicSchoolPlan(tasks: Task[], serverTasks: ReadonlyMap<string, {
+  planReason: Task['plannerReason']
+  assignedWorkerId: string | null
+  plannerPriority: number | null
+}>) {
+  return tasks
+    .filter((task) => task.active && task.roomActive !== false && serverTasks.has(task.id))
+    .map((task) => {
+      const planned = serverTasks.get(task.id)!
+      return {
+        ...task,
+        plannerReason: planned.planReason,
+        plannerAssignedWorkerId: planned.assignedWorkerId,
+        plannerPriority: planned.plannerPriority,
+      }
+    })
 }
 
 export function calendarWorkerOptions(planning: WorkerPlanningData) {

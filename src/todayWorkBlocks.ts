@@ -71,7 +71,14 @@ function block(id: string, title: string, tasks: Task[], sortOrder: number, opti
  * co je splatné; pouze seskupuje již vyřešené due tasky pro mobilní obrazovku.
  */
 export function buildTodayWorkBlocks(tasks: Task[]): TodayBuildingWork[] {
-  const standard = tasks.filter((task) => task.roomId && isStandardCleaningTask(task))
+  // For dynamic school days, planReason comes from the server RPC and is more
+  // authoritative than legacy task frequency metadata. Extras remain outside
+  // the main blocks and are rendered separately.
+  const standard = tasks.filter((task) => task.roomId && (
+    task.plannerReason === 'routine'
+    || task.plannerReason === 'wc-queue'
+    || (!task.plannerReason && isStandardCleaningTask(task))
+  ))
   const byBuilding = new Map<string, Task[]>()
   standard.forEach((task) => {
     const key = task.buildingId ?? task.building

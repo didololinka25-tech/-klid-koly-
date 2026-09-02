@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { buildCalendarDaySummary, calendarWorkerOptions, circledFloor, filterCalendarTasks } from './cleaningCalendar.ts'
+import { buildCalendarDaySummary, calendarWorkerOptions, circledFloor, filterCalendarTasks, projectDynamicSchoolPlan } from './cleaningCalendar.ts'
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay } from './scheduling.ts'
 
 const task = (overrides = {}) => ({
@@ -194,7 +194,7 @@ test('kalendář má čitelné mobilní a desktop varianty bez horizontálního 
   assert.match(css, /text-overflow: ellipsis/)
 })
 
-test('filtr pracovníka spojí UUID, pracovní oblast, pracoviště a jeho rotační 4. patro', () => {
+test('filtr pracovníka zachová sdílený serverový plán pracoviště a filtruje jen explicitně přiřazené 4. patro', () => {
   const date = '2026-09-04'
   const planning = {
     available: true,
@@ -213,11 +213,54 @@ test('filtr pracovníka spojí UUID, pracovní oblast, pracoviště a jeho rota�
   ]
   const didi = buildCalendarDaySummary({ date, today: date, tasks, context: resolveCleaningDay(date, []), planning, workerId: 'didi-uuid' })
   assert.deepEqual(didi.workers.map((item) => item.workerId), ['didi-uuid'])
-  assert.deepEqual(didi.tasks.map((item) => item.id).sort(), ['didi-extra','fourth'])
+  assert.deepEqual(didi.tasks.map((item) => item.id).sort(), ['didi-extra','fourth','martina-extra'])
   assert.equal(didi.fourthFloorRotation?.assignment?.workerId, 'didi-uuid')
   const martina = buildCalendarDaySummary({ date, today: date, tasks, context: resolveCleaningDay(date, []), planning, workerId: 'martina-uuid' })
-  assert.deepEqual(martina.tasks.map((item) => item.id), ['martina-extra'])
+  assert.deepEqual(martina.tasks.map((item) => item.id).sort(), ['didi-extra','martina-extra'])
   assert.equal(martina.fourthFloorRotation, null, 'pracovník nevidí cizí rotační 4. patro')
+})
+
+test('serverový planner → mapování → Plán dne nezahodí rotované patro ani extras', () => {
+  const date = '2026-09-11'
+  const planning = {
+    available: true,
+    planningWorkers: [
+      { id: 'didi', name: 'Didi Ceridwen', linkedProfileId: 'profile-didi', active: true },
+      { id: 'olga', name: 'Olga', linkedProfileId: null, active: true },
+    ],
+    assignments: [
+      { id: 'a-didi', workerId: 'didi', workerName: 'Didi Ceridwen', buildingId: 'school', buildingName: 'Škola', floorId: 'f1', floorName: '1. patro', areaLabel: '1. patro', weekdays: [5], validFrom: '2026-09-01', validTo: null, active: true },
+      { id: 'a-olga', workerId: 'olga', workerName: 'Olga', buildingId: 'school', buildingName: 'Škola', floorId: 'f2', floorName: '2. patro', areaLabel: '2. patro', weekdays: [5], validFrom: '2026-09-01', validTo: null, active: true },
+    ],
+    exceptions: [], rotationDefinitions: [], rotationSlots: [],
+  }
+  const catalog = [
+    task({ id: 'floor-1', floorId: 'f1', plannerReason: null }),
+    task({ id: 'wc', roomId: 'wc', room: 'WC ženy', activityType: 'toilet', plannerReason: null }),
+    task({ id: 'floor-3', roomId: 'r3', room: 'Ateliér', floorId: 'f3', floor: '3. patro', floorSort: 3, plannerReason: null }),
+    task({ id: 'stairs', roomId: 'stairs', room: 'Schodiště', floor: 'Schodiště', floorSort: 5, frequency: 'denně', plannerReason: null }),
+    task({ id: 'small', activityType: 'windows', frequency: 'denně', plannerReason: null }),
+    task({ id: 'large', activityType: 'deep_clean', frequency: 'denně', plannerReason: null }),
+    task({ id: 'overdue', activityType: 'doors', frequency: 'denně', plannerReason: null }),
+  ]
+  const rpcRows = new Map([
+    ['floor-1', { planReason: 'routine', assignedWorkerId: null, plannerPriority: null }],
+    ['wc', { planReason: 'routine', assignedWorkerId: null, plannerPriority: null }],
+    ['floor-3', { planReason: 'routine', assignedWorkerId: null, plannerPriority: null }],
+    ['stairs', { planReason: 'weekly-special', assignedWorkerId: null, plannerPriority: null }],
+    ['small', { planReason: 'small', assignedWorkerId: null, plannerPriority: null }],
+    ['large', { planReason: 'large', assignedWorkerId: null, plannerPriority: null }],
+    ['overdue', { planReason: 'overdue', assignedWorkerId: null, plannerPriority: null }],
+  ])
+  const projected = projectDynamicSchoolPlan(catalog, rpcRows)
+  const summary = buildCalendarDaySummary({ date, today: date, tasks: projected, context: resolveCleaningDay(date, []), planning, workerId: 'didi' })
+  const labels = summary.workBlocks.flatMap((building) => [...building.blocks.map((item) => item.title), ...(building.wcQueue ? [building.wcQueue.title] : [])])
+  assert.deepEqual(labels, ['Podlahy – 1. patro', 'Podlahy – 3. patro', 'WC – celá škola'])
+  assert.deepEqual(summary.workers.map((item) => item.workerName), ['Didi Ceridwen'])
+  assert.ok(summary.extraCategories.some((item) => item.key === 'staircase'))
+  assert.ok(summary.extraCategories.some((item) => item.key === 'windows'))
+  assert.ok(summary.extraCategories.some((item) => item.key === 'deep_clean'))
+  assert.equal(summary.extraCategories.find((item) => item.key === 'doors')?.overdue, true)
 })
 
 test('Plán dne překládá 1/2/3 pracovníky do stejných hlavních celků jako Dnes', () => {
