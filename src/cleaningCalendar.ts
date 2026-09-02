@@ -1,7 +1,8 @@
 import type { Task } from './types'
 import type { CleaningDayContext } from './scheduling'
 import { isExtraCleaningTask, summarizeCleaningDay } from './cleaningPresentation.ts'
-import { cleaningRotationForDate, workersForDate, type PlannedWorker, type RotationForDate, type WorkerPlanningData } from './workerPlanning.ts'
+import { cleaningRotationForOccurrence, workersForDate, type PlannedWorker, type RotationForDate, type WorkerPlanningData } from './workerPlanning.ts'
+import { buildTodayWorkBlocks, type TodayBuildingWork } from './todayWorkBlocks.ts'
 
 export type CalendarExceptionInput = {
   kind: 'extraordinary' | 'rescheduled'
@@ -18,6 +19,7 @@ export type CalendarExtraCategory = {
   label: string
   taskCount: number
   scopes: string[]
+  overdue: boolean
 }
 
 export type CalendarSectionSummary = {
@@ -50,6 +52,7 @@ export type CalendarDaySummary = {
   cancelledExceptions: string[]
   context: CleaningDayContext
   tasks: Task[]
+  workBlocks: TodayBuildingWork[]
   fourthFloorRotation: RotationForDate | null
   // Rezervované místo pro budoucí sekundární vrstvu školních akcí.
   // Google Calendar ani jeho data se v této iteraci neimplementují.
@@ -114,11 +117,12 @@ export function buildCalendarDaySummary({
   workerId?: string
 }): CalendarDaySummary {
   const allWorkers = workersForDate(date, planning)
-  const rotation = cleaningRotationForDate(date, planning)
+  const hasFourthFloor = tasks.some((task) => task.floor === '4. patro')
+  const rotation = hasFourthFloor ? cleaningRotationForOccurrence(date, planning) : null
   const workers = workerId === 'all' ? allWorkers : allWorkers.filter((worker) => worker.workerId === workerId)
   const selectedAssignments = workers.filter((worker) => worker.workerId === workerId)
   const cleaningTasks = workerId === 'all' ? tasks : tasks.filter((task) => {
-    if (task.floor === '4. patro') return rotation?.assignment?.workerId === workerId
+    if (task.floor === '4. patro') return task.plannerAssignedWorkerId === workerId || rotation?.assignment?.workerId === workerId
     return selectedAssignments.some((worker) => worker.buildingId === task.buildingId && (!worker.floorId || !task.floorId || worker.floorId === task.floorId))
   })
   const visibleRotation = cleaningTasks.some((task) => task.floor === '4. patro') ? rotation : null
@@ -138,6 +142,7 @@ export function buildCalendarDaySummary({
     })
     return [...categoryCounts.entries()].map(([key, taskCount]) => ({
       key, taskCount, ...extraCategoryMeta[key],
+      overdue: items.some((task) => extraCategory(task) === key && task.plannerReason === 'overdue'),
       scopes: [...new Set(items.filter((task) => extraCategory(task) === key).map((task) => `${task.building} · ${task.floor}${task.room && task.room !== 'Společné úkoly' ? ` · ${task.room}` : ''}`))],
     }))
   }
@@ -163,6 +168,7 @@ export function buildCalendarDaySummary({
     cancelledExceptions: cancelled.map((item) => item.title),
     context,
     tasks: cleaningTasks,
+    workBlocks: buildTodayWorkBlocks(cleaningTasks),
     fourthFloorRotation: visibleRotation,
     schoolEvents: [],
   }

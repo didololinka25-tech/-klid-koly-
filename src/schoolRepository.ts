@@ -47,6 +47,15 @@ export type BulkCompletionAction = {
   canUndo: boolean
 }
 export type TaskLoad = { dateKey: string; tasks: Task[]; bulkActions: BulkCompletionAction[]; cleaningDay: CleaningDayContext; cleaningDaysAvailable: boolean }
+export type DynamicSchoolPlanItem = {
+  taskId: string
+  scheduledDate: string
+  planReason: Task['plannerReason']
+  dueFrom: string | null
+  dueTo: string | null
+  assignedWorkerId: string | null
+  plannerPriority: number | null
+}
 export type CleaningDayRecord = CleaningDayException & {
   buildingId: string
   scopeType: 'whole_school'
@@ -291,16 +300,25 @@ export const schoolRepository = {
     })
     return { dateKey: date, tasks, bulkActions, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
   },
-  dynamicSchoolPlan: async (from: string, to: string): Promise<Map<string, Set<string>> | null> => {
+  dynamicSchoolPlan: async (from: string, to: string): Promise<Map<string, Map<string, DynamicSchoolPlanItem>> | null> => {
     const result = await client().rpc('get_dynamic_school_cleaning_plan', { target_from: from, target_to: to })
     if (missingFunction(result.error)) return null
     if (result.error) throw result.error
-    const byDate = new Map<string, Set<string>>()
+    const byDate = new Map<string, Map<string, DynamicSchoolPlanItem>>()
     for (const row of result.data ?? []) {
       const date = String((row as any).scheduled_date)
-      const ids = byDate.get(date) ?? new Set<string>()
-      ids.add(String((row as any).task_id))
-      byDate.set(date, ids)
+      const items = byDate.get(date) ?? new Map<string, DynamicSchoolPlanItem>()
+      const item: DynamicSchoolPlanItem = {
+        taskId: String((row as any).task_id),
+        scheduledDate: date,
+        planReason: (row as any).plan_reason ?? null,
+        dueFrom: (row as any).due_from ?? null,
+        dueTo: (row as any).due_to ?? null,
+        assignedWorkerId: (row as any).assigned_worker_id ?? null,
+        plannerPriority: (row as any).planner_priority == null ? null : Number((row as any).planner_priority),
+      }
+      items.set(item.taskId, item)
+      byDate.set(date, items)
     }
     return byDate
   },

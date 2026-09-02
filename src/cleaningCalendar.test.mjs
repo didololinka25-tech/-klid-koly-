@@ -96,6 +96,7 @@ test('Škola a Školka mohou být ve stejném dni a filtr pouze skryje druhé pr
   const tasks = [school, kindergarten]
   const summary = buildCalendarDaySummary({ date: '2026-09-01', today: '2026-09-01', tasks, context: resolveCleaningDay('2026-09-01', []) })
   assert.deepEqual(summary.workplaces.map((item) => item.icon), ['Š', 'MŠ'])
+  assert.deepEqual(summary.workBlocks.map((item) => [item.building, item.blocks[0]?.title]), [['Škola', 'Podlahy – 1. patro'], ['Školka', 'Úklid – Prostory']])
   assert.deepEqual(filterCalendarTasks(tasks, 'kg').map((item) => item.id), ['kg'])
   assert.equal(filterCalendarTasks(tasks, 'all').length, 2)
 })
@@ -217,4 +218,93 @@ test('filtr pracovníka spojí UUID, pracovní oblast, pracoviště a jeho rota�
   const martina = buildCalendarDaySummary({ date, today: date, tasks, context: resolveCleaningDay(date, []), planning, workerId: 'martina-uuid' })
   assert.deepEqual(martina.tasks.map((item) => item.id), ['martina-extra'])
   assert.equal(martina.fourthFloorRotation, null, 'pracovník nevidí cizí rotační 4. patro')
+})
+
+test('Plán dne překládá 1/2/3 pracovníky do stejných hlavních celků jako Dnes', () => {
+  const cases = [
+    {
+      workers: ['didi'],
+      tasks: [
+        task({ id: 'f1', plannerReason: 'routine' }),
+        task({ id: 'wcq', room: 'WC ženy', roomId: 'wcq', activityType: 'toilet', plannerReason: 'wc-queue' }),
+      ],
+      expected: ['Podlahy – 1. patro', 'WC – otevřená fronta'],
+    },
+    {
+      workers: ['didi', 'worker-2'],
+      tasks: [
+        task({ id: 'f1', plannerReason: 'routine' }),
+        task({ id: 'wc', room: 'WC ženy', roomId: 'wc', activityType: 'toilet', plannerReason: 'routine' }),
+        task({ id: 'f2', room: 'Učebna 1', roomId: 'f2', floor: '2. patro', floorSort: 2, plannerReason: 'routine' }),
+      ],
+      expected: ['Podlahy – 1. patro', 'Podlahy – 2. patro', 'WC – celá škola'],
+    },
+    {
+      workers: ['didi', 'worker-2', 'worker-3'],
+      tasks: [
+        task({ id: 'f1', plannerReason: 'routine' }),
+        task({ id: 'f2', room: 'Učebna 1', roomId: 'f2', floor: '2. patro', floorSort: 2, plannerReason: 'routine' }),
+        task({ id: 'f3', room: 'Ateliér', roomId: 'f3', floor: '3. patro', floorSort: 3, plannerReason: 'routine' }),
+        task({ id: 'wc', room: 'WC ženy', roomId: 'wc', activityType: 'toilet', plannerReason: 'routine' }),
+      ],
+      expected: ['Podlahy – 1. patro', 'Podlahy – 2. patro', 'Podlahy – 3. patro', 'WC – celá škola'],
+    },
+  ]
+  for (const item of cases) {
+    const planning = {
+      available: true,
+      planningWorkers: item.workers.map((id) => ({ id, name: id, linkedProfileId: id === 'didi' ? 'profile-didi' : null, active: true })),
+      assignments: item.workers.map((id, index) => ({ id: `a-${id}`, workerId: id, workerName: id, buildingId: 'school', buildingName: 'Škola', floorId: null, areaLabel: 'Škola', weekdays: [1], validFrom: '2026-08-01', validTo: null, active: true })),
+      exceptions: [], rotationDefinitions: [], rotationSlots: [],
+    }
+    const summary = buildCalendarDaySummary({ date: '2026-09-07', today: '2026-09-02', tasks: item.tasks, context: resolveCleaningDay('2026-09-07', []), planning })
+    const labels = summary.workBlocks.flatMap((building) => [...building.blocks.map((block) => block.title), ...(building.wcQueue ? [building.wcQueue.title] : [])])
+    assert.equal(summary.workers.length, item.workers.length)
+    assert.deepEqual(labels, item.expected)
+  }
+})
+
+test('Plán dne zachová overdue metadata, schodiště a skutečného pracovníka 4. patra', () => {
+  const date = '2026-09-07'
+  const planning = {
+    available: true,
+    planningWorkers: [{ id: 'worker-2', name: 'Pracovník 2', linkedProfileId: null, active: true }],
+    assignments: [{ id: 'a', workerId: 'worker-2', workerName: 'Pracovník 2', buildingId: 'school', buildingName: 'Škola', floorId: null, areaLabel: 'Škola', weekdays: [1], validFrom: date, validTo: null, active: true }],
+    exceptions: [],
+    rotationDefinitions: [{ rotationKey: 'school-fourth-floor', title: '4. patro', anchorDate: date, weekday: 1, slotCount: 3, active: true }],
+    rotationSlots: [{ id: 'slot', rotationKey: 'school-fourth-floor', slotIndex: 0, workerId: 'worker-2', workerName: 'Pracovník 2', validFrom: date, validTo: null, active: true }],
+  }
+  const summary = buildCalendarDaySummary({
+    date, today: date, context: resolveCleaningDay(date, []), planning, workerId: 'worker-2',
+    tasks: [
+      task({ id: 'stairs', room: 'Schodiště', roomId: 'stairs', floor: 'Schodiště', floorSort: 5, frequency: 'týdně', plannerReason: 'weekly-special' }),
+      task({ id: 'fourth', room: 'Mediační místnost', roomId: 'fourth', floor: '4. patro', floorSort: 4, frequency: 'týdně', plannerReason: 'weekly-special', plannerAssignedWorkerId: 'worker-2' }),
+      task({ id: 'windows', activityType: 'windows', frequency: 'měsíčně', plannerReason: 'overdue' }),
+    ],
+  })
+  assert.equal(summary.fourthFloorRotation?.assignment?.workerId, 'worker-2')
+  assert.equal(summary.extraCategories.find((item) => item.key === 'windows')?.overdue, true)
+  assert.ok(summary.extraCategories.some((item) => item.key === 'staircase'))
+})
+
+test('Plán dne umí skutečně prázdný den bez vymyšlené práce', () => {
+  const summary = buildCalendarDaySummary({ date: '2026-09-06', today: '2026-09-02', tasks: [], context: resolveCleaningDay('2026-09-06', []) })
+  assert.deepEqual(summary.tasks, [])
+  assert.deepEqual(summary.workBlocks, [])
+  assert.deepEqual(summary.extraCategories, [])
+})
+
+test('Plán dne je read-only mobilní dialog a Kalendář načítá planner jednou pro interval', () => {
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const repository = readFileSync(new URL('./schoolRepository.ts', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
+  const detail = app.slice(app.indexOf('function CalendarDayDetail'), app.indexOf('function CleaningCalendar'))
+  assert.match(app, /setDayDetailOpen\(true\)/)
+  assert.match(detail, /aria-modal="true"/)
+  assert.match(detail, /HLAVNÍ PLÁN DNE/)
+  assert.doesNotMatch(detail, /Příchod|Odchod|Hotovo|completion/i)
+  assert.match(repository, /get_dynamic_school_cleaning_plan[\s\S]*target_from: from, target_to: to/)
+  assert.match(repository, /planReason:[\s\S]*assignedWorkerId:[\s\S]*plannerPriority:/)
+  assert.match(css, /\.calendar-day-sheet \{[^}]*width: min\(100%, 620px\)[^}]*overflow-x: hidden/)
+  assert.match(css, /\.calendar-day-close \{[^}]*width: 44px[^}]*height: 44px/)
 })

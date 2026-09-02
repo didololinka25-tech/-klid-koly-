@@ -15,6 +15,7 @@ import {
   type BulkCompletionAction,
   type CleaningDayDraft,
   type CleaningDayRecord,
+  type DynamicSchoolPlanItem,
   type ManagedFloor,
   type ManagedRoom,
   type ManualData,
@@ -1096,7 +1097,6 @@ export default function App() {
           tasks={tasks}
           planning={workerPlanning}
           availableWorkers={attendanceWorkers}
-          onOpenAssignments={() => setSection("Rozdělení práce")}
           onSave={saveCleaningDay}
           onCancel={cancelCleaningDay}
         />
@@ -3743,25 +3743,34 @@ function plannedTasksForDate(
   tasks: Task[],
   records: CleaningDayRecord[],
   date: string,
-  serverTaskIds?: ReadonlySet<string>,
+  serverTasks?: ReadonlyMap<string, DynamicSchoolPlanItem>,
 ) {
   const fixed = dueTasksForDate(tasks, records, date);
-  if (!serverTaskIds) return fixed;
-  const schoolException = records.find((record) => record.buildingId && record.executionDate === date && record.status === "active");
+  if (!serverTasks) return fixed;
+  const schoolBuildingIds = new Set(tasks.filter((task) => task.building === "Škola" && task.buildingId).map((task) => task.buildingId as string));
+  const schoolException = records.find((record) => schoolBuildingIds.has(record.buildingId) && record.executionDate === date && record.status === "active");
   return tasks.filter((task) => task.active && task.roomActive !== false).filter((task) => {
     if (task.building !== "Škola" || schoolException?.kind === "extraordinary") return fixed.some((item) => item.id === task.id);
-    return serverTaskIds.has(task.id);
+    return serverTasks.has(task.id);
+  }).map((task) => {
+    const planned = task.building === "Škola" && schoolException?.kind !== "extraordinary" ? serverTasks.get(task.id) : null;
+    return planned ? {
+      ...task,
+      plannerReason: planned.planReason,
+      plannerAssignedWorkerId: planned.assignedWorkerId,
+      plannerPriority: planned.plannerPriority,
+    } : { ...task, plannerReason: null, plannerAssignedWorkerId: null, plannerPriority: null };
   });
 }
 
-function serverPlanForCalendarDate(date: string, records: CleaningDayRecord[], plan: Map<string, Set<string>> | null) {
+function serverPlanForCalendarDate(date: string, records: CleaningDayRecord[], plan: Map<string, Map<string, DynamicSchoolPlanItem>> | null) {
   if (!plan) return undefined;
   const movedAway = records.some((record) => record.status === "active" && record.kind === "rescheduled" && record.sourceDate === date);
-  if (movedAway) return new Set<string>();
-  const ids = new Set(plan.get(date) ?? []);
+  if (movedAway) return new Map<string, DynamicSchoolPlanItem>();
+  const items = new Map(plan.get(date) ?? []);
   const rescheduled = records.find((record) => record.status === "active" && record.kind === "rescheduled" && record.executionDate === date && record.sourceDate);
-  if (rescheduled?.sourceDate) for (const id of plan.get(rescheduled.sourceDate) ?? []) ids.add(id);
-  return ids;
+  if (rescheduled?.sourceDate) for (const [id, item] of plan.get(rescheduled.sourceDate) ?? []) items.set(id, { ...item, scheduledDate: date });
+  return items;
 }
 
 function calendarContextForDate(tasks: Task[], records: CleaningDayRecord[], date: string) {
@@ -3808,8 +3817,12 @@ function CalendarLegend() {
   return <details className="calendar-legend"><summary>Legenda</summary><div><span>Iniciály = pracovníci</span><span>OK = okna</span><span>DV = dveře</span><span>SCH = schodiště</span><span>PR = praní</span><small>Kalendář ukazuje jen pracovní rozdělení a práci navíc.</small></div></details>;
 }
 
-function CalendarDayDetail({ summary, onOpenAssignments }: { summary: CalendarDaySummary; onOpenAssignments: () => void }) {
+function CalendarDayDetail({ summary }: { summary: CalendarDaySummary }) {
   const { date, context } = summary;
+  const mainBlocks = summary.workBlocks.flatMap((building) => [
+    ...building.blocks.map((block) => ({ building: building.building, block })),
+    ...(building.wcQueue ? [{ building: building.building, block: building.wcQueue }] : []),
+  ]);
   return (
     <section className="calendar-day-detail">
       <header><small>{summary.extraordinary.length ? "MIMOŘÁDNÝ ÚKLID" : summary.rescheduled.length ? "PŘESUNUTÝ ÚKLID" : context.kind === "moved_away" ? "PŘESUNUTÝ TERMÍN" : "PLÁN DNE"}</small><h2>{todayLabel(date)}</h2></header>
@@ -3818,12 +3831,22 @@ function CalendarDayDetail({ summary, onOpenAssignments }: { summary: CalendarDa
       {summary.rescheduled.map((title) => <p className="calendar-rescheduled" key={title}><b>PŘESUNUTÝ ÚKLID</b><span>{title}</span></p>)}
       {summary.cancelledExceptions.map((title) => <p className="calendar-cancelled" key={title}><b>ZRUŠENÝ ÚKLID</b><span>{title}</span></p>)}
       {summary.movedTo && <p className="calendar-rescheduled"><b>ÚKLID PŘESUNUT</b><span>Nový termín: {formatDate(summary.movedTo)}</span></p>}
-      <section className="calendar-day-summary"><b className="calendar-detail-label">V PRÁCI</b>{summary.workers.length > 0 ? <div className="calendar-worker-list">{summary.workers.map((worker) => <span key={`${worker.workerId}|${worker.buildingId}`}><i className={`worker-color-${worker.colorIndex}`}>{worker.initials}</i><b>{worker.workerName}</b><small>{worker.buildingName} · {worker.areaLabel}{worker.exception ? " · výjimečně" : ""}</small></span>)}</div> : <p className="hint">Nikdo není podle rozvrhu naplánovaný.</p>}</section>
+      <section className="calendar-day-summary"><b className="calendar-detail-label">KDO PRACUJE · {summary.workers.length}</b>{summary.workers.length > 0 ? <div className="calendar-worker-list">{summary.workers.map((worker) => <span key={`${worker.workerId}|${worker.buildingId}`}><i className={`worker-color-${worker.colorIndex}`}>{worker.initials}</i><b>{worker.workerName}</b><small>{worker.buildingName} · {worker.areaLabel}{worker.exception ? " · výjimečně" : ""}</small></span>)}</div> : <p className="hint">Nikdo není podle rozvrhu naplánovaný.</p>}</section>
+      {mainBlocks.length > 0 && <section className="calendar-day-summary"><b className="calendar-detail-label">HLAVNÍ PLÁN DNE</b><div className="calendar-main-plan">{mainBlocks.map(({ building, block }) => <article key={block.id}><span><b>{block.title}</b><small>{building}{block.queue ? " · otevřená fronta" : ""}</small></span><p>{block.queue ? "Postupujte od nejnižšího patra nahoru. Udělejte podle času." : block.rooms.map((room) => room.name).join(" · ")}</p></article>)}</div></section>}
       {summary.fourthFloorRotation && <section className="calendar-day-summary calendar-rotation-detail"><b className="calendar-detail-label">4. PATRO</b><p><strong>Mediační místnost + chodba</strong><span>{summary.fourthFloorRotation.assignment?.workerName ? `Na řadě: ${summary.fourthFloorRotation.assignment.workerName}` : `Pozice ${summary.fourthFloorRotation.slotLabel} zatím není přiřazena`}</span></p></section>}
-      {summary.extraCategories.length > 0 && <section className="calendar-day-summary"><b className="calendar-detail-label">DNES NAVÍC</b><div className="calendar-extra-detail">{summary.extraCategories.map((category) => <article key={category.key}><i>{category.symbol}</i><span><b>{category.label}</b><small>{category.taskCount} {category.taskCount === 1 ? "úkol" : category.taskCount < 5 ? "úkoly" : "úkolů"}</small><ul>{category.scopes.map((scope) => <li key={scope}>{scope}</li>)}</ul></span></article>)}</div></section>}
-      <p className="calendar-routine-note">Běžný úklid probíhá podle pracovního rozdělení. <button onClick={onOpenAssignments}>Zobrazit rozdělení práce</button></p>
+      {summary.extraCategories.length > 0 && <section className="calendar-day-summary"><b className="calendar-detail-label">PRÁCE NAVÍC</b><div className="calendar-extra-detail">{summary.extraCategories.map((category) => <article key={category.key}><i>{category.symbol}</i><span><b>{category.label}{category.overdue ? " · PŘENESENO" : ""}</b><small>{category.taskCount} {category.taskCount === 1 ? "úkol" : category.taskCount < 5 ? "úkoly" : "úkolů"}</small><ul>{category.scopes.map((scope) => <li key={scope}>{scope}</li>)}</ul></span></article>)}</div></section>}
+      {summary.tasks.length === 0 && !summary.extraordinary.length && !summary.rescheduled.length && context.kind !== "moved_away" && <p className="calendar-empty-plan">Pro tento den není naplánovaný úklid.</p>}
     </section>
   );
+}
+
+function CalendarDayModal({ summary, onClose }: { summary: CalendarDaySummary; onClose: () => void }) {
+  return <div className="calendar-day-modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="calendar-day-sheet" role="dialog" aria-modal="true" aria-label={`Plán dne ${formatDate(summary.date)}`}>
+      <button className="calendar-day-close" onClick={onClose} aria-label="Zavřít plán dne">×</button>
+      <CalendarDayDetail summary={summary} />
+    </section>
+  </div>;
 }
 
 function CleaningCalendar({
@@ -3835,7 +3858,6 @@ function CleaningCalendar({
   tasks,
   planning,
   availableWorkers,
-  onOpenAssignments,
   onSave,
   onCancel,
 }: {
@@ -3847,7 +3869,6 @@ function CleaningCalendar({
   tasks: Task[];
   planning: WorkerPlanningData;
   availableWorkers: AttendanceWorker[];
-  onOpenAssignments: () => void;
   onSave: (draft: CleaningDayDraft) => Promise<void>;
   onCancel: (id: string) => Promise<void>;
 }) {
@@ -3857,7 +3878,8 @@ function CleaningCalendar({
   const [selectedDate, setSelectedDate] = useState(today);
   const [buildingFilter, setBuildingFilter] = useState("all");
   const [workerFilter, setWorkerFilter] = useState("all");
-  const [serverDynamicPlan, setServerDynamicPlan] = useState<Map<string, Set<string>> | null>(null);
+  const [serverDynamicPlan, setServerDynamicPlan] = useState<Map<string, Map<string, DynamicSchoolPlanItem>> | null>(null);
+  const [dayDetailOpen, setDayDetailOpen] = useState(false);
   const workerOptions = useMemo(() => {
     const values = new Map(calendarWorkerOptions(planning).map((worker) => [worker.id, worker.name]));
     availableWorkers.forEach((worker) => values.set(worker.id, worker.name));
@@ -3895,10 +3917,10 @@ function CleaningCalendar({
           setServerDynamicPlan(null);
           return;
         }
-        const merged = new Map<string, Set<string>>();
-        values.forEach((value) => value?.forEach((ids, date) => {
-          const current = merged.get(date) ?? new Set<string>();
-          ids.forEach((id) => current.add(id));
+        const merged = new Map<string, Map<string, DynamicSchoolPlanItem>>();
+        values.forEach((value) => value?.forEach((items, date) => {
+          const current = merged.get(date) ?? new Map<string, DynamicSchoolPlanItem>();
+          items.forEach((item, id) => current.set(id, item));
           merged.set(date, current);
         }));
         setServerDynamicPlan(merged);
@@ -3926,8 +3948,9 @@ function CleaningCalendar({
     const key = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
     setMonth(key);
     setSelectedDate(`${key}-01`);
+    setDayDetailOpen(false);
   };
-  const goToday = () => { setMonth(today.slice(0, 7)); setSelectedDate(today); };
+  const goToday = () => { setMonth(today.slice(0, 7)); setSelectedDate(today); setDayDetailOpen(false); };
   const monthLabel = new Intl.DateTimeFormat("cs-CZ", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`));
   return (
     <div className="cleaning-calendar">
@@ -3957,11 +3980,11 @@ function CleaningCalendar({
         <header className="calendar-month-nav"><button onClick={() => moveMonth(-1)} aria-label="Předchozí měsíc">‹</button><span><h2>{monthLabel}</h2><button className="calendar-today-button" onClick={goToday}>Dnes</button></span><button onClick={() => moveMonth(1)} aria-label="Další měsíc">›</button></header>
         <div className="calendar-weekdays">{weekdays.map((day) => <b key={day}>{day}</b>)}</div>
         <div className="calendar-grid">
-          {calendarDays.map((item) => <CalendarDayCell key={item.date} summary={item} month={month} selected={item.date === selectedDate} onSelect={(date, outside) => { setSelectedDate(date); if (outside) setMonth(date.slice(0, 7)); }} />)}
+          {calendarDays.map((item) => <CalendarDayCell key={item.date} summary={item} month={month} selected={item.date === selectedDate} onSelect={(date, outside) => { setSelectedDate(date); setDayDetailOpen(true); if (outside) setMonth(date.slice(0, 7)); }} />)}
         </div>
         <CalendarLegend />
       </section>
-      <CalendarDayDetail summary={selected} onOpenAssignments={onOpenAssignments} />
+      {dayDetailOpen && <CalendarDayModal summary={selected} onClose={() => setDayDetailOpen(false)} />}
       <section className="calendar-list">
         <h2>Plánované výjimky</h2>
         {future.map((item) => (
