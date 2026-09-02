@@ -170,6 +170,7 @@ export function buildCalendarDaySummary({
 
 export function calendarWorkerOptions(planning: WorkerPlanningData) {
   const values = new Map<string, string>()
+  ;(planning.planningWorkers ?? []).filter((item) => item.active).forEach((item) => values.set(item.id, item.name))
   planning.assignments.filter((item) => item.active).forEach((item) => values.set(item.workerId, item.workerName));
   (planning.rotationSlots ?? []).filter((item) => item.active && item.workerId).forEach((item) => values.set(item.workerId!, item.workerName || 'Pracovník'))
   return [...values.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'cs'))

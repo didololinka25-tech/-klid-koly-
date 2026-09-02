@@ -1448,6 +1448,13 @@ h2 {
 .calendar-routine-note { margin: 0; color: #617973; font-size: 12px; line-height: 1.45; }
 .calendar-routine-note button { min-height: 42px; border: 0; background: transparent; color: #165e56; font-weight: 900; text-decoration: underline; }
 .work-assignment-screen { display: grid; gap: 10px; }
+.planning-worker-list { display: grid; gap: 7px; }
+.planning-worker-list > button { width: 100%; min-height: 58px; padding: 9px 11px; border: 1px solid #dbe8e4; border-radius: 11px; background: #fff; color: #173d38; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; text-align: left; }
+.planning-worker-list > button:disabled { opacity: 1; }
+.planning-worker-list span { min-width: 0; display: grid; gap: 2px; }
+.planning-worker-list b { overflow-wrap: anywhere; }
+.planning-worker-list small { color: #657c77; font-size: 11px; }
+.planning-worker-list strong { color: #165e56; font-size: 12px; white-space: nowrap; }
 .worker-plan-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .worker-plan-actions button { min-height: 44px; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; color: #165e56; font-weight: 900; }
 .rotation-editor { display: grid; gap: 10px; }

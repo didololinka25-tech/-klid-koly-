@@ -11,7 +11,7 @@ import { isSameTaskDefinition } from './taskValidation'
 import { pragueDateKey, validateAttendanceInterval } from './attendanceTime'
 import { attendanceStartValues } from './buildingScope'
 import { inferredBulkCompletable, isBulkCompletableTask } from './cleaningBulk'
-import { workerPlanningSaveError, type CleaningRotationSlot, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from './workerPlanning'
+import { workerPlanningSaveError, type CleaningRotationSlot, type PlanningWorker, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from './workerPlanning'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -105,12 +105,14 @@ const mapWorkAssignment = (row: any): WorkerWorkAssignment => ({
   buildingName: row.building_name, floorId: row.floor_id, floorName: row.floor_name,
   areaLabel: row.area_label, weekdays: row.weekdays ?? [], validFrom: row.valid_from,
   validTo: row.valid_to, active: Boolean(row.active),
+  linkedProfileId: row.linked_profile_id ?? null,
 })
 const mapScheduleException = (row: any): WorkerScheduleException => ({
   id: row.id, workerId: row.worker_id, workerName: row.worker_name, date: row.exception_date,
   planned: Boolean(row.planned), buildingId: row.building_id, buildingName: row.building_name,
   floorId: row.floor_id, floorName: row.floor_name, areaLabel: row.area_label,
   note: row.note ?? '', active: Boolean(row.active),
+  linkedProfileId: row.linked_profile_id ?? null,
 })
 const mapRotationSlot = (row: any): CleaningRotationSlot => ({
   id: row.id, rotationKey: row.rotation_key, slotIndex: Number(row.slot_index), workerId: row.worker_id,
@@ -580,8 +582,9 @@ export const schoolRepository = {
     const { data, error } = await client().rpc('get_worker_work_planning')
     if (missingFunction(error)) return { assignments: [], exceptions: [], rotationDefinitions: [], rotationSlots: [], available: false }
     if (error) throw error
-    const payload = (data ?? {}) as { assignments?: any[]; exceptions?: any[]; rotation_definitions?: any[]; rotation_slots?: any[] }
+    const payload = (data ?? {}) as { planning_workers?: any[]; assignments?: any[]; exceptions?: any[]; rotation_definitions?: any[]; rotation_slots?: any[] }
     return {
+      planningWorkers: payload.planning_workers?.map((row): PlanningWorker => ({ id: row.id, name: row.display_name, linkedProfileId: row.linked_profile_id ?? null, active: Boolean(row.active) })),
       assignments: (payload.assignments ?? []).map(mapWorkAssignment),
       exceptions: (payload.exceptions ?? []).map(mapScheduleException),
       rotationDefinitions: (payload.rotation_definitions ?? []).map((row) => ({
@@ -593,29 +596,60 @@ export const schoolRepository = {
     }
   },
   saveWorkerWorkAssignment: async (item: WorkerWorkAssignment) => {
-    const { error } = await client().rpc('admin_save_worker_work_assignment', {
-      target_id: item.id || null, target_worker_id: item.workerId, target_building_id: item.buildingId,
+    const { error } = await client().rpc('admin_save_planning_worker_work_assignment', {
+      target_id: item.id || null, target_planning_worker_id: item.workerId, target_building_id: item.buildingId,
       target_floor_id: item.floorId || null, target_area_label: item.areaLabel, target_weekdays: item.weekdays,
       target_valid_from: item.validFrom, target_valid_to: item.validTo || null, target_active: item.active,
     })
-    if (missingFunction(error)) throw new Error('Pracovní rozdělení ještě není v databázi aktivní. Aplikujte migraci 03100.')
+    if (missingFunction(error)) {
+      const legacy = await client().rpc('admin_save_worker_work_assignment', {
+        target_id: item.id || null, target_worker_id: item.workerId, target_building_id: item.buildingId,
+        target_floor_id: item.floorId || null, target_area_label: item.areaLabel, target_weekdays: item.weekdays,
+        target_valid_from: item.validFrom, target_valid_to: item.validTo || null, target_active: item.active,
+      })
+      if (legacy.error) throw new Error(workerPlanningSaveError(legacy.error, 'Pracovní rozdělení se nepodařilo uložit.'))
+      return
+    }
     if (error) throw new Error(workerPlanningSaveError(error, 'Pracovní rozdělení se nepodařilo uložit.'))
   },
   saveWorkerScheduleException: async (item: WorkerScheduleException) => {
-    const { error } = await client().rpc('admin_save_worker_schedule_exception', {
-      target_id: item.id || null, target_worker_id: item.workerId, target_exception_date: item.date,
+    const { error } = await client().rpc('admin_save_planning_worker_schedule_exception', {
+      target_id: item.id || null, target_planning_worker_id: item.workerId, target_exception_date: item.date,
       target_planned: item.planned, target_building_id: item.buildingId || null, target_floor_id: item.floorId || null,
       target_area_label: item.areaLabel || null, target_note: item.note || '', target_active: item.active,
     })
-    if (missingFunction(error)) throw new Error('Výjimky pracovního rozvrhu ještě nejsou v databázi aktivní. Aplikujte migraci 03100.')
+    if (missingFunction(error)) {
+      const legacy = await client().rpc('admin_save_worker_schedule_exception', {
+        target_id: item.id || null, target_worker_id: item.workerId, target_exception_date: item.date,
+        target_planned: item.planned, target_building_id: item.buildingId || null, target_floor_id: item.floorId || null,
+        target_area_label: item.areaLabel || null, target_note: item.note || '', target_active: item.active,
+      })
+      if (legacy.error) throw new Error(workerPlanningSaveError(legacy.error, 'Výjimku rozvrhu se nepodařilo uložit.'))
+      return
+    }
     if (error) throw new Error(workerPlanningSaveError(error, 'Výjimku rozvrhu se nepodařilo uložit.'))
   },
   saveCleaningRotationSlot: async (slotIndex: number, workerId: string | null, effectiveFrom: string) => {
-    const { error } = await client().rpc('admin_set_cleaning_rotation_slot', {
+    const { error } = await client().rpc('admin_set_cleaning_rotation_planning_worker_slot', {
       target_rotation_key: 'school-fourth-floor', target_slot_index: slotIndex,
-      target_worker_id: workerId || null, target_effective_from: effectiveFrom,
+      target_planning_worker_id: workerId || null, target_effective_from: effectiveFrom,
     })
-    if (missingFunction(error)) throw new Error('Rotace 4. patra ještě není v databázi aktivní. Aplikujte migraci 03300.')
+    if (missingFunction(error)) {
+      const legacy = await client().rpc('admin_set_cleaning_rotation_slot', {
+        target_rotation_key: 'school-fourth-floor', target_slot_index: slotIndex,
+        target_worker_id: workerId || null, target_effective_from: effectiveFrom,
+      })
+      if (legacy.error) throw legacy.error
+      return
+    }
+    if (error) throw error
+  },
+  savePlanningWorker: async (worker: PlanningWorker) => {
+    const { error } = await client().rpc('admin_save_planning_worker', {
+      target_id: worker.id || null, target_display_name: worker.name,
+      target_linked_profile_id: worker.linkedProfileId || null, target_active: worker.active,
+    })
+    if (missingFunction(error)) throw new Error('Plánovací pracovníci ještě nejsou v databázi aktivní. Aplikujte migraci 03400.')
     if (error) throw error
   },
   undoBulkCompletion: async (actionId: string) => {

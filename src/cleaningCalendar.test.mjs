@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { buildCalendarDaySummary, circledFloor, filterCalendarTasks } from './cleaningCalendar.ts'
+import { buildCalendarDaySummary, calendarWorkerOptions, circledFloor, filterCalendarTasks } from './cleaningCalendar.ts'
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay } from './scheduling.ts'
 
 const task = (overrides = {}) => ({
@@ -34,6 +34,18 @@ test('měsíční mřížka má vždy 6 týdnů Po–Ne pro únor, 30/31 dní i 
   assert.equal(monthGridDates('2026-02')[0], '2026-01-26')
   assert.equal(monthGridDates('2026-12')[0], '2026-11-30')
   assert.equal(monthGridDates('2026-12')[41], '2027-01-10')
+})
+
+test('filtr kalendáře obsahuje i aktivního plánovacího pracovníka bez účtu a bez období', () => {
+  const planning = {
+    planningWorkers: [
+      { id: 'didi', name: 'Didi Ceridwen', linkedProfileId: 'profile-didi', active: true },
+      { id: 'worker-2', name: 'Pracovník 2', linkedProfileId: null, active: true },
+      { id: 'old', name: 'Neaktivní', linkedProfileId: null, active: false },
+    ],
+    assignments: [], exceptions: [], rotationDefinitions: [], rotationSlots: [], available: true,
+  }
+  assert.deepEqual(calendarWorkerOptions(planning).map((item) => item.id).sort(), ['didi', 'worker-2'])
 })
 
 test('summary ukáže Školu, 1F a skutečnou rotaci 2F/3F bez běžných mikroikon', () => {

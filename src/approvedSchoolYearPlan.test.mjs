@@ -43,7 +43,7 @@ test('rotace používá UUID, RLS a admin RPC; frontend ji skutečně načítá 
   assert.match(migration, /if not public\.is_admin\(\)/i)
   assert.doesNotMatch(migration, /full_name\s*=/i)
   assert.match(repository, /rotation_definitions/)
-  assert.match(repository, /admin_set_cleaning_rotation_slot/)
+  assert.match(repository, /admin_set_cleaning_rotation_planning_worker_slot/)
   assert.match(app, /ROTACE 4\. PATRA/)
   assert.match(app, /Pracovník<select/)
 })

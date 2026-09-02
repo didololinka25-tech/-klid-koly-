@@ -11,6 +11,7 @@ export type WorkerWorkAssignment = {
   validFrom: string
   validTo?: string | null
   active: boolean
+  linkedProfileId?: string | null
 }
 
 export type WorkerScheduleException = {
@@ -26,9 +27,13 @@ export type WorkerScheduleException = {
   areaLabel?: string | null
   note: string
   active: boolean
+  linkedProfileId?: string | null
 }
 
+export type PlanningWorker = { id: string; name: string; linkedProfileId?: string | null; active: boolean }
+
 export type WorkerPlanningData = {
+  planningWorkers?: PlanningWorker[]
   assignments: WorkerWorkAssignment[]
   exceptions: WorkerScheduleException[]
   rotationDefinitions: CleaningRotationDefinition[]

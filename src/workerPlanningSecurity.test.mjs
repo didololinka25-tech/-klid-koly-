@@ -26,12 +26,12 @@ test('plán čtou schválení uživatelé, ale měnit jej může pouze admin př
 
 test('frontend používá UUID a RPC, ne task assignment nebo jméno jako identitu', () => {
   assert.match(repository, /rpc\('get_worker_work_planning'/)
-  assert.match(repository, /rpc\('admin_save_worker_work_assignment'/)
-  assert.match(repository, /rpc\('admin_save_worker_schedule_exception'/)
+  assert.match(repository, /rpc\('admin_save_planning_worker_work_assignment'/)
+  assert.match(repository, /rpc\('admin_save_planning_worker_schedule_exception'/)
   assert.match(app, /workerId/)
   const planningSlice = app.slice(app.indexOf('function WorkAssignmentOverview'), app.indexOf('function MoreScreen'))
   assert.doesNotMatch(planningSlice, /task_assignments|work_part|assignedTo/)
-  assert.match(repository, /target_worker_id:\s*item\.workerId/)
+  assert.match(repository, /target_planning_worker_id:\s*item\.workerId/)
   assert.match(repository, /target_building_id:\s*item\.buildingId/)
   assert.match(repository, /target_floor_id:\s*item\.floorId \|\| null/)
   assert.match(repository, /target_valid_to:\s*item\.validTo \|\| null/)
