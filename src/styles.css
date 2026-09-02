@@ -1421,7 +1421,7 @@ h2 {
 .calendar-extra-detail ul { margin: 3px 0 0; padding-left: 17px; display: grid; gap: 2px; color: #47655f; font-size: 11px; line-height: 1.35; }
 .calendar-routine-note { margin: 0; color: #617973; font-size: 12px; line-height: 1.45; }
 .calendar-routine-note button { min-height: 42px; border: 0; background: transparent; color: #165e56; font-weight: 900; text-decoration: underline; }
-.work-assignment-screen { display: grid; gap: 12px; }
+.work-assignment-screen { display: grid; gap: 10px; }
 .worker-plan-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .worker-plan-actions button { min-height: 44px; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; color: #165e56; font-weight: 900; }
 .rotation-editor { display: grid; gap: 10px; }
@@ -1433,13 +1433,14 @@ h2 {
 .worker-plan-month { display: grid; gap: 4px; font-size: 12px; font-weight: 900; }
 .worker-plan-month input { min-height: 44px; width: 100%; box-sizing: border-box; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; padding: 8px 10px; color: #173d38; font: inherit; }
 .worker-assignment-list { display: grid; gap: 8px; }
-.worker-assignment-list > button { width: 100%; min-height: 68px; padding: 11px 12px; border: 1px solid #dbe8e4; border-radius: 12px; background: #fff; color: #173d38; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; text-align: left; }
+.worker-assignment-list > button { width: 100%; min-height: 72px; padding: 10px 12px; border: 1px solid #dbe8e4; border-radius: 12px; background: #fff; color: #173d38; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; text-align: left; }
 .worker-assignment-list > button:disabled { opacity: 1; }
 .worker-assignment-list > button.inactive { opacity: .62; border-style: dashed; }
 .worker-assignment-list span { display: grid; gap: 2px; }
 .worker-assignment-list small,
 .worker-assignment-list i { color: #657c77; font-size: 11px; font-style: normal; }
 .worker-assignment-list em { color: #165e56; font-size: 11px; font-style: normal; font-weight: 900; }
+.worker-assignment-list strong { color: #165e56; font-size: 12px; white-space: nowrap; }
 .worker-exception-list { border: 1px solid #dbe8e4; border-radius: 12px; background: #fff; overflow: hidden; }
 .worker-exception-list > summary { min-height: 48px; padding: 10px 12px; display: flex; align-items: center; color: #165e56; font-weight: 900; cursor: pointer; }
 .worker-exception-list > button { width: 100%; padding: 11px 12px; border: 0; border-top: 1px solid #e5eeeb; background: #fff; color: #173d38; display: grid; gap: 2px; text-align: left; }

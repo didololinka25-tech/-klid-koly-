@@ -31,6 +31,21 @@ test('frontend používá UUID a RPC, ne task assignment nebo jméno jako identi
   assert.match(app, /workerId/)
   const planningSlice = app.slice(app.indexOf('function WorkAssignmentOverview'), app.indexOf('function MoreScreen'))
   assert.doesNotMatch(planningSlice, /task_assignments|work_part|assignedTo/)
+  assert.match(repository, /target_worker_id:\s*item\.workerId/)
+  assert.match(repository, /target_building_id:\s*item\.buildingId/)
+  assert.match(repository, /target_floor_id:\s*item\.floorId \|\| null/)
+  assert.match(repository, /target_valid_to:\s*item\.validTo \|\| null/)
+})
+
+test('mobilní formuláře jsou ve výchozím stavu zavřené a rotace ukazuje právě A, B, C', () => {
+  const planningSlice = app.slice(app.indexOf('const fourthFloorSlotIndices'), app.indexOf('function MoreScreen'))
+  assert.match(planningSlice, /fourthFloorSlotIndices\s*=\s*\[0,\s*1,\s*2\]/)
+  assert.match(planningSlice, /useState<WorkerWorkAssignment \| null>\(null\)/)
+  assert.match(planningSlice, /useState<WorkerScheduleException \| null>\(null\)/)
+  assert.match(planningSlice, /\+ Přidat nové období/)
+  assert.match(planningSlice, /\+ Přidat výjimku/)
+  assert.doesNotMatch(planningSlice, /Férové pořadí A → B → C/)
+  assert.match(planningSlice, /<strong>Upravit ›<\/strong>/)
 })
 
 test('03100 serverově odmítá nejednoznačné intervaly a duplicitní aktivní výjimky', () => {

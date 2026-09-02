@@ -50,7 +50,7 @@ import {
   roomPresentationState,
 } from "./cleaningPresentation";
 import { buildCalendarDaySummary, calendarWorkerOptions, filterCalendarTasks, type CalendarDaySummary } from "./cleaningCalendar";
-import { assignmentOverlapsMonth, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
+import { assignmentOverlapsMonth, scheduleExceptionsConflict, workAssignmentsConflict, workerPlanningSaveError, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
 
 type Section =
   | "Dnes"
@@ -101,6 +101,7 @@ const activityTypes: Record<
   other: { icon: "✓", label: "Ostatní" },
 };
 const weekdays = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
+const fourthFloorSlotIndices = [0, 1, 2] as const;
 const finalCheckPrefix = "v2026|school|common|final-";
 const isFinalCheckTask = (task: Task) => Boolean(task.planKey?.startsWith(finalCheckPrefix) || task.planKey?.startsWith("admin|final|"));
 const todayLabel = (dateKey: string) => new Intl.DateTimeFormat("cs-CZ", {
@@ -752,7 +753,7 @@ export default function App() {
       await refreshWorkerPlanning();
       setNotice("Pracovní rozdělení bylo uloženo.");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Pracovní rozdělení se nepodařilo uložit.");
+      setNotice(workerPlanningSaveError(error, "Pracovní rozdělení se nepodařilo uložit."));
       throw error;
     }
   };
@@ -763,7 +764,7 @@ export default function App() {
       await refreshWorkerPlanning();
       setNotice("Výjimka rozvrhu byla uložena.");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Výjimku rozvrhu se nepodařilo uložit.");
+      setNotice(workerPlanningSaveError(error, "Výjimku rozvrhu se nepodařilo uložit."));
       throw error;
     }
   };
@@ -3276,9 +3277,10 @@ function ManualEntryEditor({ entry, onCancel, onSave }: { entry: ManualEntry; on
 function WorkerAssignmentEditor({ item, workers, options, onCancel, onSave }: { item: WorkerWorkAssignment; workers: AttendanceWorker[]; options: PlanOptions; onCancel: () => void; onSave: (item: WorkerWorkAssignment) => Promise<void> }) {
   const [draft, setDraft] = useState(item);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const floors = options.floors.filter((floor) => floor.buildingId === draft.buildingId);
   const update = <K extends keyof WorkerWorkAssignment>(key: K, value: WorkerWorkAssignment[K]) => setDraft((current) => ({ ...current, [key]: value }));
-  return <form className="task-editor worker-plan-editor" onSubmit={async (event) => { event.preventDefault(); if (saving) return; setSaving(true); try { await onSave(draft); onCancel(); } finally { setSaving(false); } }}>
+  return <form className="task-editor worker-plan-editor" onSubmit={async (event) => { event.preventDefault(); if (saving) return; setSaving(true); setSaveError(""); try { await onSave(draft); onCancel(); } catch (error) { setSaveError(workerPlanningSaveError(error, "Pracovní rozdělení se nepodařilo uložit.")); } finally { setSaving(false); } }}>
     <h2>{item.id ? "Upravit pracovní období" : "Nové pracovní období"}</h2>
     <label>Pracovník<select required value={draft.workerId} onChange={(event) => update("workerId", event.target.value)}><option value="">Vyberte pracovníka</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></label>
     <label>Pracoviště<select required value={draft.buildingId} onChange={(event) => setDraft((current) => ({ ...current, buildingId: event.target.value, floorId: null }))}><option value="">Vyberte pracoviště</option>{options.buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>
@@ -3287,6 +3289,7 @@ function WorkerAssignmentEditor({ item, workers, options, onCancel, onSave }: { 
     <fieldset><legend>Pracovní dny</legend><div className="weekday-checks">{weekdays.map((day, index) => <label key={day}><input type="checkbox" checked={draft.weekdays.includes(index + 1)} onChange={(event) => update("weekdays", event.target.checked ? [...draft.weekdays, index + 1].sort() : draft.weekdays.filter((value) => value !== index + 1))} />{day}</label>)}</div></fieldset>
     <div className="period-fields"><label>Platí od<input required type="date" value={draft.validFrom} onChange={(event) => update("validFrom", event.target.value)} /></label><label>Platí do<input type="date" value={draft.validTo ?? ""} min={draft.validFrom} onChange={(event) => update("validTo", event.target.value || null)} /></label></div>
     <label className="switch"><input type="checkbox" checked={draft.active} onChange={(event) => update("active", event.target.checked)} /> Aktivní</label>
+    {saveError && <div className="notice error" role="alert">{saveError}</div>}
     <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving || !draft.weekdays.length}>{saving ? "Ukládám…" : "Uložit"}</button></div>
   </form>;
 }
@@ -3294,9 +3297,10 @@ function WorkerAssignmentEditor({ item, workers, options, onCancel, onSave }: { 
 function WorkerExceptionEditor({ item, workers, options, onCancel, onSave }: { item: WorkerScheduleException; workers: AttendanceWorker[]; options: PlanOptions; onCancel: () => void; onSave: (item: WorkerScheduleException) => Promise<void> }) {
   const [draft, setDraft] = useState(item);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const floors = options.floors.filter((floor) => floor.buildingId === draft.buildingId);
   const update = <K extends keyof WorkerScheduleException>(key: K, value: WorkerScheduleException[K]) => setDraft((current) => ({ ...current, [key]: value }));
-  return <form className="task-editor worker-plan-editor" onSubmit={async (event) => { event.preventDefault(); if (saving) return; setSaving(true); try { await onSave(draft); onCancel(); } finally { setSaving(false); } }}>
+  return <form className="task-editor worker-plan-editor" onSubmit={async (event) => { event.preventDefault(); if (saving) return; setSaving(true); setSaveError(""); try { await onSave(draft); onCancel(); } catch (error) { setSaveError(workerPlanningSaveError(error, "Výjimku rozvrhu se nepodařilo uložit.")); } finally { setSaving(false); } }}>
     <h2>{item.id ? "Upravit výjimku" : "Nová výjimka rozvrhu"}</h2>
     <label>Pracovník<select required value={draft.workerId} onChange={(event) => update("workerId", event.target.value)}><option value="">Vyberte pracovníka</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></label>
     <label>Datum<input required type="date" value={draft.date} onChange={(event) => update("date", event.target.value)} /></label>
@@ -3304,6 +3308,7 @@ function WorkerExceptionEditor({ item, workers, options, onCancel, onSave }: { i
     {draft.planned && <><label>Pracoviště<select required value={draft.buildingId ?? ""} onChange={(event) => setDraft((current) => ({ ...current, buildingId: event.target.value, floorId: null }))}><option value="">Vyberte pracoviště</option>{options.buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label><label>Patro / sekce<select value={draft.floorId ?? ""} onChange={(event) => { const floor = floors.find((value) => value.id === event.target.value); setDraft((current) => ({ ...current, floorId: floor?.id ?? null, floorName: floor?.name ?? null, areaLabel: floor?.name || current.areaLabel })); }}><option value="">Vlastní oblast</option>{floors.map((floor) => <option key={floor.id} value={floor.id}>{floor.name}</option>)}</select></label><label>Oblast<input value={draft.areaLabel ?? ""} onChange={(event) => update("areaLabel", event.target.value)} /></label></>}
     <label>Poznámka<textarea rows={2} value={draft.note} onChange={(event) => update("note", event.target.value)} /></label>
     <label className="switch"><input type="checkbox" checked={draft.active} onChange={(event) => update("active", event.target.checked)} /> Aktivní</label>
+    {saveError && <div className="notice error" role="alert">{saveError}</div>}
     <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
   </form>;
 }
@@ -3317,10 +3322,10 @@ function FourthFloorRotationEditor({ data, workers, canManage, onSave }: { data:
   const currentFor = (slotIndex: number) => data.rotationSlots.filter((item) => item.rotationKey === "school-fourth-floor" && item.slotIndex === slotIndex && item.active && item.validFrom <= effectiveFrom && (!item.validTo || item.validTo >= effectiveFrom)).sort((a, b) => b.validFrom.localeCompare(a.validFrom))[0];
   useEffect(() => {
     if (!definition) return;
-    setDraft(Object.fromEntries(Array.from({ length: definition.slotCount }, (_, slot) => [slot, currentFor(slot)?.workerId ?? ""])));
-  }, [data.rotationSlots, definition?.slotCount, effectiveFrom]);
+    setDraft(Object.fromEntries(fourthFloorSlotIndices.map((slot) => [slot, currentFor(slot)?.workerId ?? ""])));
+  }, [data.rotationSlots, definition?.rotationKey, effectiveFrom]);
   if (!definition) return <section className="panel rotation-editor"><p className="eyebrow">ROTACE 4. PATRA</p><p className="hint">Rotace bude dostupná po aplikaci migrace 03300.</p></section>;
-  return <section className="panel rotation-editor"><p className="eyebrow">ROTACE 4. PATRA</p><h2>Férové pořadí A → B → C</h2><p className="hint">Planner vybere nejlepší směnu týdne podle počtu pracovníků. Pozice pouze určují pořadí skutečných UUID pracovníků, nikoli pevný pátek. Prázdná pozice je povolená.</p>{canManage && <label>Platnost změny od<input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} /></label>}<div className="rotation-slots">{Array.from({ length: definition.slotCount }, (_, slot) => <div key={slot}><b>Pozice {String.fromCharCode(65 + slot)}</b><select disabled={!canManage || saving !== null} value={draft[slot] ?? currentFor(slot)?.workerId ?? ""} onChange={(event) => setDraft((value) => ({ ...value, [slot]: event.target.value }))}><option value="">Zatím nepřiřazena</option>{workers.map((worker) => <option value={worker.id} key={worker.id}>{worker.name}</option>)}</select>{canManage && <button disabled={saving !== null} onClick={async () => { setSaving(slot); try { await onSave(slot, draft[slot] || null, effectiveFrom); } finally { setSaving(null); } }}>{saving === slot ? "Ukládám…" : "Uložit pozici"}</button>}</div>)}</div></section>;
+  return <section className="panel rotation-editor"><p className="eyebrow">ROTACE 4. PATRA</p><h2>Pořadí pracovníků</h2><p className="hint">Planner vybere vhodnou směnu podle počtu pracovníků. Pozice určují pořadí skutečných pracovníků.</p>{canManage && <label>Platnost změny od<input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} /></label>}<div className="rotation-slots">{fourthFloorSlotIndices.map((slot) => <div key={slot}><b>Pozice {String.fromCharCode(65 + slot)}</b><select disabled={!canManage || saving !== null} value={draft[slot] ?? currentFor(slot)?.workerId ?? ""} onChange={(event) => setDraft((value) => ({ ...value, [slot]: event.target.value }))}><option value="">Zatím nepřiřazena</option>{workers.map((worker) => <option value={worker.id} key={worker.id}>{worker.name}</option>)}</select>{canManage && <button disabled={saving !== null} onClick={async () => { setSaving(slot); try { await onSave(slot, draft[slot] || null, effectiveFrom); } finally { setSaving(null); } }}>{saving === slot ? "Ukládám…" : "Uložit pozici"}</button>}</div>)}</div></section>;
 }
 
 function WorkAssignmentOverview({ data, workers, options, canManage, onSaveAssignment, onSaveException, onSaveRotation }: { data: WorkerPlanningData; workers: AttendanceWorker[]; options: PlanOptions; canManage: boolean; onSaveAssignment: (item: WorkerWorkAssignment) => Promise<void>; onSaveException: (item: WorkerScheduleException) => Promise<void>; onSaveRotation: (slotIndex: number, workerId: string | null, effectiveFrom: string) => Promise<void> }) {
@@ -3331,13 +3336,25 @@ function WorkAssignmentOverview({ data, workers, options, canManage, onSaveAssig
   const current = data.assignments.filter((item) => assignmentOverlapsMonth(item, month));
   const blankAssignment = (): WorkerWorkAssignment => ({ id: "", workerId: "", workerName: "", buildingId: "", buildingName: "", floorId: null, floorName: null, areaLabel: "", weekdays: [1, 3, 5], validFrom: today, validTo: null, active: true });
   const blankException = (): WorkerScheduleException => ({ id: "", workerId: "", workerName: "", date: today, planned: false, buildingId: null, buildingName: null, floorId: null, floorName: null, areaLabel: null, note: "", active: true });
+  const saveAssignment = async (item: WorkerWorkAssignment) => {
+    if (data.assignments.some((existing) => workAssignmentsConflict(existing, item))) {
+      throw new Error("Toto období se překrývá s již uloženým pracovním obdobím. Otevřete existující období a upravte ho.");
+    }
+    await onSaveAssignment(item);
+  };
+  const saveException = async (item: WorkerScheduleException) => {
+    if (data.exceptions.some((existing) => scheduleExceptionsConflict(existing, item))) {
+      throw new Error("Pro tohoto pracovníka už je na vybraný den uložená výjimka. Otevřete ji a upravte.");
+    }
+    await onSaveException(item);
+  };
   return <div className="work-assignment-screen">
-    <section className="panel"><p className="eyebrow">ROZDĚLENÍ PRÁCE</p><h2>Stabilní pracovní oblasti</h2><p className="hint">Určuje, kdo běžně pracuje v jednotlivé dny. Jednotlivé úkoly zůstávají společné pro celý tým.</p>{!data.available && <div className="notice">Databázový model ještě není aktivní. Nejprve zkontrolujte a aplikujte migraci 03100.</div>}{canManage && data.available && <div className="worker-plan-actions"><button onClick={() => setAssignment(blankAssignment())}>+ Přidat nové období</button><button onClick={() => setException(blankException())}>+ Přidat výjimku</button></div>}</section>
-    {assignment && <WorkerAssignmentEditor item={assignment} workers={workers} options={options} onCancel={() => setAssignment(null)} onSave={onSaveAssignment} />}
-    {exception && <WorkerExceptionEditor item={exception} workers={workers} options={options} onCancel={() => setException(null)} onSave={onSaveException} />}
+    <section className="panel"><p className="eyebrow">ROZDĚLENÍ PRÁCE</p><h2>Stabilní pracovní oblasti</h2><p className="hint">Pracovní dny určují počet lidí; planner podle něj zvolí rozsah úklidu.</p>{!data.available && <div className="notice">Databázový model ještě není aktivní. Nejprve zkontrolujte a aplikujte migraci 03100.</div>}{canManage && data.available && <div className="worker-plan-actions"><button onClick={() => { setException(null); setAssignment(blankAssignment()); }}>+ Přidat nové období</button><button onClick={() => { setAssignment(null); setException(blankException()); }}>+ Přidat výjimku</button></div>}</section>
+    {assignment && <WorkerAssignmentEditor item={assignment} workers={workers} options={options} onCancel={() => setAssignment(null)} onSave={saveAssignment} />}
+    {exception && <WorkerExceptionEditor item={exception} workers={workers} options={options} onCancel={() => setException(null)} onSave={saveException} />}
     <FourthFloorRotationEditor data={data} workers={workers} canManage={canManage} onSave={onSaveRotation} />
     <label className="worker-plan-month">Zobrazený měsíc<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label>
-    <section className="worker-assignment-list">{current.map((item) => <button className={item.active ? "" : "inactive"} key={item.id} disabled={!canManage} onClick={() => setAssignment(item)}><span><b>{item.workerName}{!item.active ? " · Neaktivní" : ""}</b><small>{item.buildingName} · {item.areaLabel}</small><i>{item.validFrom}{item.validTo ? ` – ${item.validTo}` : " – bez konce"}</i></span><em>{weekdays.filter((_, index) => item.weekdays.includes(index + 1)).join(" · ")}</em></button>)}{data.available && current.length === 0 && <p className="hint">Pro tento měsíc zatím není uložené žádné pracovní rozdělení.</p>}</section>
+    <section className="worker-assignment-list">{current.map((item) => <button className={item.active ? "" : "inactive"} key={item.id} disabled={!canManage} onClick={() => { setException(null); setAssignment(item); }}><span><b>{item.workerName}{!item.active ? " · Neaktivní" : ""}</b><small>{item.buildingName} · {item.areaLabel}</small><em>{weekdays.filter((_, index) => item.weekdays.includes(index + 1)).join(" · ")}</em><i>{formatDate(item.validFrom)}{item.validTo ? ` – ${formatDate(item.validTo)}` : " – bez konce"}</i></span>{canManage && <strong>Upravit ›</strong>}</button>)}{data.available && current.length === 0 && <p className="hint">Pro tento měsíc zatím není uložené žádné pracovní rozdělení.</p>}</section>
     {data.exceptions.length > 0 && <details className="worker-exception-list"><summary>Výjimky rozvrhu</summary>{data.exceptions.slice().sort((a, b) => b.date.localeCompare(a.date)).map((item) => <button key={item.id} disabled={!canManage} onClick={() => setException(item)}><b>{formatDate(item.date)} · {item.workerName}</b><span>{item.planned ? `Výjimečně: ${item.buildingName ?? "pracoviště"} · ${item.areaLabel ?? "oblast"}` : "Nepřijde"}</span>{item.note && <small>{item.note}</small>}</button>)}</details>}
   </div>;
 }

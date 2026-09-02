@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { assignmentAppliesInMonth, assignmentOverlapsMonth, cleaningRotationForDate, scheduleExceptionsConflict, stableWorkerColor, workAssignmentsConflict, workerInitials, workersForDate } from './workerPlanning.ts'
+import { assignmentAppliesInMonth, assignmentOverlapsMonth, cleaningRotationForDate, scheduleExceptionsConflict, stableWorkerColor, workAssignmentsConflict, workerInitials, workerPlanningSaveError, workersForDate } from './workerPlanning.ts'
 
 const assignment = (overrides = {}) => ({
   id: 'assignment-1', workerId: 'worker-dana', workerName: 'Dana Nováková',
@@ -77,6 +77,18 @@ test('pro pracovníka a datum je nejvýše jedna aktivní výjimka', () => {
   assert.equal(scheduleExceptionsConflict(first, { ...second, date: '2026-09-10' }), false, 'jediná výjimka pro jiné datum projde')
   assert.equal(scheduleExceptionsConflict(first, second), true)
   assert.equal(scheduleExceptionsConflict({ ...first, active: false }, second), false, 'deaktivovaná historie neblokuje novou výjimku')
+})
+
+test('Supabase overlap chyba se neztratí za obecnou hláškou', () => {
+  assert.equal(
+    workerPlanningSaveError({ code: '23505', message: 'Pracovní období se překrývá s existujícím rozdělením.' }, 'Obecná chyba'),
+    'Toto období se překrývá s již uloženým pracovním obdobím. Otevřete existující období a upravte ho.',
+  )
+  assert.equal(
+    workerPlanningSaveError({ code: '23505', message: 'Pro pracovníka už je na tento den uložená aktivní výjimka.' }, 'Obecná chyba'),
+    'Pro tohoto pracovníka už je na vybraný den uložená výjimka. Otevřete ji a upravte.',
+  )
+  assert.equal(workerPlanningSaveError({ message: 'Pracoviště není aktivní.' }, 'Obecná chyba'), 'Pracoviště není aktivní.')
 })
 
 test('4. patro rotuje A → B → C souvisle přes hranici měsíce a podle UUID', () => {

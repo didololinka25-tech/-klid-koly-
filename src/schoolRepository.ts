@@ -11,7 +11,7 @@ import { isSameTaskDefinition } from './taskValidation'
 import { pragueDateKey, validateAttendanceInterval } from './attendanceTime'
 import { attendanceStartValues } from './buildingScope'
 import { inferredBulkCompletable, isBulkCompletableTask } from './cleaningBulk'
-import type { CleaningRotationSlot, WorkerPlanningData, WorkerScheduleException, WorkerWorkAssignment } from './workerPlanning'
+import { workerPlanningSaveError, type CleaningRotationSlot, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from './workerPlanning'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -599,7 +599,7 @@ export const schoolRepository = {
       target_valid_from: item.validFrom, target_valid_to: item.validTo || null, target_active: item.active,
     })
     if (missingFunction(error)) throw new Error('Pracovní rozdělení ještě není v databázi aktivní. Aplikujte migraci 03100.')
-    if (error) throw error
+    if (error) throw new Error(workerPlanningSaveError(error, 'Pracovní rozdělení se nepodařilo uložit.'))
   },
   saveWorkerScheduleException: async (item: WorkerScheduleException) => {
     const { error } = await client().rpc('admin_save_worker_schedule_exception', {
@@ -608,7 +608,7 @@ export const schoolRepository = {
       target_area_label: item.areaLabel || null, target_note: item.note || '', target_active: item.active,
     })
     if (missingFunction(error)) throw new Error('Výjimky pracovního rozvrhu ještě nejsou v databázi aktivní. Aplikujte migraci 03100.')
-    if (error) throw error
+    if (error) throw new Error(workerPlanningSaveError(error, 'Výjimku rozvrhu se nepodařilo uložit.'))
   },
   saveCleaningRotationSlot: async (slotIndex: number, workerId: string | null, effectiveFrom: string) => {
     const { error } = await client().rpc('admin_set_cleaning_rotation_slot', {

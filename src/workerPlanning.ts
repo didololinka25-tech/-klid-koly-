@@ -188,3 +188,16 @@ export function workAssignmentsConflict(first: WorkerWorkAssignment, second: Wor
 export function scheduleExceptionsConflict(first: WorkerScheduleException, second: WorkerScheduleException) {
   return first.active && second.active && first.id !== second.id && first.workerId === second.workerId && first.date === second.date
 }
+
+/** Supabase PostgrestError je obyčejný objekt, ne instance Error. */
+export function workerPlanningSaveError(error: unknown, fallback: string) {
+  const value = error as { code?: string; message?: string; details?: string } | null
+  const message = value?.message?.trim() || value?.details?.trim()
+  if (message?.includes('už je na tento den uložená aktivní výjimka')) {
+    return 'Pro tohoto pracovníka už je na vybraný den uložená výjimka. Otevřete ji a upravte.'
+  }
+  if (value?.code === '23505' || message?.toLocaleLowerCase('cs').includes('překrývá')) {
+    return 'Toto období se překrývá s již uloženým pracovním obdobím. Otevřete existující období a upravte ho.'
+  }
+  return message || fallback
+}
