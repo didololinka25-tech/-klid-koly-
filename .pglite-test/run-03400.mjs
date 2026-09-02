@@ -13,6 +13,13 @@ create function auth.uid() returns uuid language sql stable as $$ select '${admi
 create function public.is_admin() returns boolean language sql stable as $$ select true $$;
 create function public.can_view_school_data() returns boolean language sql stable as $$ select true $$;
 create function public.app_current_date() returns date language sql stable as $$ select date '2026-09-02' $$;
+create function public.school_worker_count_for_date(target_date date) returns integer language sql stable as $$ select 2 $$;
+create function public.school_rotating_floor_for_date(target_date date) returns text language sql stable as $$
+ select case when (select count(*) from generate_series(date '2026-08-31',target_date,interval '1 day') generated(plan_day) where public.school_worker_count_for_date(generated.plan_day::date)=2)=2 then '2. patro' else '3. patro' end
+$$;
+create function public.get_dynamic_school_cleaning_plan(target_from date,target_to date)
+returns table(task_id uuid,scheduled_date date,plan_reason text,due_from date,due_to date,assigned_worker_id uuid,planner_priority integer)
+language sql stable as $$ select null::uuid,null::date,null::text,null::date,null::date,null::uuid,null::integer where false $$;
 create table public.profiles(id uuid primary key,full_name text,active boolean not null default true,access_role text not null default 'cleaning_team');
 create table public.buildings(id uuid primary key,name text not null,active boolean not null default true);
 create table public.floors(id uuid primary key,building_id uuid references public.buildings(id),name text not null);

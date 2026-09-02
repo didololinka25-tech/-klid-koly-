@@ -181,7 +181,8 @@ create or replace function public.school_rotating_floor_for_date(target_date dat
 language sql security definer stable set search_path=public as $$
   select case when ((select count(*)
     from generate_series(date '2026-08-31',target_date,interval '1 day') as generated_day(plan_timestamp)
-    where public.school_worker_count_for_date(generated_day.plan_timestamp::date)>=2)-1)%2=0 then '2. patro' else '3. patro' end;
+    -- Tříčlenná směna uklízí obě patra a nesmí spotřebovat krok dvoučlenné rotace.
+    where public.school_worker_count_for_date(generated_day.plan_timestamp::date)=2)-1)%2=0 then '2. patro' else '3. patro' end;
 $$;
 create or replace function public.school_fourth_floor_slot_for_date(target_date date) returns smallint
 language sql security definer stable set search_path=public as $$
@@ -386,6 +387,7 @@ do $$ begin
   if exists(select 1 from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.buildings building on building.id=room.building_id where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and room.name='Jídelna' and task.activity_type='mirror') then raise exception 'Zrcadlo Jídelny nesmí být aktivní.'; end if;
   if exists(select 1 from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.buildings building on building.id=room.building_id where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and task.activity_type='windows' and task.period_months is distinct from 3::smallint) then raise exception 'Okna školy musí být čtvrtletní.'; end if;
   if exists(select 1 from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.buildings building on building.id=room.building_id where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and task.activity_type in ('tables','doors','tiles','surfaces','windows','deep_clean') and task.schedule_days is distinct from array[1,2,3,4,5,6,7]::smallint[]) then raise exception 'Periodické práce školy nesmí mít pevný den.'; end if;
+  if exists(select 1 from public.cleaning_tasks task join public.rooms room on room.id=task.room_id join public.floors floor on floor.id=room.floor_id join public.buildings building on building.id=room.building_id where task.active and task.plan_key like 'v2026|%' and building.name='Škola' and floor.name in ('Schodiště','4. patro') and task.frequency='weekly' and task.schedule_days is distinct from array[1,2,3,4,5,6,7]::smallint[]) then raise exception 'Schodiště ani 4. patro nesmí mít pevný pracovní den.'; end if;
   if not exists(select 1 from public.cleaning_tasks where active and plan_key='v2026|school|common|final-close-windows' and activity_type='windows' and frequency='cleaning_day' and period_months is null) then raise exception 'Odchodová kontrola oken musí zůstat aktivní.'; end if;
   if not exists(select 1 from public.cleaning_tasks where active and plan_key='v2026|school|common|final-laundry' and activity_type='laundry' and frequency='cleaning_day') then raise exception 'Odchodová kontrola použitých hadrů musí zůstat aktivní.'; end if;
   if (select weekday from public.cleaning_rotation_definitions where rotation_key='school-fourth-floor') is not null then raise exception 'Rotace 4. patra nesmí mít pevný den.'; end if;

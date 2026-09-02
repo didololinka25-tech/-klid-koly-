@@ -1,6 +1,19 @@
 -- Plánovací osoby nezávislé na Auth/profile; completion identita zůstává auth.uid().
 begin;
 
+-- 03400 je záměrně druhý krok. Nejdříve musí být celá finální dynamická 03300.
+do $$ begin
+  if to_regclass('public.cleaning_rotation_slot_assignments') is null
+     or to_regclass('public.cleaning_planner_occurrences') is null
+     or to_regprocedure('public.get_dynamic_school_cleaning_plan(date,date)') is null
+     or to_regprocedure('public.school_rotating_floor_for_date(date)') is null then
+    raise exception 'Nejprve spusťte celou migraci 03300 dynamického planneru.';
+  end if;
+  if position(')=2' in regexp_replace(pg_get_functiondef('public.school_rotating_floor_for_date(date)'::regprocedure),'\s+','','g'))=0 then
+    raise exception '03300 neobsahuje finální rotaci posouvanou pouze dvoučlennými směnami.';
+  end if;
+end $$;
+
 create table if not exists public.planning_workers (
   id uuid primary key default gen_random_uuid(),
   display_name text not null,

@@ -68,6 +68,14 @@ test('03300 používá jednoznačné generate_series aliasy a PostgreSQL kompati
   assert.match(migration, /min\(o\.id::text\)::uuid as stable_id/i)
 })
 
+test('03300 sama obsahuje finální dvoučlennou rotaci a neponechává schody ani 4F na pevném dni', () => {
+  const rotation = migration.match(/create or replace function public\.school_rotating_floor_for_date[\s\S]*?\$\$;/i)?.[0] ?? ''
+  assert.match(rotation, /school_worker_count_for_date\([^)]+\)\s*=\s*2/i)
+  assert.doesNotMatch(rotation, /school_worker_count_for_date\([^)]+\)\s*>=\s*2/i)
+  assert.match(migration, /floor\.name in \('Schodiště','4\. patro'\)[\s\S]*schedule_days is distinct from array\[1,2,3,4,5,6,7\]/i)
+  assert.match(migration, /Schodiště ani 4\. patro nesmí mít pevný pracovní den\./)
+})
+
 test('Dnes i Kalendář čtou stejný serverový planner a před 03300 mají bezpečný fallback', () => {
   assert.match(repository, /get_dynamic_school_cleaning_plan/)
   assert.match(repository, /dynamicSchoolPlan/)

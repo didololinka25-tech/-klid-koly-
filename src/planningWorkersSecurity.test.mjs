@@ -13,6 +13,8 @@ test('03400 je atomická, nedestruktivní a zachovává profilové UUID při bac
   assert.match(migration, /update public\.worker_work_assignments set planning_worker_id=worker_id/)
   assert.match(migration, /update public\.worker_schedule_exceptions set planning_worker_id=worker_id/)
   assert.doesNotMatch(migration, /delete\s+from|truncate\s|drop\s+table/i)
+  assert.match(migration, /Nejprve spusťte celou migraci 03300 dynamického planneru\./)
+  assert.match(migration, /03300 neobsahuje finální rotaci posouvanou pouze dvoučlennými směnami\./)
 })
 
 test('plánovací pracovník může existovat bez účtu, ale zápis je pouze admin RPC', () => {
