@@ -609,6 +609,32 @@ h2 {
 .compact-shared { padding: 11px; border: 1px solid #dbe8e4; border-radius: 13px; background: #fff; }
 .compact-shared.today-extra-shared { border-color: #ead6ab; background: #fffaf0; }
 .compact-shared > .eyebrow { margin: 0 0 8px; }
+.work-block-overview { margin: 8px 0 10px; padding: 11px 13px; display: grid; gap: 7px; border: 1px solid #cfe2dd; border-radius: 14px; background: #eef7f4; }
+.work-block-overview > span { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.work-block-overview b { color: #174d45; font-size: 14px; }
+.work-block-overview small { color: #52776f; font-size: 11px; font-weight: 800; text-align: right; }
+.work-block-list { display: grid; gap: 10px; }
+.work-block-card { min-width: 0; padding: 13px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(118px, .42fr); gap: 8px 12px; align-items: center; border: 1px solid #cfe0dc; border-radius: 15px; background: #fff; box-shadow: 0 2px 8px rgba(23, 77, 69, .06); }
+.work-block-card.done { border-color: #8bc5b8; background: #edf8f4; }
+.work-block-card.optional { border-style: dashed; }
+.work-block-card > header { min-width: 0; display: grid; gap: 3px; }
+.work-block-card h3 { margin: 0; color: #173f39; font-size: 17px; line-height: 1.25; overflow-wrap: anywhere; }
+.work-block-card > header b { color: #52776f; font-size: 12px; }
+.work-block-card > header small { color: #1f725f; font-size: 11px; font-weight: 800; }
+.work-block-actions { grid-column: 2; grid-row: 1; }
+.work-block-actions .complete-room, .work-block-actions .undo-room { width: 100%; min-height: 48px; }
+.work-block-detail-toggle { grid-column: 1 / -1; min-height: 44px; padding: 4px 2px 0; border: 0; background: transparent; color: #376c63; font-size: 12px; font-weight: 900; text-align: left; }
+.work-block-details { grid-column: 1 / -1; display: grid; gap: 10px; padding-top: 3px; }
+.work-block-details > section { min-width: 0; padding-top: 9px; border-top: 1px solid #dbe8e4; }
+.work-block-details h4 { margin: 0 0 6px; color: #365f58; font-size: 12px; }
+.wc-queue-card { overflow: hidden; border: 1px dashed #d2b574; border-radius: 15px; background: #fffaf0; }
+.wc-queue-heading { width: 100%; min-height: 66px; padding: 12px 13px; display: flex; justify-content: space-between; align-items: center; gap: 10px; border: 0; background: transparent; color: #584518; text-align: left; }
+.wc-queue-heading span { min-width: 0; display: grid; gap: 4px; }
+.wc-queue-heading h3 { margin: 0; font-size: 17px; }
+.wc-queue-heading small { color: #806c4a; font-size: 11px; line-height: 1.35; }
+.wc-queue-heading i { font-size: 20px; font-style: normal; }
+.wc-queue-floors { padding: 0 8px 8px; display: grid; gap: 8px; }
+.wc-queue-floors .work-block-card { box-shadow: none; }
 .floor-group {
   background: #fff;
   border: 1px solid #dbe8e4;
@@ -1586,6 +1612,9 @@ nav .active {
 
 @media (max-width: 430px) {
   .app { padding-left: 12px; padding-right: 12px; }
+  .work-block-card { grid-template-columns: minmax(0, 1fr) 116px; padding: 11px; gap: 6px 8px; }
+  .work-block-card h3 { font-size: 15px; }
+  .work-block-overview > span { align-items: start; }
   .room-list { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 8px; gap: 8px; }
   .room-group { padding: 10px; }
   .room-primary-action .complete-room,
@@ -1600,6 +1629,10 @@ nav .active {
 
 @media (min-width: 800px) {
   .app:has(.building-task-group) { max-width: 1000px; }
+  .app:has(.building-task-group) .work-block-list { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .app:has(.building-task-group) .wc-queue-card { grid-column: 1 / -1; }
+  .app:has(.building-task-group) .wc-queue-floors { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .work-block-card:has(.work-block-detail-toggle[aria-expanded="true"]) { grid-column: 1 / -1; }
   .app:has(.building-task-group) .room-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .app:has(.cleaning-calendar) { max-width: 1000px; }
   .calendar-day { min-height: 112px; padding: 9px; gap: 5px; }

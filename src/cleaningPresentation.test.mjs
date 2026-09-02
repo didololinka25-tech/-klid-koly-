@@ -96,11 +96,13 @@ test('úterní souhrn ukáže Školku a výjimka je odvozena stejným resolverem
   assert.equal(saturday.length, 1)
 })
 
-test('UI používá místnost jako hlavní jednotku a jednotlivé úkoly nechává sbalené', () => {
+test('UI používá pracovní celek jako hlavní jednotku a jednotlivé úkoly nechává sbalené', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   assert.match(source, /✓ Hotovo/)
   assert.match(source, /› Podrobnosti/)
-  assert.match(source, /Vrátit dokončení místnosti/)
+  assert.match(source, /Vrátit dokončení/)
+  assert.match(source, /buildTodayWorkBlocks/)
+  assert.match(source, /Dnešní hlavní práce/)
   assert.match(source, /today-extras/)
   assert.match(source, /DNES NAVÍC/)
   assert.match(source, /compact-task-list/)
@@ -127,16 +129,16 @@ test('kalendář a Dnes sdílejí scheduling resolver a kalendář nezobrazuje b
 test('mobilní redesign drží touch targety a na desktopu rozšíří měsíční mřížku', () => {
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
   assert.match(css, /@media \(max-width: 430px\)/)
-  assert.match(css, /\.room-list \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
-  assert.match(css, /\.room-primary-action \.complete-room,[\s\S]*min-height: 46px/)
-  assert.match(css, /\.room-group:has\(\.room-detail-toggle\[aria-expanded="true"\]\) \{ grid-column: 1 \/ -1; \}/)
+  assert.match(css, /\.work-block-card[\s\S]*min-width: 0/)
+  assert.match(css, /\.work-block-actions \.complete-room,[\s\S]*min-height: 48px/)
+  assert.match(css, /\.work-block-card:has\(\.work-block-detail-toggle\[aria-expanded="true"\]\) \{ grid-column: 1 \/ -1; \}/)
   assert.match(css, /\.compact-task-list[\s\S]*grid-template-columns: minmax\(0, 1fr\)/)
   assert.match(css, /@media \(min-width: 800px\)[\s\S]*\.app:has\(\.cleaning-calendar\)/)
-  assert.match(css, /\.app:has\(\.building-task-group\) \.room-list \{ grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/)
+  assert.match(css, /\.app:has\(\.building-task-group\) \.work-block-list \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
   assert.match(css, /overflow-x: hidden/)
 })
 
-test('Dnes vede přímo od docházky přes práci navíc k místnostem', () => {
+test('Dnes vede přímo od docházky přes práci navíc k pracovním celkům', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const today = source.match(/\{section === "Dnes"[\s\S]*?\{section === "Správa"/)?.[0] ?? ''
   assert.doesNotMatch(today, /className=\{visible\.length > 0[\s\S]*?hero today-overview/)
@@ -145,8 +147,9 @@ test('Dnes vede přímo od docházky přes práci navíc k místnostem', () => {
   assert.ok(today.indexOf('<TodayExtras') < today.indexOf('<TaskHierarchy'))
   assert.ok(today.indexOf('<TaskHierarchy') < today.indexOf('<DepartureChecks'))
   assert.doesNotMatch(source, /Co jsem dnes udělal\/a|Vyberte místnosti a uložte je najednou|ShiftRoomCompletion/)
-  assert.match(source, /Otevřená WC fronta/)
-  assert.match(source, /povinných místností/)
+  assert.match(source, /WC – otevřená fronta/)
+  assert.match(source, /hlavní části hotové/)
+  assert.doesNotMatch(source, /povinných místností/)
   assert.doesNotMatch(source, /místností · \{floorKindLabel/)
   assert.doesNotMatch(source, /className="room-today-extra"/)
 })

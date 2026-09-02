@@ -41,16 +41,15 @@ import { calculateDpcPaceCard, calculateDppMonthlyBudget } from "./workPace";
 import type { ActivityType, Attendance, Frequency, Task } from "./types";
 import { attendanceEditorStartValue, pragueDateKey, pragueDateTimeInput } from "./attendanceTime";
 import { forBuilding, roomForBuilding } from "./buildingScope";
-import { applyBulkUndo, bulkTasks, findUndoableRoomAction, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
+import { applyBulkUndo, bulkTasks, inferredBulkCompletable, isBulkCompletableTask, orderTasksByDependency } from "./cleaningBulk";
 import { createLatestRequestGate } from "./latestRequest";
 import {
   isExtraCleaningTask,
   isStandardCleaningTask,
-  roomIsComplete,
-  roomPresentationState,
 } from "./cleaningPresentation";
 import { buildCalendarDaySummary, calendarWorkerOptions, filterCalendarTasks, type CalendarDaySummary } from "./cleaningCalendar";
 import { assignmentOverlapsMonth, scheduleExceptionsConflict, workAssignmentsConflict, workerPlanningSaveError, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
+import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
 
 type Section =
   | "Dnes"
@@ -1007,7 +1006,6 @@ export default function App() {
             <ArrivalReminders entries={manual.entries.filter((entry) => entry.entryType === "arrival" && entry.active)} />
           )}
           {visible.length > 0 && <TodayExtras tasks={todayExtras} done={todayExtrasDone} onComplete={complete} pendingTaskIds={pendingTaskIds} />}
-          {visible.some((task) => task.plannerReason === "wc-queue") && <p className="today-planner-note"><b>WC jsou otevřená fronta, ne povinnost dokončit všechna.</b> Postupujte od 1. patra nahoru a označte pouze skutečně uklizená WC. Planner neurčuje umělý pevný počet.</p>}
           {accessRole(profile) === "visitor" && (
             <p className="readonly-note">Návštěvnický přístup je pouze pro čtení.</p>
           )}
@@ -2056,28 +2054,26 @@ function TaskHierarchy({
   guides: ManualEntry[];
 }) {
   const workTasks = tasks.filter((task) => !isFinalCheckTask(task));
-  const buildings = new Map<string, Task[]>();
-  workTasks.forEach((task) => buildings.set(task.building, [...(buildings.get(task.building) ?? []), task]));
+  const buildings = buildTodayWorkBlocks(workTasks);
+  const progress = mandatoryWorkBlockProgress(buildings);
+  const commonByBuilding = new Map<string, Task[]>();
+  workTasks.filter((task) => !task.roomId && isStandardCleaningTask(task)).forEach((task) => {
+    commonByBuilding.set(task.building, [...(commonByBuilding.get(task.building) ?? []), task]);
+  });
   return (
     <>
-      {[...buildings.entries()].sort(([a], [b]) => a.localeCompare(b, "cs")).map(([building, buildingTasks]) => {
-        const common = buildingTasks.filter((task) => !task.roomId);
-        const commonStandard = common.filter(isStandardCleaningTask);
-        const floorGroups = new Map<string, Task[]>();
-        buildingTasks.filter((task) => task.roomId).forEach((task) => floorGroups.set(task.floor, [...(floorGroups.get(task.floor) ?? []), task]));
-        const rooms = new Map<string, Task[]>();
-        buildingTasks.filter((task) => task.roomId).forEach((task) => {
-          const key = task.roomId ?? task.room;
-          rooms.set(key, [...(rooms.get(key) ?? []), task]);
-        });
-        return <section className="building-task-group" key={building}>
-          {buildings.size > 1 && <h2 className="building-divider">{building}</h2>}
-          {commonStandard.length > 0 && <section className="shared-tasks compact-shared"><p className="eyebrow">PŘED ÚKLIDEM</p><TaskRows tasks={commonStandard} onComplete={onComplete} pendingTaskIds={pendingTaskIds} guides={guides} /></section>}
-          {[...floorGroups.entries()].sort(([, a], [, b]) => a[0].floorSort - b[0].floorSort).map(([floor, floorTasks]) => (
-            <FloorGroup key={`${building}|${floor}`} label={floor} tasks={floorTasks} bulkActions={bulkActions} onComplete={onComplete} onCompleteAll={onCompleteAll} onUndoBulk={onUndoBulk} pendingTaskIds={pendingTaskIds} guides={guides} />
-          ))}
-        </section>;
-      })}
+      {progress.total > 0 && <section className="work-block-overview">
+        <span><b>Dnešní hlavní práce</b><small>{progress.done} / {progress.total} {progress.total === 1 ? "hlavní část hotová" : progress.total < 5 ? "hlavní části hotové" : "hlavních částí hotovo"}</small></span>
+        <ProgressBar value={progress.done} total={progress.total} label="Dokončené hlavní pracovní části" />
+      </section>}
+      {buildings.map((building) => <section className="building-task-group" key={building.buildingId ?? building.building}>
+        {buildings.length > 1 && <h2 className="building-divider">{building.building}</h2>}
+        {(commonByBuilding.get(building.building) ?? []).length > 0 && <section className="shared-tasks compact-shared"><p className="eyebrow">PŘED ÚKLIDEM</p><TaskRows tasks={commonByBuilding.get(building.building) ?? []} onComplete={onComplete} pendingTaskIds={pendingTaskIds} guides={guides} /></section>}
+        <div className="work-block-list">
+          {building.blocks.map((block) => <WorkBlockCard key={block.id} block={block} bulkActions={bulkActions} onComplete={onComplete} onCompleteAll={onCompleteAll} onUndoBulk={onUndoBulk} pendingTaskIds={pendingTaskIds} guides={guides} />)}
+          {building.wcQueue && <WcQueueCard block={building.wcQueue} bulkActions={bulkActions} onComplete={onComplete} onCompleteAll={onCompleteAll} onUndoBulk={onUndoBulk} pendingTaskIds={pendingTaskIds} guides={guides} />}
+        </div>
+      </section>)}
       {workTasks.length === 0 && (
         <section className="empty">
           <span>✓</span>
@@ -2087,9 +2083,8 @@ function TaskHierarchy({
     </>
   );
 }
-function FloorGroup({
-  label,
-  tasks,
+function WorkBlockCard({
+  block,
   bulkActions,
   onComplete,
   onCompleteAll,
@@ -2097,8 +2092,7 @@ function FloorGroup({
   pendingTaskIds,
   guides,
 }: {
-  label: string;
-  tasks: Task[];
+  block: TodayWorkBlock;
   bulkActions: BulkCompletionAction[];
   onComplete: (id: string) => Promise<void>;
   onCompleteAll: (tasks: Task[]) => Promise<void>;
@@ -2106,111 +2100,39 @@ function FloorGroup({
   pendingTaskIds: Set<string>;
   guides: ManualEntry[];
 }) {
-  const [open, setOpen] = useState(true);
-  const rooms = new Map<string, Task[]>();
-  tasks.forEach((task) =>
-    rooms.set(task.room, [...(rooms.get(task.room) ?? []), task]),
-  );
-  const requiredRooms = [...rooms.values()].filter((roomTasks) => roomTasks.some((task) => task.plannerReason !== "wc-queue"));
-  const completedRequiredRooms = requiredRooms.filter(roomIsComplete).length;
-  return (
-    <section className="floor-group">
-      <button
-        className="floor-toggle"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-      >
-        <span>
-          <b>{label}</b>
-          <small>
-            {requiredRooms.length > 0 ? `${completedRequiredRooms} / ${requiredRooms.length} povinných místností` : "Otevřená WC fronta"}
-          </small>
-        </span>
-        <i>{open ? "⌃" : "⌄"}</i>
-        <ProgressBar value={completedRequiredRooms} total={requiredRooms.length} label={`Dokončené povinné místnosti: ${label}`} />
-      </button>
-      {open && (
-        <div className="room-list">
-          {[...rooms.entries()].sort(([, first], [, second]) => {
-            const firstPriority = Math.min(...first.map((task) => task.plannerPriority ?? Number.POSITIVE_INFINITY));
-            const secondPriority = Math.min(...second.map((task) => task.plannerPriority ?? Number.POSITIVE_INFINITY));
-            return firstPriority - secondPriority;
-          }).map(([room, roomTasks]) => (
-            <RoomActivityGroup
-              key={room}
-              room={room}
-              tasks={roomTasks}
-              bulkAction={findUndoableRoomAction(roomTasks, bulkActions)}
-              onComplete={onComplete}
-              onCompleteAll={onCompleteAll}
-              onUndoBulk={onUndoBulk}
-              pendingTaskIds={pendingTaskIds}
-              guides={guides}
-            />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function RoomActivityGroup({
-  room,
-  tasks,
-  bulkAction,
-  onComplete,
-  onCompleteAll,
-  onUndoBulk,
-  pendingTaskIds,
-  guides,
-}: {
-  room: string;
-  tasks: Task[];
-  bulkAction?: BulkCompletionAction;
-  onComplete: (id: string) => Promise<void>;
-  onCompleteAll: (tasks: Task[]) => Promise<void>;
-  onUndoBulk: (action: BulkCompletionAction) => Promise<void>;
-  pendingTaskIds: Set<string>;
-  guides: ManualEntry[];
-}) {
-  const [saving, setSaving] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const routine = bulkTasks(tasks);
-  const completed = routine.filter((task) => task.done).length;
-  const allRoutineDone = routine.length > 0 && completed === routine.length;
-  const allRequiredDone = roomIsComplete(tasks);
-  const presentationState = roomPresentationState(tasks, routine);
-  const queueOnly = tasks.length > 0 && tasks.every((task) => task.plannerReason === "wc-queue");
-  const completion = allRoutineDone ? routine.find((task) => task.completedBy) : undefined;
-  const completedBy = bulkAction?.workerName ?? completion?.completedBy;
-  const completedAt = bulkAction?.createdAt ?? completion?.completedAt;
+  const [saving, setSaving] = useState(false);
+  const routine = bulkTasks(block.tasks);
+  const done = routine.filter((task) => task.done).length;
+  const complete = workBlockIsComplete(block);
+  const undoActions = undoableWorkBlockActions(block, bulkActions);
+  const latestAction = [...undoActions].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const fallbackCompletion = complete ? routine.find((task) => task.completedBy) : undefined;
+  const completedBy = latestAction?.workerName ?? fallbackCompletion?.completedBy;
+  const completedAt = latestAction?.createdAt ?? fallbackCompletion?.completedAt;
+  const pending = block.tasks.some((task) => pendingTaskIds.has(task.id));
   return (
-    <section className={`room-group${allRequiredDone ? " room-done" : allRoutineDone ? " room-routine-done" : ""}`}>
-      <header className="room-heading">
-        <h3>{allRequiredDone && <span aria-hidden="true">✓ </span>}{room}</h3>
-        {presentationState === "done" && <b className="room-status">Hotovo</b>}
-        {presentationState === "partial" && <b className="room-status">Část hotová</b>}
-        {queueOnly && presentationState === "pending" && <b className="room-status">Podle kapacity</b>}
-        {completedBy && <small className="room-author">{completedBy}{completedAt ? ` · ${new Date(completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
+    <section className={`work-block-card${complete ? " done" : ""}${block.optional ? " optional" : ""}`}>
+      <header>
+        <h3>{complete && <span aria-hidden="true">✓ </span>}{block.title}</h3>
+        <b>{complete ? "Hotovo" : done > 0 ? `${done} / ${routine.length} hotovo` : `${block.rooms.length} ${block.rooms.length === 1 ? "prostor" : block.rooms.length < 5 ? "prostory" : "prostorů"}`}</b>
+        {completedBy && <small>{completedBy}{completedAt ? ` · ${new Date(completedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>}
       </header>
-      <div className="room-primary-action">
-        {bulkAction?.canUndo && allRoutineDone ? <button
+      <div className="work-block-actions">
+        {complete && undoActions.length > 0 ? <button
           className="undo-room"
           disabled={saving}
           onClick={async () => {
-            if (!window.confirm("Opravdu chcete vrátit dokončení této místnosti?")) return;
+            if (!window.confirm("Opravdu chcete vrátit hromadné dokončení této pracovní části?")) return;
             setSaving(true);
-            try { await onUndoBulk(bulkAction); } finally { setSaving(false); }
+            try {
+              for (const action of undoActions) await onUndoBulk(action);
+            } finally { setSaving(false); }
           }}
-        aria-label="Vrátit dokončení místnosti">{saving ? "Vracím…" : "Vrátit ›"}</button> : <button
+        aria-label={`Vrátit dokončení: ${block.title}`}>{saving ? "Vracím…" : "Vrátit dokončení"}</button> : <button
           className="complete-room"
-          aria-label={`Označit vše jako hotové: ${room}`}
-          disabled={
-            saving ||
-            allRoutineDone ||
-            routine.length === 0 ||
-            routine.some((task) => !task.done && !task.canComplete)
-          }
+          aria-label={`Označit pracovní část jako hotovou: ${block.title}`}
+          disabled={saving || pending || complete || routine.length === 0}
           onClick={async () => {
             setSaving(true);
             try {
@@ -2223,12 +2145,36 @@ function RoomActivityGroup({
           {saving ? "Ukládám…" : "✓ Hotovo"}
         </button>}
       </div>
-      <button className="room-detail-toggle" onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen}>
+      <button className="work-block-detail-toggle" onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen}>
         {detailsOpen ? "Skrýt podrobnosti" : "› Podrobnosti"}
       </button>
-      {detailsOpen && <TaskRows tasks={tasks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={tasks} guides={guides} compact />}
+      {detailsOpen && <div className="work-block-details">
+        {block.rooms.map((room) => <section key={room.id}>
+          <h4>{room.floor} · {room.name}</h4>
+          <TaskRows tasks={room.tasks} onComplete={onComplete} pendingTaskIds={pendingTaskIds} allTasks={block.tasks} guides={guides} compact />
+        </section>)}
+      </div>}
     </section>
   );
+}
+
+function WcQueueCard(props: Omit<Parameters<typeof WorkBlockCard>[0], "block"> & { block: TodayWorkBlock }) {
+  const [open, setOpen] = useState(true);
+  const floors = new Map<string, Task[]>();
+  props.block.tasks.forEach((task) => floors.set(task.floor, [...(floors.get(task.floor) ?? []), task]));
+  return <section className="wc-queue-card">
+    <button className="wc-queue-heading" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <span><h3>WC – otevřená fronta</h3><small>Postupujte od 1. patra nahoru. Udělejte podle času.</small></span>
+      <i>{open ? "⌃" : "⌄"}</i>
+    </button>
+    {open && <div className="wc-queue-floors">
+      {[...floors.entries()].sort(([, first], [, second]) => first[0].floorSort - second[0].floorSort).map(([floor, tasks], index) => <WorkBlockCard
+        {...props}
+        key={floor}
+        block={{ ...props.block, id: `${props.block.id}|${floor}`, title: `WC – ${floor}`, tasks, rooms: props.block.rooms.filter((room) => room.floor === floor), sortOrder: index }}
+      />)}
+    </div>}
+  </section>;
 }
 
 function DepartureChecks({ tasks, onComplete, pendingTaskIds, guides }: {

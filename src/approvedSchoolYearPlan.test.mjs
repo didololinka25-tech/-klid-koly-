@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 const migration = readFileSync(new URL('../supabase/migrations/20260901003300_approved_school_year_plan_and_fourth_floor_rotation.sql', import.meta.url), 'utf8')
 const repository = readFileSync(new URL('./schoolRepository.ts', import.meta.url), 'utf8')
 const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+const todayBlocks = readFileSync(new URL('./todayWorkBlocks.ts', import.meta.url), 'utf8')
 
 test('03300 je atomická, nedestruktivní a nemění historické migrace', () => {
   assert.match(migration, /^begin;/i)
@@ -94,6 +95,7 @@ test('kapacita počítá weekly special, small a large společně a WC fronta m�
   assert.match(migration, /planner_priority integer/)
   assert.match(migration, /task\.floor_sort\*10000\+task\.room_sort\*100\+task\.sort_order/)
   assert.match(repository, /plannerPriority: dynamicSchoolRows\?\.get\(row\.id\)\?\.planner_priority/)
-  assert.match(app, /WC jsou otevřená fronta, ne povinnost dokončit všechna/)
-  assert.match(app, /task\.plannerPriority/)
+  assert.match(app, /WC – otevřená fronta/)
+  assert.match(app, /Postupujte od 1\. patra nahoru\. Udělejte podle času\./)
+  assert.match(todayBlocks, /task\.plannerPriority/)
 })

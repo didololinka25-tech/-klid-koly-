@@ -166,7 +166,7 @@ test('rychlé dokončení místností je serverově atomické a nevztahuje se na
   assert.match(migration27, /perform public\.set_cleaning_task_completion/i)
   assert.match(repository, /rpc\('complete_cleaning_tasks_bulk'/)
   assert.doesNotMatch(app, /Co jsem dnes udělal\/a/)
-  assert.match(app, /Označit vše jako hotové/)
+  assert.match(app, /Označit pracovní část jako hotovou/)
 })
 
 test('autor dokončení je čten bezpečně bez rozšíření RLS profilů', () => {
@@ -193,8 +193,8 @@ test('bulk undo smí provést autor nebo admin a audit není přímo zapisovatel
   assert.match(migration28, /Cizí dokončení může vrátit pouze administrátor/i)
   assert.match(repository, /rpc\('undo_cleaning_tasks_bulk'/)
   assert.match(repository, /table: 'cleaning_completions'/, 'undo se ostatním načte přes existující realtime completion subscription')
-  assert.match(app, /Opravdu chcete vrátit dokončení této místnosti\?/)
-  assert.match(app, /Vrátit dokončení místnosti/)
+  assert.match(app, /Opravdu chcete vrátit hromadné dokončení této pracovní části\?/)
+  assert.match(app, /Vrátit dokončení/)
 })
 
 test('audit docházky ukládá neměnné původní i nové hodnoty a čte jej pouze admin', () => {
