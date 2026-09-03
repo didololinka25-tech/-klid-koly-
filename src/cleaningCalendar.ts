@@ -54,6 +54,7 @@ export type CalendarDaySummary = {
   tasks: Task[]
   workBlocks: TodayBuildingWork[]
   fourthFloorRotation: RotationForDate | null
+  fourthFloorAssignedWorker: { workerId: string; workerName: string } | null
   // Rezervované místo pro budoucí sekundární vrstvu školních akcí.
   // Google Calendar ani jeho data se v této iteraci neimplementují.
   schoolEvents: Array<{ id: string; title: string; collision: boolean }>
@@ -122,7 +123,10 @@ export function buildCalendarDaySummary({
 }): CalendarDaySummary {
   const allWorkers = workersForDate(date, planning)
   const hasFourthFloor = tasks.some((task) => task.floor === '4. patro')
-  const rotation = hasFourthFloor ? cleaningRotationForOccurrence(date, planning) : null
+  const serverFourthFloorWorkerId = tasks.find((task) => task.floor === '4. patro' && task.plannerAssignedWorkerId)?.plannerAssignedWorkerId ?? null
+  // Explicitní výsledek serverového planneru má přednost. A/B/C je pouze
+  // zpětně kompatibilní fallback pro týdny bez uložené osobní povinnosti.
+  const rotation = hasFourthFloor && !serverFourthFloorWorkerId ? cleaningRotationForOccurrence(date, planning) : null
   const workers = workerId === 'all' ? allWorkers : allWorkers.filter((worker) => worker.workerId === workerId)
   const workerBuildingIds = new Set(workers.map((worker) => worker.buildingId))
   // Stable work areas determine planner capacity; they are not assignments of
@@ -135,6 +139,13 @@ export function buildCalendarDaySummary({
     if (!task.plannerAssignedWorkerId) return true
     return task.plannerAssignedWorkerId === workerId
   })
+  const assignedFourthFloorWorkerId = cleaningTasks.find((task) => task.floor === '4. patro' && task.plannerAssignedWorkerId)?.plannerAssignedWorkerId ?? null
+  const assignedFourthFloorWorkerName = assignedFourthFloorWorkerId
+    ? allWorkers.find((worker) => worker.workerId === assignedFourthFloorWorkerId)?.workerName
+      ?? planning.planningWorkers?.find((worker) => worker.id === assignedFourthFloorWorkerId)?.name
+      ?? planning.assignments.find((assignment) => assignment.workerId === assignedFourthFloorWorkerId)?.workerName
+      ?? null
+    : null
   const visibleRotation = cleaningTasks.some((task) => task.floor === '4. patro') ? rotation : null
   const buildingSummary = summarizeCleaningDay(cleaningTasks)
   const sections = buildingSummary.flatMap((workplace) => workplace.floors.map((floor) => ({
@@ -180,6 +191,10 @@ export function buildCalendarDaySummary({
     tasks: cleaningTasks,
     workBlocks: buildTodayWorkBlocks(cleaningTasks),
     fourthFloorRotation: visibleRotation,
+    fourthFloorAssignedWorker: assignedFourthFloorWorkerId ? {
+      workerId: assignedFourthFloorWorkerId,
+      workerName: assignedFourthFloorWorkerName ?? 'Přiřazený pracovník',
+    } : null,
     schoolEvents: [],
   }
 }
@@ -229,7 +244,7 @@ export function calendarDayCellScope(summary: CalendarDaySummary) {
   }))]
   const hasWc = blockTitles.some((title) => /^WC\s*[–-]/i.test(title))
   const hasStairs = summary.extraCategories.some((category) => category.key === 'staircase')
-  const hasFourthFloor = floors.includes('4F') || summary.fourthFloorRotation !== null
+  const hasFourthFloor = floors.includes('4F') || summary.fourthFloorAssignedWorker !== null || summary.fourthFloorRotation !== null
   const extraCount = summary.extraCategories.filter((category) => category.key !== 'staircase' && category.key !== 'floors').length
   return {
     workers: summary.workers.length,
@@ -258,10 +273,6 @@ export type CalendarPrintDay = {
  */
 export function calendarPrintDay(summary: CalendarDaySummary): CalendarPrintDay {
   const hasFourthFloor = summary.tasks.some((task) => task.floor === '4. patro')
-  const fourthFloorPlanningWorkerId = summary.tasks.find((task) => task.floor === '4. patro' && task.plannerAssignedWorkerId)?.plannerAssignedWorkerId
-  const fourthFloorPlanningWorker = fourthFloorPlanningWorkerId
-    ? summary.workers.find((worker) => worker.workerId === fourthFloorPlanningWorkerId)?.workerName ?? null
-    : null
   const mainPlan = summary.workBlocks.flatMap((workplace) => [
     ...workplace.blocks.map((block) => ({ building: workplace.building, title: block.title, queue: block.queue })),
     ...(workplace.wcQueue ? [{ building: workplace.building, title: workplace.wcQueue.title, queue: true }] : []),
@@ -287,7 +298,7 @@ export function calendarPrintDay(summary: CalendarDaySummary): CalendarPrintDay 
     mainPlan,
     extras,
     hasFourthFloor,
-    fourthFloorWorker: fourthFloorPlanningWorker ?? summary.fourthFloorRotation?.assignment?.workerName ?? null,
+    fourthFloorWorker: summary.fourthFloorAssignedWorker?.workerName ?? summary.fourthFloorRotation?.assignment?.workerName ?? null,
     workplaces,
     hasWork: summary.tasks.length > 0 || summary.workers.length > 0 || summary.extraordinary.length > 0 || summary.rescheduled.length > 0,
   }

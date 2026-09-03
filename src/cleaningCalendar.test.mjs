@@ -363,9 +363,39 @@ test('Plán dne zachová overdue metadata, schodiště a skutečného pracovník
       task({ id: 'windows', activityType: 'windows', frequency: 'měsíčně', plannerReason: 'overdue' }),
     ],
   })
-  assert.equal(summary.fourthFloorRotation?.assignment?.workerId, 'worker-2')
+  assert.equal(summary.fourthFloorAssignedWorker?.workerId, 'worker-2')
+  assert.equal(summary.fourthFloorAssignedWorker?.workerName, 'Pracovník 2')
+  assert.equal(summary.fourthFloorRotation, null, 'serverové přiřazení nesmí přepsat stará A/B/C rotace')
   assert.equal(summary.extraCategories.find((item) => item.key === 'windows')?.overdue, true)
   assert.ok(summary.extraCategories.some((item) => item.key === 'staircase'))
+})
+
+test('detail a tisk 4. patra preferují assigned planning worker před legacy A/B/C rotací', () => {
+  const date = '2026-09-07'
+  const planning = {
+    available: true,
+    planningWorkers: [
+      { id: 'martina', name: 'Martina', linkedProfileId: null, active: true },
+      { id: 'legacy', name: 'Legacy pracovník', linkedProfileId: null, active: true },
+    ],
+    assignments: [
+      { id: 'martina-shift', workerId: 'martina', workerName: 'Martina', buildingId: 'school', buildingName: 'Škola', floorId: null, areaLabel: 'Škola', weekdays: [1], validFrom: date, validTo: null, active: true },
+    ],
+    exceptions: [],
+    rotationDefinitions: [{ rotationKey: 'school-fourth-floor', title: '4. patro', anchorDate: date, weekday: 1, slotCount: 3, active: true }],
+    rotationSlots: [{ id: 'legacy-slot', rotationKey: 'school-fourth-floor', slotIndex: 0, workerId: 'legacy', workerName: 'Legacy pracovník', validFrom: date, validTo: null, active: true }],
+  }
+  const summary = buildCalendarDaySummary({
+    date, today: date, context: resolveCleaningDay(date, []), planning,
+    tasks: [task({ id: 'fourth-assigned', roomId: 'fourth', room: 'Mediační místnost', floor: '4. patro', floorSort: 4, plannerReason: 'weekly-special', plannerAssignedWorkerId: 'martina' })],
+  })
+  assert.equal(summary.fourthFloorAssignedWorker?.workerName, 'Martina')
+  assert.equal(summary.fourthFloorRotation, null)
+  assert.equal(calendarPrintDay(summary).fourthFloorWorker, 'Martina')
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const detail = app.slice(app.indexOf('function CalendarDayDetail'), app.indexOf('function CalendarDayModal'))
+  assert.match(detail, /fourthFloorAssignedWorker\?\.workerName\s*\?\?\s*summary\.fourthFloorRotation/)
+  assert.match(detail, /Na řadě: \$\{fourthFloorWorkerName\}/)
 })
 
 test('Plán dne umí skutečně prázdný den bez vymyšlené práce', () => {
