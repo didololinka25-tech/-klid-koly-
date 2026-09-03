@@ -76,13 +76,15 @@ test('03300 sama obsahuje finální dvoučlennou rotaci a neponechává schody a
   assert.match(migration, /Schodiště ani 4\. patro nesmí mít pevný pracovní den\./)
 })
 
-test('Dnes i Kalendář čtou stejný serverový planner a před 03300 mají bezpečný fallback', () => {
+test('Dnes i Kalendář čtou stejný serverový planner a Kalendář nezamění loading/chybu za starý plán', () => {
   assert.match(repository, /get_dynamic_school_cleaning_plan/)
   assert.match(repository, /dynamicSchoolPlan/)
   assert.match(repository, /missingFunction\(result\.error\)[\s\S]*return null/)
   assert.match(app, /schoolRepository\.dynamicSchoolPlan/)
   assert.match(app, /serverPlanForCalendarDate\(date, records, serverDynamicPlan\)/)
   assert.match(app, /outsideSourceDates[\s\S]*dynamicSchoolPlan\(sourceDate, sourceDate\)/)
+  assert.match(app, /plannerStatus === "ready" \? plannedTasksForDate[\s\S]*: \[\]/)
+  assert.match(app, /setPlannerStatus\("error"\)/)
   assert.match(migration, /can_complete_task[\s\S]*get_dynamic_school_cleaning_plan/)
 })
 

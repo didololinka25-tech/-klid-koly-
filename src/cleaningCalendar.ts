@@ -218,6 +218,29 @@ export function filterCalendarTasks(tasks: Task[], buildingId: string) {
   return buildingId === 'all' ? tasks : tasks.filter((task) => task.buildingId === buildingId)
 }
 
+export function calendarDayCellScope(summary: CalendarDaySummary) {
+  const blockTitles = summary.workBlocks.flatMap((building) => [
+    ...building.blocks.map((block) => block.title),
+    ...(building.wcQueue ? [building.wcQueue.title] : []),
+  ])
+  const floors = [...new Set(blockTitles.flatMap((title) => {
+    const match = title.match(/Podlahy\s*[–-]\s*([1-4])\. patro/i)
+    return match ? [`${match[1]}F`] : []
+  }))]
+  const hasWc = blockTitles.some((title) => /^WC\s*[–-]/i.test(title))
+  const hasStairs = summary.extraCategories.some((category) => category.key === 'staircase')
+  const hasFourthFloor = floors.includes('4F') || summary.fourthFloorRotation !== null
+  const extraCount = summary.extraCategories.filter((category) => category.key !== 'staircase' && category.key !== 'floors').length
+  return {
+    workers: summary.workers.length,
+    floors: floors.filter((floor) => floor !== '4F'),
+    hasWc,
+    hasStairs,
+    hasFourthFloor,
+    extraCount,
+  }
+}
+
 export function circledFloor(marker: string) {
   return ({ '1': '①', '2': '②', '3': '③', '4': '④' } as Record<string, string>)[marker] ?? marker
 }

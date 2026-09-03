@@ -1376,7 +1376,7 @@ h2 {
 .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; min-width: 0; }
 .calendar-weekdays b { padding: 3px 0; text-align: center; color: #6d827d; font-size: 10px; font-weight: 900; }
 .calendar-weekdays b:nth-child(n+6) { color: #8b7772; }
-.calendar-day { min-width: 0; min-height: 88px; padding: 5px 3px; border: 1px solid #e0e9e6; border-radius: 8px; background: #fff; color: #173d38; display: grid; grid-template-rows: auto auto minmax(0, 1fr); align-content: start; gap: 3px; overflow: hidden; text-align: left; cursor: pointer; }
+.calendar-day { min-width: 0; min-height: 96px; padding: 5px 3px; border: 1px solid #e0e9e6; border-radius: 8px; background: #fff; color: #173d38; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); align-content: start; gap: 3px; overflow: hidden; text-align: left; cursor: pointer; }
 .calendar-day.weekend:not(.has-work) { background: #fafafa; color: #71807d; }
 .calendar-day.has-work { background: #f1f8f5; border-color: #cfe2dc; }
 .calendar-day.kindergarten-day { background: #f7faed; border-color: #dce6bd; }
@@ -1391,6 +1391,8 @@ h2 {
 .calendar-workers i,
 .calendar-worker-list i { width: 20px; height: 20px; border-radius: 999px; color: #fff; display: inline-grid; place-items: center; font-size: 8px; font-style: normal; font-weight: 900; }
 .calendar-workers > b { color: #58736d; font-size: 9px; }
+.calendar-plan-scope { min-width: 0; display: flex; flex-wrap: wrap; gap: 2px; color: #174d45; font-size: 7px; line-height: 1.15; }
+.calendar-plan-scope b { padding: 1px 2px; border-radius: 3px; background: #e4f0ec; white-space: nowrap; }
 .worker-color-0 { background: #17695f; }
 .worker-color-1 { background: #3e658e; }
 .worker-color-2 { background: #8a5a30; }
@@ -1412,6 +1414,9 @@ h2 {
 .calendar-legend > div { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 2px 0 5px; line-height: 1.35; }
 .calendar-legend small { flex-basis: 100%; }
 .calendar-day-detail { display: grid; gap: 10px; }
+.calendar-plan-state { min-height: 72px; padding: 14px; border: 1px solid #dbe8e4; border-radius: 13px; background: #fff; color: #4f6963; display: grid; align-content: center; gap: 9px; }
+.calendar-plan-state.error { border-color: #ead7d3; color: #80483f; }
+.calendar-plan-state button { min-height: 44px; border: 1px solid #b9d5ce; border-radius: 10px; background: #eef7f4; color: #155d54; font-weight: 850; }
 .calendar-day-modal { position: fixed; inset: 0; z-index: 80; padding: max(16px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)); display: grid; align-items: end; justify-items: center; background: rgb(15 39 35 / .48); }
 .calendar-day-sheet { position: relative; width: min(100%, 620px); max-width: 100%; max-height: min(88dvh, 760px); box-sizing: border-box; padding: 18px 14px 20px; border-radius: 18px 18px 12px 12px; background: #f5f8f7; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; box-shadow: 0 18px 50px rgb(18 59 52 / .26); }
 .calendar-day-close { position: sticky; top: 0; z-index: 2; float: right; width: 44px; height: 44px; margin: -7px -5px -37px 8px; border: 1px solid #c8ddd7; border-radius: 999px; background: #fff; color: #165e56; font-size: 25px; line-height: 1; }

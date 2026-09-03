@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { buildCalendarDaySummary, calendarWorkerOptions, circledFloor, filterCalendarTasks, projectDynamicSchoolPlan } from './cleaningCalendar.ts'
+import { buildCalendarDaySummary, calendarDayCellScope, calendarWorkerOptions, circledFloor, filterCalendarTasks, projectDynamicSchoolPlan } from './cleaningCalendar.ts'
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay } from './scheduling.ts'
 
 const task = (overrides = {}) => ({
@@ -305,6 +305,44 @@ test('Plán dne překládá 1/2/3 pracovníky do stejných hlavních celků jako
     assert.equal(summary.workers.length, item.workers.length)
     assert.deepEqual(labels, item.expected)
   }
+})
+
+test('oprávněný dynamický výsledek pro 3 pracovníky zachová 1F + 2F + 3F, WC, schodiště a large práci až do buňky Kalendáře', () => {
+  const date = '2026-09-07'
+  const planning = {
+    available: true,
+    planningWorkers: ['didi', 'martina', 'olga'].map((id) => ({ id, name: id, linkedProfileId: null, active: true })),
+    assignments: ['didi', 'martina', 'olga'].map((id, index) => ({ id: `a-${id}`, workerId: id, workerName: id, buildingId: 'school', buildingName: 'Škola', floorId: `f${index + 1}`, floorName: `${index + 1}. patro`, areaLabel: `${index + 1}. patro`, weekdays: [1], validFrom: '2026-09-01', validTo: null, active: true })),
+    exceptions: [], rotationDefinitions: [], rotationSlots: [],
+  }
+  const catalog = [
+    task({ id: 'f1', floorId: 'f1', floor: '1. patro' }),
+    task({ id: 'f2', roomId: 'r2', room: 'Učebna 1', floorId: 'f2', floor: '2. patro', floorSort: 2 }),
+    task({ id: 'f3', roomId: 'r3', room: 'Ateliér', floorId: 'f3', floor: '3. patro', floorSort: 3 }),
+    task({ id: 'wc', roomId: 'wc', room: 'WC ženy', activityType: 'toilet' }),
+    task({ id: 'stairs', roomId: 'stairs', room: 'Schodiště', floor: 'Schodiště', floorSort: 5 }),
+    task({ id: 'large-window', roomId: 'cleaning', room: 'Úklidová místnost', floorId: 'f3', floor: '3. patro', floorSort: 3, activityType: 'windows' }),
+  ]
+  const rpcRows = new Map([
+    ['f1', { planReason: 'routine', assignedWorkerId: null, plannerPriority: null }],
+    ['f2', { planReason: 'routine', assignedWorkerId: null, plannerPriority: null }],
+    ['f3', { planReason: 'routine', assignedWorkerId: null, plannerPriority: null }],
+    ['wc', { planReason: 'routine', assignedWorkerId: null, plannerPriority: null }],
+    ['stairs', { planReason: 'weekly-special', assignedWorkerId: null, plannerPriority: null }],
+    ['large-window', { planReason: 'large', assignedWorkerId: null, plannerPriority: null }],
+  ])
+  const summary = buildCalendarDaySummary({ date, today: date, tasks: projectDynamicSchoolPlan(catalog, rpcRows), context: resolveCleaningDay(date, []), planning })
+  const labels = summary.workBlocks.flatMap((building) => [...building.blocks.map((block) => block.title), ...(building.wcQueue ? [building.wcQueue.title] : [])])
+  assert.deepEqual(labels, ['Podlahy – 1. patro', 'Podlahy – 2. patro', 'Podlahy – 3. patro', 'WC – celá škola'])
+  assert.deepEqual(calendarDayCellScope(summary), { workers: 3, floors: ['1F', '2F', '3F'], hasWc: true, hasStairs: true, hasFourthFloor: false, extraCount: 1 })
+})
+
+test('Kalendář během načítání nebo chyby nepoužije starý statický plán jako dynamický výsledek', () => {
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  assert.match(app, /plannerStatus === "ready" \? plannedTasksForDate[\s\S]*: \[\]/)
+  assert.match(app, /plannerStatus === "loading"[\s\S]*Načítám plán dne/)
+  assert.match(app, /plannerStatus === "error"[\s\S]*Plán dne se nepodařilo načíst/)
+  assert.match(app, /setPlannerStatus\("loading"\)[\s\S]*setServerDynamicPlan\(null\)/)
 })
 
 test('Plán dne zachová overdue metadata, schodiště a skutečného pracovníka 4. patra', () => {
