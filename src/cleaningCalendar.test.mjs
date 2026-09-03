@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { buildCalendarDaySummary, calendarDayCellScope, calendarPrintDay, calendarWorkerOptions, circledFloor, filterCalendarTasks, projectDynamicSchoolPlan } from './cleaningCalendar.ts'
+import { buildCalendarDaySummary, calendarDayCellScope, calendarDayPlanView, calendarPrintDay, calendarWorkerOptions, circledFloor, filterCalendarTasks, projectDynamicSchoolPlan } from './cleaningCalendar.ts'
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay } from './scheduling.ts'
 
 const task = (overrides = {}) => ({
@@ -391,11 +391,41 @@ test('detail a tisk 4. patra preferují assigned planning worker před legacy A/
   })
   assert.equal(summary.fourthFloorAssignedWorker?.workerName, 'Martina')
   assert.equal(summary.fourthFloorRotation, null)
+  assert.equal(calendarDayPlanView(summary).hasFourthFloor, true)
+  assert.equal(calendarDayPlanView(summary).fourthFloorWorker, 'Martina')
+  assert.equal(calendarDayCellScope(summary).hasFourthFloor, true)
   assert.equal(calendarPrintDay(summary).fourthFloorWorker, 'Martina')
   const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const detail = app.slice(app.indexOf('function CalendarDayDetail'), app.indexOf('function CalendarDayModal'))
-  assert.match(detail, /fourthFloorAssignedWorker\?\.workerName\s*\?\?\s*summary\.fourthFloorRotation/)
-  assert.match(detail, /Na řadě: \$\{fourthFloorWorkerName\}/)
+  assert.match(detail, /calendarDayPlanView\(summary\)/)
+  assert.match(detail, /view\.hasFourthFloor/)
+  assert.match(detail, /Na řadě: \$\{view\.fourthFloorWorker\}/)
+})
+
+test('buňka, detail dne a tisk sdílejí jeden view model pro 4F a schodiště', () => {
+  const date = '2026-09-09'
+  const summary = buildCalendarDaySummary({
+    date, today: date, context: resolveCleaningDay(date, []),
+    tasks: [
+      task({ id: 'fourth-shared', roomId: 'fourth', room: 'Mediační místnost', floor: '4. patro', floorSort: 4, plannerReason: 'weekly-special', plannerAssignedWorkerId: 'worker-a' }),
+      task({ id: 'stairs-shared', roomId: 'stairs', room: 'Schodiště', floor: 'Schodiště', floorSort: 5, plannerReason: 'weekly-special', plannerAssignedWorkerId: 'worker-b' }),
+    ],
+    planning: {
+      available: true,
+      planningWorkers: [{ id: 'worker-a', name: 'Alena', linkedProfileId: null, active: true }, { id: 'worker-b', name: 'Božena', linkedProfileId: null, active: true }],
+      assignments: [], exceptions: [], rotationDefinitions: [], rotationSlots: [],
+    },
+  })
+  const view = calendarDayPlanView(summary)
+  const scope = calendarDayCellScope(summary)
+  const print = calendarPrintDay(summary)
+  assert.equal(view.hasFourthFloor, true)
+  assert.equal(scope.hasFourthFloor, view.hasFourthFloor)
+  assert.equal(print.hasFourthFloor, view.hasFourthFloor)
+  assert.equal(scope.hasStairs, view.extras.some((item) => item.key === 'staircase'))
+  assert.deepEqual(print.extras, view.extras)
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  assert.match(app, /const printCalendarDays = calendarDays;/)
 })
 
 test('Plán dne umí skutečně prázdný den bez vymyšlené práce', () => {
@@ -494,7 +524,7 @@ test('tisk používá browser print a samostatné A4 portrait/landscape layouty 
   assert.match(app, /Tento týden/)
   assert.match(app, /Tento měsíc/)
   assert.match(app, /window\.print\(\)/)
-  assert.match(app, /printCalendarDays[\s\S]*workerId: "all"/)
+  assert.match(app, /const printCalendarDays = calendarDays;/)
   assert.match(css, /@page calendar-week-plan \{ size: A4 portrait/)
   assert.match(css, /@page calendar-month-plan \{ size: A4 landscape/)
   assert.match(css, /@media print[\s\S]*body \* \{ visibility: hidden !important/)

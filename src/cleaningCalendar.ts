@@ -233,19 +233,42 @@ export function filterCalendarTasks(tasks: Task[], buildingId: string) {
   return buildingId === 'all' ? tasks : tasks.filter((task) => task.buildingId === buildingId)
 }
 
-export function calendarDayCellScope(summary: CalendarDaySummary) {
-  const blockTitles = summary.workBlocks.flatMap((building) => [
-    ...building.blocks.map((block) => block.title),
-    ...(building.wcQueue ? [building.wcQueue.title] : []),
+/**
+ * Jediný prezentační pohled nad vyřešeným serverovým plánem. Buňka měsíce,
+ * detail dne i tisk díky němu odvozují 4. patro a práci navíc ze stejných dat.
+ */
+export function calendarDayPlanView(summary: CalendarDaySummary) {
+  const hasFourthFloor = summary.tasks.some((task) => task.floor === '4. patro')
+  const mainBlocks = summary.workBlocks.flatMap((workplace) => [
+    ...workplace.blocks.map((block) => ({ building: workplace.building, block })),
+    ...(workplace.wcQueue ? [{ building: workplace.building, block: workplace.wcQueue }] : []),
   ])
+  const extras = summary.extraCategories.flatMap((category) => {
+    if (!hasFourthFloor || category.key !== 'floors') return [category]
+    const scopes = category.scopes.filter((scope) => !scope.includes('· 4. patro'))
+    return scopes.length ? [{ ...category, scopes }] : []
+  })
+  return {
+    mainBlocks,
+    extras,
+    hasFourthFloor,
+    fourthFloorWorker: summary.fourthFloorAssignedWorker?.workerName
+      ?? summary.fourthFloorRotation?.assignment?.workerName
+      ?? null,
+  }
+}
+
+export function calendarDayCellScope(summary: CalendarDaySummary) {
+  const view = calendarDayPlanView(summary)
+  const blockTitles = view.mainBlocks.map(({ block }) => block.title)
   const floors = [...new Set(blockTitles.flatMap((title) => {
     const match = title.match(/Podlahy\s*[–-]\s*([1-4])\. patro/i)
     return match ? [`${match[1]}F`] : []
   }))]
   const hasWc = blockTitles.some((title) => /^WC\s*[–-]/i.test(title))
-  const hasStairs = summary.extraCategories.some((category) => category.key === 'staircase')
-  const hasFourthFloor = floors.includes('4F') || summary.fourthFloorAssignedWorker !== null || summary.fourthFloorRotation !== null
-  const extraCount = summary.extraCategories.filter((category) => category.key !== 'staircase' && category.key !== 'floors').length
+  const hasStairs = view.extras.some((category) => category.key === 'staircase')
+  const hasFourthFloor = view.hasFourthFloor
+  const extraCount = view.extras.filter((category) => category.key !== 'staircase' && category.key !== 'floors').length
   return {
     workers: summary.workers.length,
     floors: floors.filter((floor) => floor !== '4F'),
@@ -272,21 +295,13 @@ export type CalendarPrintDay = {
  * Neprovádí žádné plánování a záměrně nevypisuje jednotlivé mikroúkoly.
  */
 export function calendarPrintDay(summary: CalendarDaySummary): CalendarPrintDay {
-  const hasFourthFloor = summary.tasks.some((task) => task.floor === '4. patro')
-  const mainPlan = summary.workBlocks.flatMap((workplace) => [
-    ...workplace.blocks.map((block) => ({ building: workplace.building, title: block.title, queue: block.queue })),
-    ...(workplace.wcQueue ? [{ building: workplace.building, title: workplace.wcQueue.title, queue: true }] : []),
-  ])
+  const view = calendarDayPlanView(summary)
+  const mainPlan = view.mainBlocks.map(({ building, block }) => ({ building, title: block.title, queue: block.queue }))
   const workplaces = [...new Set([
     ...summary.workplaces.map((workplace) => workplace.name),
     ...summary.workers.map((worker) => worker.buildingName),
     ...mainPlan.map((item) => item.building),
   ])]
-  const extras = summary.extraCategories.flatMap((category) => {
-    if (!hasFourthFloor || category.key !== 'floors') return [category]
-    const scopes = category.scopes.filter((scope) => !scope.includes('· 4. patro'))
-    return scopes.length ? [{ ...category, scopes }] : []
-  })
   return {
     date: summary.date,
     workers: summary.workers.map((worker) => ({
@@ -296,9 +311,9 @@ export function calendarPrintDay(summary: CalendarDaySummary): CalendarPrintDay 
       area: worker.areaLabel,
     })),
     mainPlan,
-    extras,
-    hasFourthFloor,
-    fourthFloorWorker: summary.fourthFloorAssignedWorker?.workerName ?? summary.fourthFloorRotation?.assignment?.workerName ?? null,
+    extras: view.extras,
+    hasFourthFloor: view.hasFourthFloor,
+    fourthFloorWorker: view.fourthFloorWorker,
     workplaces,
     hasWork: summary.tasks.length > 0 || summary.workers.length > 0 || summary.extraordinary.length > 0 || summary.rescheduled.length > 0,
   }
