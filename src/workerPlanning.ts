@@ -32,12 +32,23 @@ export type WorkerScheduleException = {
 
 export type PlanningWorker = { id: string; name: string; linkedProfileId?: string | null; active: boolean }
 
+export type WeeklyWorkerResponsibility = {
+  id: string
+  responsibilityKey: 'school-fourth-floor' | 'school-stairs'
+  workerId?: string | null
+  workerName?: string | null
+  validFrom: string
+  validTo?: string | null
+  active: boolean
+}
+
 export type WorkerPlanningData = {
   planningWorkers?: PlanningWorker[]
   assignments: WorkerWorkAssignment[]
   exceptions: WorkerScheduleException[]
   rotationDefinitions: CleaningRotationDefinition[]
   rotationSlots: CleaningRotationSlot[]
+  weeklyResponsibilities?: WeeklyWorkerResponsibility[]
   available: boolean
 }
 
@@ -131,7 +142,7 @@ function addDays(date: string, amount: number) {
   return new Date((utcDayNumber(date) + amount) * 86_400_000).toISOString().slice(0, 10)
 }
 
-function monday(date: string) {
+export function weekMonday(date: string) {
   const [year, month, day] = date.split('-').map(Number)
   const value = new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7
   return addDays(date, 1 - value)
@@ -149,7 +160,7 @@ function rotationForOccurrence(date: string, planning: WorkerPlanningData, rotat
   const definition = (planning.rotationDefinitions ?? []).find((item) => item.rotationKey === rotationKey && item.active)
   if (!definition || date < definition.anchorDate) return null
   let occurrenceIndex = 0
-  for (let week = monday(definition.anchorDate); week < monday(date); week = addDays(week, 7)) {
+  for (let week = weekMonday(definition.anchorDate); week < weekMonday(date); week = addDays(week, 7)) {
     if (bestSchoolShiftInWeek(week, planning)) occurrenceIndex += 1
   }
   const slotIndex = occurrenceIndex % definition.slotCount
@@ -163,7 +174,7 @@ function rotationForOccurrence(date: string, planning: WorkerPlanningData, rotat
 export function cleaningRotationForDate(date: string, planning: WorkerPlanningData, rotationKey = 'school-fourth-floor'): RotationForDate | null {
   const definition = (planning.rotationDefinitions ?? []).find((item) => item.rotationKey === rotationKey && item.active)
   if (!definition || date < definition.anchorDate) return null
-  if (bestSchoolShiftInWeek(monday(date), planning) !== date) return null
+  if (bestSchoolShiftInWeek(weekMonday(date), planning) !== date) return null
   return rotationForOccurrence(date, planning, rotationKey)
 }
 
@@ -181,6 +192,12 @@ export function assignmentOverlapsMonth(assignment: WorkerWorkAssignment, month:
 
 export function assignmentAppliesInMonth(assignment: WorkerWorkAssignment, month: string) {
   return assignment.active && assignmentOverlapsMonth(assignment, month)
+}
+
+export function weeklyResponsibilitiesForDate(date: string, planning: WorkerPlanningData) {
+  return (planning.weeklyResponsibilities ?? [])
+    .filter((item) => item.active && item.validFrom <= date && (!item.validTo || item.validTo >= date) && item.workerId)
+    .sort((a, b) => a.responsibilityKey.localeCompare(b.responsibilityKey))
 }
 
 export function workAssignmentsConflict(first: WorkerWorkAssignment, second: WorkerWorkAssignment) {

@@ -258,6 +258,10 @@ export type CalendarPrintDay = {
  */
 export function calendarPrintDay(summary: CalendarDaySummary): CalendarPrintDay {
   const hasFourthFloor = summary.tasks.some((task) => task.floor === '4. patro')
+  const fourthFloorPlanningWorkerId = summary.tasks.find((task) => task.floor === '4. patro' && task.plannerAssignedWorkerId)?.plannerAssignedWorkerId
+  const fourthFloorPlanningWorker = fourthFloorPlanningWorkerId
+    ? summary.workers.find((worker) => worker.workerId === fourthFloorPlanningWorkerId)?.workerName ?? null
+    : null
   const mainPlan = summary.workBlocks.flatMap((workplace) => [
     ...workplace.blocks.map((block) => ({ building: workplace.building, title: block.title, queue: block.queue })),
     ...(workplace.wcQueue ? [{ building: workplace.building, title: workplace.wcQueue.title, queue: true }] : []),
@@ -283,7 +287,7 @@ export function calendarPrintDay(summary: CalendarDaySummary): CalendarPrintDay 
     mainPlan,
     extras,
     hasFourthFloor,
-    fourthFloorWorker: summary.fourthFloorRotation?.assignment?.workerName ?? null,
+    fourthFloorWorker: fourthFloorPlanningWorker ?? summary.fourthFloorRotation?.assignment?.workerName ?? null,
     workplaces,
     hasWork: summary.tasks.length > 0 || summary.workers.length > 0 || summary.extraordinary.length > 0 || summary.rescheduled.length > 0,
   }

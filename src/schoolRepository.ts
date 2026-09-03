@@ -12,7 +12,7 @@ import { isSameTaskDefinition } from './taskValidation'
 import { pragueDateKey, validateAttendanceInterval } from './attendanceTime'
 import { attendanceStartValues } from './buildingScope'
 import { inferredBulkCompletable, isBulkCompletableTask } from './cleaningBulk'
-import { workerPlanningSaveError, type CleaningRotationSlot, type PlanningWorker, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from './workerPlanning'
+import { workerPlanningSaveError, type CleaningRotationSlot, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from './workerPlanning'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -610,7 +610,7 @@ export const schoolRepository = {
     const { data, error } = await client().rpc('get_worker_work_planning')
     if (missingFunction(error)) return { assignments: [], exceptions: [], rotationDefinitions: [], rotationSlots: [], available: false }
     if (error) throw error
-    const payload = (data ?? {}) as { planning_workers?: any[]; assignments?: any[]; exceptions?: any[]; rotation_definitions?: any[]; rotation_slots?: any[] }
+    const payload = (data ?? {}) as { planning_workers?: any[]; assignments?: any[]; exceptions?: any[]; rotation_definitions?: any[]; rotation_slots?: any[]; weekly_responsibilities?: any[] }
     return {
       planningWorkers: payload.planning_workers?.map((row): PlanningWorker => ({ id: row.id, name: row.display_name, linkedProfileId: row.linked_profile_id ?? null, active: Boolean(row.active) })),
       assignments: (payload.assignments ?? []).map(mapWorkAssignment),
@@ -620,6 +620,10 @@ export const schoolRepository = {
         slotCount: Number(row.slot_count), active: Boolean(row.active),
       })),
       rotationSlots: (payload.rotation_slots ?? []).map(mapRotationSlot),
+      weeklyResponsibilities: (payload.weekly_responsibilities ?? []).map((row): WeeklyWorkerResponsibility => ({
+        id: row.id, responsibilityKey: row.responsibility_key, workerId: row.worker_id ?? null,
+        workerName: row.worker_name ?? null, validFrom: row.valid_from, validTo: row.valid_to ?? null, active: Boolean(row.active),
+      })),
       available: true,
     }
   },
@@ -670,6 +674,15 @@ export const schoolRepository = {
       if (legacy.error) throw legacy.error
       return
     }
+    if (error) throw error
+  },
+  saveWeeklyResponsibility: async (responsibilityKey: WeeklyWorkerResponsibility['responsibilityKey'], workerId: string | null, effectiveFrom: string) => {
+    const { error } = await client().rpc('admin_set_cleaning_weekly_responsibility', {
+      target_responsibility_key: responsibilityKey,
+      target_planning_worker_id: workerId || null,
+      target_effective_from: effectiveFrom,
+    })
+    if (missingFunction(error)) throw new Error('Týdenní povinnosti ještě nejsou v databázi aktivní. Aplikujte migraci 03500.')
     if (error) throw error
   },
   savePlanningWorker: async (worker: PlanningWorker) => {

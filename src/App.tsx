@@ -49,7 +49,7 @@ import {
   isStandardCleaningTask,
 } from "./cleaningPresentation";
 import { buildCalendarDaySummary, calendarDayCellScope, calendarPrintDay, calendarWorkerOptions, filterCalendarTasks, projectDynamicSchoolPlan, type CalendarDaySummary } from "./cleaningCalendar";
-import { assignmentOverlapsMonth, scheduleExceptionsConflict, workAssignmentsConflict, workerPlanningSaveError, type PlanningWorker, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
+import { assignmentOverlapsMonth, scheduleExceptionsConflict, weekMonday, weeklyResponsibilitiesForDate, workAssignmentsConflict, workerPlanningSaveError, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
 import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
 
 type Section =
@@ -790,6 +790,17 @@ export default function App() {
       throw error;
     }
   };
+  const saveWeeklyResponsibility = async (responsibilityKey: WeeklyWorkerResponsibility["responsibilityKey"], workerId: string | null, effectiveFrom: string) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveWeeklyResponsibility(responsibilityKey, workerId, effectiveFrom);
+      await refreshWorkerPlanning();
+      setNotice("Týdenní povinnost byla uložena.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Týdenní povinnost se nepodařilo uložit.");
+      throw error;
+    }
+  };
   const saveTask = async (task: Task) => {
     try {
       setNotice("");
@@ -1102,7 +1113,7 @@ export default function App() {
         />
       )}
       {section === "Rozdělení práce" && (
-        <WorkAssignmentOverview data={workerPlanning} profiles={attendanceWorkers} options={planOptions} canManage={canManageOperations(profile)} onSaveWorker={savePlanningWorker} onSaveAssignment={saveWorkerAssignment} onSaveException={saveScheduleException} onSaveRotation={saveCleaningRotationSlot} />
+        <WorkAssignmentOverview data={workerPlanning} profiles={attendanceWorkers} options={planOptions} canManage={canManageOperations(profile)} onSaveWorker={savePlanningWorker} onSaveAssignment={saveWorkerAssignment} onSaveException={saveScheduleException} onSaveRotation={saveCleaningRotationSlot} onSaveWeeklyResponsibility={saveWeeklyResponsibility} />
       )}
       {section === "Provoz" && (
         <OperationsScreen
@@ -3302,7 +3313,39 @@ function FourthFloorRotationEditor({ data, workers, canManage, onSave }: { data:
   return <section className="panel rotation-editor"><p className="eyebrow">ROTACE 4. PATRA</p><h2>Pořadí pracovníků</h2><p className="hint">Planner vybere vhodnou směnu podle počtu pracovníků. Pozice určují pořadí skutečných pracovníků.</p>{canManage && <label>Platnost změny od<input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} /></label>}<div className="rotation-slots">{fourthFloorSlotIndices.map((slot) => <div key={slot}><b>Pozice {String.fromCharCode(65 + slot)}</b><select disabled={!canManage || saving !== null} value={draft[slot] ?? currentFor(slot)?.workerId ?? ""} onChange={(event) => setDraft((value) => ({ ...value, [slot]: event.target.value }))}><option value="">Zatím nepřiřazena</option>{workers.map((worker) => <option value={worker.id} key={worker.id}>{worker.name}</option>)}</select>{canManage && <button disabled={saving !== null} onClick={async () => { setSaving(slot); try { await onSave(slot, draft[slot] || null, effectiveFrom); } finally { setSaving(null); } }}>{saving === slot ? "Ukládám…" : "Uložit pozici"}</button>}</div>)}</div></section>;
 }
 
-function WorkAssignmentOverview({ data, profiles, options, canManage, onSaveWorker, onSaveAssignment, onSaveException, onSaveRotation }: { data: WorkerPlanningData; profiles: AttendanceWorker[]; options: PlanOptions; canManage: boolean; onSaveWorker: (item: PlanningWorker) => Promise<void>; onSaveAssignment: (item: WorkerWorkAssignment) => Promise<void>; onSaveException: (item: WorkerScheduleException) => Promise<void>; onSaveRotation: (slotIndex: number, workerId: string | null, effectiveFrom: string) => Promise<void> }) {
+const weeklyResponsibilityLabels: Record<WeeklyWorkerResponsibility["responsibilityKey"], string> = {
+  "school-fourth-floor": "4. patro – 1× týdně",
+  "school-stairs": "Schodiště – 1× týdně",
+};
+
+function WeeklyResponsibilitiesEditor({ data, workers, canManage, onSave }: { data: WorkerPlanningData; workers: PlanningWorkerOption[]; canManage: boolean; onSave: (key: WeeklyWorkerResponsibility["responsibilityKey"], workerId: string | null, effectiveFrom: string) => Promise<void> }) {
+  const [effectiveFrom, setEffectiveFrom] = useState(weekMonday(localDateKey()));
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const keys = Object.keys(weeklyResponsibilityLabels) as WeeklyWorkerResponsibility["responsibilityKey"][];
+  const currentFor = (key: WeeklyWorkerResponsibility["responsibilityKey"]) => (data.weeklyResponsibilities ?? []).filter((item) => item.responsibilityKey === key && item.active && item.validFrom <= effectiveFrom && (!item.validTo || item.validTo >= effectiveFrom)).sort((a, b) => b.validFrom.localeCompare(a.validFrom))[0];
+  useEffect(() => {
+    setDraft(Object.fromEntries(keys.map((key) => [key, currentFor(key)?.workerId ?? ""])));
+  }, [data.weeklyResponsibilities, effectiveFrom]);
+  if (!data.weeklyResponsibilities) return null;
+  const startsOnMonday = effectiveFrom === weekMonday(effectiveFrom);
+  return <section className="panel weekly-responsibility-editor">
+    <p className="eyebrow">TÝDENNÍ ÚKOLY PRACOVNÍKŮ</p>
+    <h2>Povinnosti bez pevného dne</h2>
+    <p className="hint">Planner vybere jednu ze skutečných směn pracovníka v týdnu a úkoly rozloží podle kapacity.</p>
+    {canManage && <label>Platnost změny od pondělí<input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} />{!startsOnMonday && <small className="field-error">Vyberte pondělí.</small>}</label>}
+    <div className="weekly-responsibility-list">{keys.map((key) => <div key={key}>
+      <b>{weeklyResponsibilityLabels[key]}</b>
+      <select disabled={!canManage || saving !== null} value={draft[key] ?? currentFor(key)?.workerId ?? ""} onChange={(event) => setDraft((value) => ({ ...value, [key]: event.target.value }))}>
+        <option value="">Bez osobní odpovědnosti</option>
+        {workers.map((worker) => <option value={worker.id} key={worker.id}>{worker.name}</option>)}
+      </select>
+      {canManage && <button disabled={saving !== null || !startsOnMonday} onClick={async () => { setSaving(key); try { await onSave(key, draft[key] || null, effectiveFrom); } finally { setSaving(null); } }}>{saving === key ? "Ukládám…" : "Uložit"}</button>}
+    </div>)}</div>
+  </section>;
+}
+
+function WorkAssignmentOverview({ data, profiles, options, canManage, onSaveWorker, onSaveAssignment, onSaveException, onSaveRotation, onSaveWeeklyResponsibility }: { data: WorkerPlanningData; profiles: AttendanceWorker[]; options: PlanOptions; canManage: boolean; onSaveWorker: (item: PlanningWorker) => Promise<void>; onSaveAssignment: (item: WorkerWorkAssignment) => Promise<void>; onSaveException: (item: WorkerScheduleException) => Promise<void>; onSaveRotation: (slotIndex: number, workerId: string | null, effectiveFrom: string) => Promise<void>; onSaveWeeklyResponsibility: (key: WeeklyWorkerResponsibility["responsibilityKey"], workerId: string | null, effectiveFrom: string) => Promise<void> }) {
   const today = localDateKey();
   const [month, setMonth] = useState(today.slice(0, 7));
   const [assignment, setAssignment] = useState<WorkerWorkAssignment | null>(null);
@@ -3331,6 +3374,7 @@ function WorkAssignmentOverview({ data, profiles, options, canManage, onSaveWork
     <section className="panel"><p className="eyebrow">ROZDĚLENÍ PRÁCE</p><h2>Stabilní pracovní oblasti</h2><p className="hint">Pracovní dny určují počet lidí; planner podle něj zvolí rozsah úklidu.</p>{!data.available && <div className="notice">Databázový model ještě není aktivní.</div>}{canManage && data.available && <div className="worker-plan-actions"><button onClick={() => { setException(null); setAssignment(blankAssignment()); }}>+ Přidat nové období</button><button onClick={() => { setAssignment(null); setException(blankException()); }}>+ Přidat výjimku</button></div>}</section>
     {assignment && <WorkerAssignmentEditor item={assignment} workers={workerOptions} options={options} onCancel={() => setAssignment(null)} onSave={saveAssignment} />}
     {exception && <WorkerExceptionEditor item={exception} workers={workerOptions} options={options} onCancel={() => setException(null)} onSave={saveException} />}
+    <WeeklyResponsibilitiesEditor data={data} workers={workerOptions} canManage={canManage} onSave={onSaveWeeklyResponsibility} />
     <FourthFloorRotationEditor data={data} workers={workerOptions} canManage={canManage} onSave={onSaveRotation} />
     <label className="worker-plan-month">Zobrazený měsíc<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label>
     <section className="worker-assignment-list">{current.map((item) => <button className={item.active ? "" : "inactive"} key={item.id} disabled={!canManage} onClick={() => { setException(null); setAssignment(item); }}><span><b>{item.workerName}{!item.active ? " · Neaktivní" : ""}</b><small>{item.buildingName} · {item.areaLabel}</small><em>{weekdays.filter((_, index) => item.weekdays.includes(index + 1)).join(" · ")}</em><i>{formatDate(item.validFrom)}{item.validTo ? ` – ${formatDate(item.validTo)}` : " – bez konce"}</i></span>{canManage && <strong>Upravit ›</strong>}</button>)}{data.available && current.length === 0 && <p className="hint">Pro tento měsíc zatím není uložené žádné pracovní rozdělení.</p>}</section>
@@ -3916,7 +3960,27 @@ function CalendarFloorEffortNotes() {
   </section>;
 }
 
-function CalendarPrintPlan({ mode, days, month, monthLabel }: { mode: CalendarPrintMode; days: CalendarDaySummary[]; month: string; monthLabel: string }) {
+function WeeklyWorkerResponsibilitiesPrint({ days, planning }: { days: CalendarDaySummary[]; planning: WorkerPlanningData }) {
+  if (!days.length) return null;
+  const responsibilities = weeklyResponsibilitiesForDate(days[0].date, planning);
+  const grouped = new Map<string, { name: string; labels: string[] }>();
+  responsibilities.forEach((item) => {
+    if (!item.workerId) return;
+    const current = grouped.get(item.workerId) ?? { name: item.workerName || "Pracovník", labels: [] };
+    current.labels.push(weeklyResponsibilityLabels[item.responsibilityKey]);
+    grouped.set(item.workerId, current);
+  });
+  if (!grouped.size) return null;
+  return <section className="calendar-print-weekly-responsibilities">
+    <h2>Týdenní úkoly pracovníků</h2>
+    {[...grouped.entries()].map(([workerId, item]) => {
+      const shifts = days.filter((day) => day.workers.some((worker) => worker.workerId === workerId && worker.buildingName === "Škola")).length;
+      return <article key={workerId}><h3>{item.name}</h3><p>{shifts} {shifts === 1 ? "směna" : shifts < 5 ? "směny" : "směn"} v tomto týdnu</p><ul>{item.labels.map((label) => <li key={label}>{label}</li>)}</ul><strong>Splnit během libovolných směn v týdnu.</strong></article>;
+    })}
+  </section>;
+}
+
+function CalendarPrintPlan({ mode, days, month, monthLabel, planning }: { mode: CalendarPrintMode; days: CalendarDaySummary[]; month: string; monthLabel: string; planning: WorkerPlanningData }) {
   if (mode === "month") return <section className="calendar-print-root calendar-print-month" aria-hidden="true">
     <header><p>PLÁN ÚKLIDU</p><h1>{monthLabel}</h1></header>
     <div className="calendar-print-weekdays">{weekdays.map((day) => <b key={day}>{day}</b>)}</div>
@@ -3956,6 +4020,7 @@ function CalendarPrintPlan({ mode, days, month, monthLabel }: { mode: CalendarPr
         </div>
       </article>;
     }) : <p className="calendar-print-empty">V tomto týdnu není naplánovaný úklid.</p>}</div>
+    <WeeklyWorkerResponsibilitiesPrint days={days} planning={planning} />
     <CalendarFloorEffortNotes />
   </section>;
 }
@@ -4148,7 +4213,7 @@ function CleaningCalendar({
         ))}
         {available && !future.length && <p className="hint">Nejsou naplánované žádné budoucí výjimky.</p>}
       </section>
-      {printMode && <CalendarPrintPlan mode={printMode} days={printMode === "week" ? printWeekDays : printCalendarDays} month={month} monthLabel={monthLabel} />}
+      {printMode && <CalendarPrintPlan mode={printMode} days={printMode === "week" ? printWeekDays : printCalendarDays} month={month} monthLabel={monthLabel} planning={planning} />}
     </div>
   );
 }

@@ -1485,6 +1485,13 @@ h2 {
 .rotation-slots > div { min-width: 0; display: grid; gap: 6px; padding: 10px; border: 1px solid #d4e3df; border-radius: 10px; background: #f8fbfa; }
 .rotation-slots button { min-height: 44px; border: 0; border-radius: 8px; background: #165e56; color: #fff; font-weight: 900; }
 @media (max-width: 600px) { .rotation-slots { grid-template-columns: 1fr; } }
+.weekly-responsibility-editor { display: grid; gap: 10px; }
+.weekly-responsibility-editor > label { display: grid; gap: 4px; font-size: 12px; font-weight: 900; }
+.weekly-responsibility-editor input, .weekly-responsibility-editor select { min-height: 44px; width: 100%; box-sizing: border-box; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; padding: 8px 10px; color: #173d38; font: inherit; }
+.weekly-responsibility-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.weekly-responsibility-list > div { min-width: 0; display: grid; gap: 7px; padding: 10px; border: 1px solid #d4e3df; border-radius: 10px; background: #f8fbfa; }
+.weekly-responsibility-list button { min-height: 44px; border: 0; border-radius: 8px; background: #165e56; color: #fff; font-weight: 900; }
+@media (max-width: 600px) { .weekly-responsibility-list { grid-template-columns: 1fr; } }
 .worker-plan-month { display: grid; gap: 4px; font-size: 12px; font-weight: 900; }
 .worker-plan-month input { min-height: 44px; width: 100%; box-sizing: border-box; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; padding: 8px 10px; color: #173d38; font: inherit; }
 .worker-assignment-list { display: grid; gap: 8px; }
@@ -1711,6 +1718,12 @@ nav .active {
   .calendar-print-explanations > article h3 { margin: 0 0 1mm; font-size: 9.5pt; text-transform: uppercase; }
   .calendar-print-explanations > article p { margin: .7mm 0; font-size: 8pt; line-height: 1.25; }
   .calendar-print-explanations > article strong { display: block; margin-top: 1mm; font-size: 8pt; }
+  .calendar-print-weekly-responsibilities { margin-top: 6mm; padding-top: 3mm; border-top: 2px solid #000; break-inside: avoid; page-break-inside: avoid; }
+  .calendar-print-weekly-responsibilities > h2 { margin: 0 0 2mm; font-size: 14pt; }
+  .calendar-print-weekly-responsibilities > article { display: grid; grid-template-columns: 34mm 28mm minmax(0, 1fr); gap: 2mm 4mm; align-items: start; padding: 2mm 0; border-top: 1px solid #888; }
+  .calendar-print-weekly-responsibilities h3, .calendar-print-weekly-responsibilities p, .calendar-print-weekly-responsibilities ul { margin: 0; font-size: 9pt; }
+  .calendar-print-weekly-responsibilities ul { padding-left: 5mm; }
+  .calendar-print-weekly-responsibilities strong { grid-column: 1 / -1; font-size: 8pt; }
   .calendar-print-month { page: calendar-month-plan; }
   .calendar-print-month header { margin-bottom: 3mm; }
   .calendar-print-weekdays,
