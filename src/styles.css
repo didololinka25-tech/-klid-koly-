@@ -844,7 +844,11 @@ h2 {
 .manual-detail section { padding: 10px 0; border-top: 1px solid #e2ece9; }
 .manual-detail h3, .manual-detail p { margin: 0; }
 .manual-detail p { white-space: pre-wrap; line-height: 1.5; }
-.manual-warning { color: #7d4c00; }
+.manual-detail-heading button { min-width: 72px; min-height: 44px; }
+.manual-line-list, .manual-step-list { margin: 7px 0 0; padding-left: 22px; display: grid; gap: 7px; line-height: 1.45; overflow-wrap: anywhere; }
+.manual-step-list { list-style: decimal; }
+.manual-line-list { list-style: disc; }
+.manual-warning { margin: 4px -6px; padding: 11px 8px !important; border: 1px solid #efd49a !important; border-radius: 10px; background: #fff8e8; color: #7d4c00; }
 .manual-add-actions { display: grid; grid-template-columns: 1fr; gap: 7px; margin-bottom: 14px; }
 .manual-admin-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; align-items: center; padding: 10px 0; border-top: 1px solid #e1ece9; }
 .manual-admin-row > span { display: grid; gap: 3px; min-width: 0; }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { manualEntryMatchesSearch } from "./manualSearch";
 import {
   accessRole,
   canManageOperations,
@@ -3182,13 +3183,21 @@ function ManualGuideModal({ entry, onClose }: { entry: ManualEntry; onClose: () 
   return <div className="confirmation-backdrop manual-modal" role="dialog" aria-modal="true" aria-label={entry.title} onClick={(event) => { if (event.currentTarget === event.target) onClose(); }}>
     <article className="confirmation-dialog manual-detail">
       <div className="manual-detail-heading"><span><p className="eyebrow">{entry.category}</p><h2>{entry.title}</h2></span><button onClick={onClose} aria-label="Zavřít návod">Zavřít</button></div>
-      {entry.supplies && <section><h3>Co potřebuji</h3><p>{entry.supplies}</p></section>}
-      {entry.steps && <section><h3>Jak postupovat</h3><p>{entry.steps}</p></section>}
-      {entry.warnings && <section className="manual-warning"><h3>Na co si dát pozor</h3><p>{entry.warnings}</p></section>}
-      {entry.schoolNote && <section><h3>Poznámka školy</h3><p>{entry.schoolNote}</p></section>}
+      {entry.supplies && <section><h3>Co potřebuji</h3><ManualGuideText value={entry.supplies} /></section>}
+      {entry.steps && <section><h3>Jak postupovat</h3><ManualGuideText value={entry.steps} steps /></section>}
+      {entry.warnings && <section className="manual-warning"><h3>Na co si dát pozor</h3><ManualGuideText value={entry.warnings} /></section>}
+      {entry.schoolNote && <section><h3>Poznámka školy</h3><ManualGuideText value={entry.schoolNote} /></section>}
       {entry.body && <p>{entry.body}</p>}
     </article>
   </div>;
+}
+
+function ManualGuideText({ value, steps = false }: { value: string; steps?: boolean }) {
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length <= 1) return <p>{value}</p>;
+  const numbered = steps && lines.every((line) => /^\d+[.)]\s+/.test(line));
+  if (numbered) return <ol className="manual-step-list">{lines.map((line, index) => <li key={`${index}-${line}`}>{line.replace(/^\d+[.)]\s+/, "")}</li>)}</ol>;
+  return <ul className="manual-line-list">{lines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}</ul>;
 }
 
 function newManualEntry(entryType: ManualEntry["entryType"]): ManualEntry {
@@ -3207,8 +3216,8 @@ function ManualScreen({ data, tasks, onSave, onSetActive, onEditDeparture, onAdd
   const [openGuide, setOpenGuide] = useState<ManualEntry | null>(null);
   const normalized = search.trim().toLocaleLowerCase("cs");
   const active = data.entries.filter((entry) => entry.active);
-  const guides = active.filter((entry) => entry.entryType === "guide" && (!normalized || `${entry.title} ${entry.category} ${entry.supplies} ${entry.steps} ${entry.schoolNote}`.toLocaleLowerCase("cs").includes(normalized)));
-  const practical = active.filter((entry) => entry.entryType === "practical" && (!normalized || `${entry.title} ${entry.category} ${entry.body}`.toLocaleLowerCase("cs").includes(normalized)));
+  const guides = active.filter((entry) => entry.entryType === "guide" && manualEntryMatchesSearch(entry, normalized));
+  const practical = active.filter((entry) => entry.entryType === "practical" && manualEntryMatchesSearch(entry, normalized));
   const arrival = active.filter((entry) => entry.entryType === "arrival");
   const departures = tasks.filter(isFinalCheckTask).sort((a, b) => a.sortOrder - b.sortOrder);
   if (!data.available) return <div className="manual-screen"><SchoolOpeningManualCard onOpen={onOpenSchoolManual} /><section className="panel"><h2>Manuál úklidu</h2><p>Další návody se zatím nepodařilo načíst.</p></section></div>;
