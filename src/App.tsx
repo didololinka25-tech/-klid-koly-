@@ -48,7 +48,7 @@ import {
   isExtraCleaningTask,
   isStandardCleaningTask,
 } from "./cleaningPresentation";
-import { buildCalendarDaySummary, calendarDayCellScope, calendarWorkerOptions, filterCalendarTasks, projectDynamicSchoolPlan, type CalendarDaySummary } from "./cleaningCalendar";
+import { buildCalendarDaySummary, calendarDayCellScope, calendarPrintDay, calendarWorkerOptions, filterCalendarTasks, projectDynamicSchoolPlan, type CalendarDaySummary } from "./cleaningCalendar";
 import { assignmentOverlapsMonth, scheduleExceptionsConflict, workAssignmentsConflict, workerPlanningSaveError, type PlanningWorker, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
 import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
 
@@ -3856,6 +3856,69 @@ function CalendarDayModal({ summary, plannerStatus, onRetry, onClose }: { summar
   </div>;
 }
 
+type CalendarPrintMode = "week" | "month";
+
+function printDayTitle(date: string) {
+  return new Intl.DateTimeFormat("cs-CZ", { weekday: "long", day: "numeric", month: "numeric", timeZone: "UTC" })
+    .format(new Date(`${date}T12:00:00Z`));
+}
+
+function printWeekRange(days: CalendarDaySummary[]) {
+  if (!days.length) return "";
+  const start = new Date(`${days[0].date}T12:00:00Z`);
+  const end = new Date(`${days[days.length - 1].date}T12:00:00Z`);
+  const sameMonth = start.getUTCFullYear() === end.getUTCFullYear() && start.getUTCMonth() === end.getUTCMonth();
+  if (sameMonth) {
+    const suffix = new Intl.DateTimeFormat("cs-CZ", { month: "long", year: "numeric", timeZone: "UTC" }).format(end);
+    return `${start.getUTCDate()}.–${end.getUTCDate()}. ${suffix}`;
+  }
+  const format = new Intl.DateTimeFormat("cs-CZ", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+  return `${format.format(start)} – ${format.format(end)}`;
+}
+
+function CalendarPrintPlan({ mode, days, month, monthLabel }: { mode: CalendarPrintMode; days: CalendarDaySummary[]; month: string; monthLabel: string }) {
+  if (mode === "month") return <section className="calendar-print-root calendar-print-month" aria-hidden="true">
+    <header><p>PLÁN ÚKLIDU</p><h1>{monthLabel}</h1></header>
+    <div className="calendar-print-weekdays">{weekdays.map((day) => <b key={day}>{day}</b>)}</div>
+    <div className="calendar-print-month-grid">{days.map((summary) => {
+      const outside = summary.date.slice(0, 7) !== month;
+      const scope = calendarDayCellScope(summary);
+      const view = calendarPrintDay(summary);
+      return <article key={summary.date} className={outside ? "outside" : view.hasWork ? "has-work" : ""}>
+        {!outside && <><strong>{Number(summary.date.slice(8, 10))}</strong>{view.hasWork && <div>
+          {view.workplaces.length > 0 && <b>{view.workplaces.map((name) => name === "Školka" ? "MŠ" : name === "Škola" ? "Š" : name).join(" + ")}</b>}
+          {scope.workers > 0 && <span>{scope.workers} {scope.workers === 1 ? "člověk" : scope.workers < 5 ? "lidé" : "lidí"}</span>}
+          {scope.floors.length > 0 && <span>{scope.floors.join(" + ")}</span>}
+          {scope.hasWc && <span>WC</span>}
+          {scope.hasStairs && <span>SCH</span>}
+          {scope.hasFourthFloor && <span>4F</span>}
+          {scope.extraCount > 0 && <span>+{scope.extraCount} extra</span>}
+        </div>}</>}
+      </article>;
+    })}</div>
+    <footer>Š = Škola · MŠ = Školka · SCH = Schodiště · 4F = 4. patro · extra = periodická nebo přenesená práce</footer>
+  </section>;
+
+  const workDays = days.filter((summary) => calendarPrintDay(summary).hasWork);
+  return <section className="calendar-print-root calendar-print-week" aria-hidden="true">
+    <header><p>PLÁN ÚKLIDU</p><h1>{printWeekRange(days)}</h1></header>
+    <div className="calendar-print-days">{workDays.length > 0 ? workDays.map((summary) => {
+      const view = calendarPrintDay(summary);
+      return <article className="calendar-print-day" key={summary.date}>
+        <h2>{printDayTitle(summary.date)}</h2>
+        <div className="calendar-print-day-columns">
+          <section><h3>Kdo pracuje</h3>{view.workers.length ? <ul>{view.workers.map((worker) => <li key={`${worker.id}|${worker.building}`}><b>{worker.name}</b><small>{worker.building}{worker.area ? ` · ${worker.area}` : ""}</small></li>)}</ul> : <p>Bez naplánovaného pracovníka</p>}</section>
+          <section><h3>Hlavní plán</h3>{view.mainPlan.length ? <ul>{view.mainPlan.map((item) => <li key={`${item.building}|${item.title}`}><b>{item.title}</b><small>{item.building}{item.queue ? " · otevřená fronta" : ""}</small></li>)}</ul> : <p>Bez běžného plánu</p>}</section>
+          <section><h3>Práce navíc</h3>{view.extras.length || view.hasFourthFloor ? <ul>
+            {view.hasFourthFloor && <li><b>4. patro – Mediační místnost + chodba</b><small>{view.fourthFloorWorker ? `Pracovník: ${view.fourthFloorWorker}` : "Bez přiřazeného pracovníka"}</small></li>}
+            {view.extras.map((extra) => <li key={extra.key}><b>{extra.label}{extra.overdue ? " — PŘENESENO" : ""}</b><small>{extra.scopes.join(" · ")}</small></li>)}
+          </ul> : <p>Nic navíc</p>}</section>
+        </div>
+      </article>;
+    }) : <p className="calendar-print-empty">V tomto týdnu není naplánovaný úklid.</p>}</div>
+  </section>;
+}
+
 function CleaningCalendar({
   records,
   available,
@@ -3889,6 +3952,7 @@ function CleaningCalendar({
   const [plannerStatus, setPlannerStatus] = useState<CalendarPlannerStatus>("loading");
   const [plannerReload, setPlannerReload] = useState(0);
   const [dayDetailOpen, setDayDetailOpen] = useState(false);
+  const [printMode, setPrintMode] = useState<CalendarPrintMode | null>(null);
   const workerOptions = useMemo(() => {
     const values = new Map(calendarWorkerOptions(planning).map((worker) => [worker.id, worker.name]));
     availableWorkers.forEach((worker) => values.set(worker.id, worker.name));
@@ -3950,6 +4014,10 @@ function CleaningCalendar({
     const context = calendarContextForDate(visibleTasks, visibleRecords, item.date);
     return buildCalendarDaySummary({ date: item.date, today, tasks: visibleTasks, context, exceptions: visibleRecords, planning: visiblePlanning, workerId: workerFilter });
   }), [resolvedCalendarDays, buildingFilter, visibleRecords, visiblePlanning, workerFilter, today]);
+  const printCalendarDays = useMemo(() => resolvedCalendarDays.map((item) => {
+    const context = calendarContextForDate(item.tasks, records, item.date);
+    return buildCalendarDaySummary({ date: item.date, today, tasks: item.tasks, context, exceptions: records, planning, workerId: "all" });
+  }), [resolvedCalendarDays, records, planning, today]);
   const selected = calendarDays.find((item) => item.date === selectedDate)
     ?? (() => {
       const due = filterCalendarTasks(plannerStatus === "ready" ? plannedTasksForDate(planTasks, records, selectedDate, serverPlanForCalendarDate(selectedDate, records, serverDynamicPlan)) : [], buildingFilter);
@@ -3965,6 +4033,18 @@ function CleaningCalendar({
   };
   const goToday = () => { setMonth(today.slice(0, 7)); setSelectedDate(today); setDayDetailOpen(false); };
   const monthLabel = new Intl.DateTimeFormat("cs-CZ", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`));
+  const selectedPrintIndex = Math.max(0, printCalendarDays.findIndex((item) => item.date === selectedDate));
+  const printWeekDays = printCalendarDays.slice(Math.floor(selectedPrintIndex / 7) * 7, Math.floor(selectedPrintIndex / 7) * 7 + 7);
+  useEffect(() => {
+    if (!printMode) return;
+    const firstFrame = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.print();
+        window.setTimeout(() => setPrintMode(null), 250);
+      });
+    });
+    return () => window.cancelAnimationFrame(firstFrame);
+  }, [printMode]);
   return (
     <div className="cleaning-calendar">
       <section className="panel calendar-intro">
@@ -3975,6 +4055,11 @@ function CleaningCalendar({
       {!planning.available && <div className="notice">Pracovní rozdělení se zobrazí po zkontrolování a aplikaci migrace 03100. Práce navíc zůstává dostupná.</div>}
       <div className="calendar-filter" role="group" aria-label="Filtrovat pracoviště"><button className={buildingFilter === "all" ? "active" : ""} onClick={() => setBuildingFilter("all")}>Vše</button>{buildings.map((building) => <button className={buildingFilter === building.id ? "active" : ""} key={building.id} onClick={() => setBuildingFilter(building.id)}>{building.name}</button>)}</div>
       <label className="calendar-worker-filter">Pracovník<select value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)}><option value="all">Všichni</option>{workerOptions.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></label>
+      <details className="calendar-print-menu">
+        <summary>Vytisknout plán</summary>
+        <div><button disabled={plannerStatus !== "ready"} onClick={() => setPrintMode("week")}>Tento týden</button><button disabled={plannerStatus !== "ready"} onClick={() => setPrintMode("month")}>Tento měsíc</button></div>
+        {plannerStatus !== "ready" && <small>Nejdřív je potřeba načíst dynamický plán.</small>}
+      </details>
       {!available && (
         <div className="notice">Správa skutečných mimořádných a přesunutých dnů bude dostupná po zkontrolování a aplikaci migrace 01300.</div>
       )}
@@ -4022,6 +4107,7 @@ function CleaningCalendar({
         ))}
         {available && !future.length && <p className="hint">Nejsou naplánované žádné budoucí výjimky.</p>}
       </section>
+      {printMode && <CalendarPrintPlan mode={printMode} days={printMode === "week" ? printWeekDays : printCalendarDays} month={month} monthLabel={monthLabel} />}
     </div>
   );
 }

@@ -241,6 +241,54 @@ export function calendarDayCellScope(summary: CalendarDaySummary) {
   }
 }
 
+export type CalendarPrintDay = {
+  date: string
+  workers: Array<{ id: string; name: string; building: string; area: string }>
+  mainPlan: Array<{ building: string; title: string; queue: boolean }>
+  extras: CalendarExtraCategory[]
+  hasFourthFloor: boolean
+  fourthFloorWorker: string | null
+  workplaces: string[]
+  hasWork: boolean
+}
+
+/**
+ * Převádí již vyřešený výsledek kalendáře do tiskového view modelu.
+ * Neprovádí žádné plánování a záměrně nevypisuje jednotlivé mikroúkoly.
+ */
+export function calendarPrintDay(summary: CalendarDaySummary): CalendarPrintDay {
+  const hasFourthFloor = summary.tasks.some((task) => task.floor === '4. patro')
+  const mainPlan = summary.workBlocks.flatMap((workplace) => [
+    ...workplace.blocks.map((block) => ({ building: workplace.building, title: block.title, queue: block.queue })),
+    ...(workplace.wcQueue ? [{ building: workplace.building, title: workplace.wcQueue.title, queue: true }] : []),
+  ])
+  const workplaces = [...new Set([
+    ...summary.workplaces.map((workplace) => workplace.name),
+    ...summary.workers.map((worker) => worker.buildingName),
+    ...mainPlan.map((item) => item.building),
+  ])]
+  const extras = summary.extraCategories.flatMap((category) => {
+    if (!hasFourthFloor || category.key !== 'floors') return [category]
+    const scopes = category.scopes.filter((scope) => !scope.includes('· 4. patro'))
+    return scopes.length ? [{ ...category, scopes }] : []
+  })
+  return {
+    date: summary.date,
+    workers: summary.workers.map((worker) => ({
+      id: worker.workerId,
+      name: worker.workerName,
+      building: worker.buildingName,
+      area: worker.areaLabel,
+    })),
+    mainPlan,
+    extras,
+    hasFourthFloor,
+    fourthFloorWorker: summary.fourthFloorRotation?.assignment?.workerName ?? null,
+    workplaces,
+    hasWork: summary.tasks.length > 0 || summary.workers.length > 0 || summary.extraordinary.length > 0 || summary.rescheduled.length > 0,
+  }
+}
+
 export function circledFloor(marker: string) {
   return ({ '1': '①', '2': '②', '3': '③', '4': '④' } as Record<string, string>)[marker] ?? marker
 }

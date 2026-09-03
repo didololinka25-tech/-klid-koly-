@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { buildCalendarDaySummary, calendarDayCellScope, calendarWorkerOptions, circledFloor, filterCalendarTasks, projectDynamicSchoolPlan } from './cleaningCalendar.ts'
+import { buildCalendarDaySummary, calendarDayCellScope, calendarPrintDay, calendarWorkerOptions, circledFloor, filterCalendarTasks, projectDynamicSchoolPlan } from './cleaningCalendar.ts'
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay } from './scheduling.ts'
 
 const task = (overrides = {}) => ({
@@ -390,4 +390,83 @@ test('Plán dne je read-only a měsíční interval načte po bezpečných bloc�
   assert.match(repository, /planReason:[\s\S]*assignedWorkerId:[\s\S]*plannerPriority:/)
   assert.match(css, /\.calendar-day-sheet \{[^}]*width: min\(100%, 620px\)[^}]*overflow-x: hidden/)
   assert.match(css, /\.calendar-day-close \{[^}]*width: 44px[^}]*height: 44px/)
+})
+
+test('tiskový plán je pouze agregovaná prezentace skutečných dynamických směn', () => {
+  const planning = {
+    available: true,
+    planningWorkers: [
+      { id: 'didi', name: 'Didi', linkedProfileId: 'profile-didi', active: true },
+      { id: 'martina', name: 'Martina', linkedProfileId: null, active: true },
+      { id: 'olga', name: 'Olga', linkedProfileId: null, active: true },
+    ],
+    assignments: [
+      { id: 'didi', workerId: 'didi', workerName: 'Didi', buildingId: 'school', buildingName: 'Škola', floorId: null, areaLabel: 'Škola', weekdays: [1, 3, 5], validFrom: '2026-09-01', validTo: null, active: true },
+      { id: 'martina-a', workerId: 'martina', workerName: 'Martina', buildingId: 'school', buildingName: 'Škola', floorId: null, areaLabel: 'Škola', weekdays: [1, 3], validFrom: '2026-09-07', validTo: '2026-09-13', active: true },
+      { id: 'martina-b', workerId: 'martina', workerName: 'Martina', buildingId: 'school', buildingName: 'Škola', floorId: null, areaLabel: 'Škola', weekdays: [3, 5], validFrom: '2026-09-14', validTo: '2026-09-20', active: true },
+      { id: 'olga', workerId: 'olga', workerName: 'Olga', buildingId: 'school', buildingName: 'Škola', floorId: null, areaLabel: 'Škola', weekdays: [1], validFrom: '2026-09-01', validTo: null, active: true },
+    ],
+    exceptions: [], rotationDefinitions: [], rotationSlots: [],
+  }
+  const threeWorkerTasks = [
+    task({ id: 'f1', plannerReason: 'routine' }),
+    task({ id: 'f2', roomId: 'f2', room: 'Učebna 1', floor: '2. patro', floorSort: 2, plannerReason: 'routine' }),
+    task({ id: 'f3', roomId: 'f3', room: 'Ateliér', floor: '3. patro', floorSort: 3, plannerReason: 'routine' }),
+    task({ id: 'wc', roomId: 'wc', room: 'WC ženy', activityType: 'toilet', plannerReason: 'routine' }),
+  ]
+  const monday = calendarPrintDay(buildCalendarDaySummary({ date: '2026-09-07', today: '2026-09-01', tasks: threeWorkerTasks, context: resolveCleaningDay('2026-09-07', []), planning }))
+  assert.deepEqual(monday.workers.map((worker) => worker.name), ['Didi', 'Martina', 'Olga'])
+  assert.deepEqual(monday.mainPlan.map((item) => item.title), ['Podlahy – 1. patro', 'Podlahy – 2. patro', 'Podlahy – 3. patro', 'WC – celá škola'])
+  const firstFriday = calendarPrintDay(buildCalendarDaySummary({ date: '2026-09-11', today: '2026-09-01', tasks: [], context: resolveCleaningDay('2026-09-11', []), planning }))
+  const secondFriday = calendarPrintDay(buildCalendarDaySummary({ date: '2026-09-18', today: '2026-09-01', tasks: [], context: resolveCleaningDay('2026-09-18', []), planning }))
+  assert.deepEqual(firstFriday.workers.map((worker) => worker.name), ['Didi'])
+  assert.deepEqual(secondFriday.workers.map((worker) => worker.name), ['Didi', 'Martina'])
+})
+
+test('tisk zachová schodiště, 4F pracovníka, small/large, overdue a Školku bez mikroúkolů', () => {
+  const date = '2026-09-07'
+  const planning = {
+    available: true,
+    planningWorkers: [{ id: 'worker-2', name: 'Pracovník 2', linkedProfileId: null, active: true }],
+    assignments: [{ id: 'a', workerId: 'worker-2', workerName: 'Pracovník 2', buildingId: 'school', buildingName: 'Škola', floorId: null, areaLabel: 'Škola', weekdays: [1], validFrom: date, validTo: null, active: true }],
+    exceptions: [],
+    rotationDefinitions: [{ rotationKey: 'school-fourth-floor', title: '4. patro', anchorDate: date, weekday: 1, slotCount: 3, active: true }],
+    rotationSlots: [{ id: 'slot', rotationKey: 'school-fourth-floor', slotIndex: 0, workerId: 'worker-2', workerName: 'Pracovník 2', validFrom: date, validTo: null, active: true }],
+  }
+  const summary = buildCalendarDaySummary({
+    date, today: date, context: resolveCleaningDay(date, []), planning,
+    tasks: [
+      task({ id: 'floor', plannerReason: 'routine' }),
+      task({ id: 'stairs', roomId: 'stairs', room: 'Schodiště', floor: 'Schodiště', floorSort: 5, plannerReason: 'weekly-special' }),
+      task({ id: 'fourth', roomId: 'fourth', room: 'Mediační místnost', floor: '4. patro', floorSort: 4, plannerReason: 'weekly-special', plannerAssignedWorkerId: 'worker-2' }),
+      task({ id: 'small', activityType: 'windows', plannerReason: 'small' }),
+      task({ id: 'large', activityType: 'deep_clean', plannerReason: 'large' }),
+      task({ id: 'overdue', activityType: 'doors', plannerReason: 'overdue' }),
+      task({ id: 'kg', buildingId: 'kg', building: 'Školka', floor: 'Prostory', roomId: 'kg-room', room: 'Kuchyň', plannerReason: null }),
+    ],
+  })
+  const print = calendarPrintDay(summary)
+  assert.deepEqual(print.workplaces.sort(), ['Škola', 'Školka'])
+  assert.equal(print.fourthFloorWorker, 'Pracovník 2')
+  assert.ok(print.extras.some((extra) => extra.key === 'staircase'))
+  assert.ok(print.extras.some((extra) => extra.key === 'windows'))
+  assert.ok(print.extras.some((extra) => extra.key === 'deep_clean'))
+  assert.equal(print.extras.find((extra) => extra.key === 'doors')?.overdue, true)
+  assert.ok(print.mainPlan.some((item) => item.building === 'Školka' && item.title === 'Úklid – Prostory'))
+  assert.ok(print.mainPlan.every((item) => !item.title.includes('Běžný úklid')))
+  assert.equal(calendarPrintDay(buildCalendarDaySummary({ date: '2026-09-06', today: date, tasks: [], context: resolveCleaningDay('2026-09-06', []) })).hasWork, false)
+})
+
+test('tisk používá browser print a samostatné A4 portrait/landscape layouty bez ovládání', () => {
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
+  assert.match(app, /Vytisknout plán/)
+  assert.match(app, /Tento týden/)
+  assert.match(app, /Tento měsíc/)
+  assert.match(app, /window\.print\(\)/)
+  assert.match(app, /printCalendarDays[\s\S]*workerId: "all"/)
+  assert.match(css, /@page calendar-week-plan \{ size: A4 portrait/)
+  assert.match(css, /@page calendar-month-plan \{ size: A4 landscape/)
+  assert.match(css, /@media print[\s\S]*body \* \{ visibility: hidden !important/)
+  assert.match(css, /\.calendar-print-day \{[^}]*break-inside: avoid/)
 })
