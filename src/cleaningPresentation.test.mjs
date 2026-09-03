@@ -140,7 +140,7 @@ test('mobilní redesign drží touch targety a na desktopu rozšíří měsíčn
 
 test('Dnes vede přímo od docházky přes práci navíc k pracovním celkům', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const today = source.match(/\{section === "Dnes"[\s\S]*?\{section === "Správa"/)?.[0] ?? ''
+  const today = source.match(/\{section === "Dnes"[\s\S]*?\{section === "Prostory"/)?.[0] ?? ''
   assert.doesNotMatch(today, /className=\{visible\.length > 0[\s\S]*?hero today-overview/)
   assert.doesNotMatch(today, /today-work-overview/)
   assert.match(today, /<TodayExtras tasks=\{todayExtras\}/)

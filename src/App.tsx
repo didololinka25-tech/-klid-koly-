@@ -59,9 +59,10 @@ type Section =
   | "Provoz"
   | "Více"
   | "Manuál"
-  | "Rozdělení práce"
-  | "Správa"
-  | "Uživatelé";
+  | "Lidé a práce"
+  | "Plán úklidu"
+  | "Prostory"
+  | "Účty a přístupy";
 const sections: Section[] = ["Dnes", "Docházka", "Kalendář", "Provoz", "Více"];
 const icon: Record<Section, string> = {
   Dnes: "☀",
@@ -70,9 +71,10 @@ const icon: Record<Section, string> = {
   Provoz: "⚠",
   Více: "•••",
   Manuál: "ⓘ",
-  "Rozdělení práce": "♙",
-  Správa: "✓",
-  Uživatelé: "♙",
+  "Lidé a práce": "♙",
+  "Plán úklidu": "✓",
+  Prostory: "▦",
+  "Účty a přístupy": "♙",
 };
 const frequencies: Frequency[] = [
   "denně",
@@ -935,7 +937,7 @@ export default function App() {
   const openManagement = (view: "plan" | "rooms") => {
     setManagementView(view);
     setEditing(null);
-    setSection("Správa");
+    setSection(view === "plan" ? "Plán úklidu" : "Prostory");
   };
   const pendingCount = profile.is_owner
     ? users.filter((user) => user.active && user.role === "pending").length
@@ -1051,7 +1053,15 @@ export default function App() {
           </>}
         </>
       )}
-      {section === "Správa" && canManageOperations(profile) && (
+      {section === "Prostory" && canManageOperations(profile) && (
+        <section className="panel spaces-workplaces">
+          <p className="eyebrow">PRACOVIŠTĚ</p>
+          <h2>Budovy a jejich prostory</h2>
+          <p className="hint">Nejdřív můžete upravit pracoviště, níže pak vyberte budovu a spravujte její patra a místnosti.</p>
+          <WorkplaceSettings workplaces={workplaces} canManage onSave={saveWorkplace} />
+        </section>
+      )}
+      {(section === "Plán úklidu" || section === "Prostory") && canManageOperations(profile) && (
         <Management
           tasks={tasks}
           options={planOptions}
@@ -1063,16 +1073,13 @@ export default function App() {
           onSaveRoom={saveRoom}
           onSaveFloor={saveFloor}
           onSetRoomActive={setRoomActive}
-          view={managementView}
-          onView={setManagementView}
+          view={section === "Prostory" ? "rooms" : "plan"}
+          onView={openManagement}
+          showTabs={false}
         />
       )}
-      {section === "Uživatelé" && profile.is_owner && (
-        <UserManagement
-          users={users}
-          currentUserId={profile.id}
-          onSave={saveUserAccess}
-        />
+      {section === "Účty a přístupy" && profile.is_owner && (
+        <AccountsAccessScreen users={users} currentUserId={profile.id} onSave={saveUserAccess} />
       )}
       {section === "Docházka" && (
         <AttendanceDashboard
@@ -1095,7 +1102,6 @@ export default function App() {
           onSaveAttendance={saveAttendance}
           onDeleteAttendance={deleteAttendance}
           onSaveSettings={saveAttendanceSettings}
-          onSaveContract={saveWorkerContract}
         />
       )}
       {section === "Kalendář" && (
@@ -1112,8 +1118,8 @@ export default function App() {
           onCancel={cancelCleaningDay}
         />
       )}
-      {section === "Rozdělení práce" && (
-        <WorkAssignmentOverview data={workerPlanning} profiles={attendanceWorkers} options={planOptions} canManage={canManageOperations(profile)} onSaveWorker={savePlanningWorker} onSaveAssignment={saveWorkerAssignment} onSaveException={saveScheduleException} onSaveRotation={saveCleaningRotationSlot} onSaveWeeklyResponsibility={saveWeeklyResponsibility} />
+      {section === "Lidé a práce" && (
+        <WorkAssignmentOverview data={workerPlanning} profiles={attendanceWorkers} options={planOptions} canManage={canManageOperations(profile)} contracts={workerContracts} attendanceSettings={attendanceSettings} appSettings={appSettings} onSelectLinkedProfile={setSelectedAttendanceWorker} onSaveAttendanceSettings={saveAttendanceSettings} onSaveContract={saveWorkerContract} onSaveDppLimit={saveDppLimit} onSaveDpcSettings={saveDpcSettings} onSaveWorker={savePlanningWorker} onSaveAssignment={saveWorkerAssignment} onSaveException={saveScheduleException} onSaveRotation={saveCleaningRotationSlot} onSaveWeeklyResponsibility={saveWeeklyResponsibility} />
       )}
       {section === "Provoz" && (
         <OperationsScreen
@@ -1130,11 +1136,11 @@ export default function App() {
           tasks={tasks}
           onSave={saveManualEntry}
           onSetActive={setManualEntryActive}
-          onEditDeparture={(task) => { setEditing(task); setManagementView("plan"); setSection("Správa"); }}
+          onEditDeparture={(task) => { setEditing(task); setManagementView("plan"); setSection("Plán úklidu"); }}
           onAddDeparture={() => {
             const order = Math.max(930, ...tasks.filter(isFinalCheckTask).map((task) => task.sortOrder)) + 10;
             setEditing({ id: "", planKey: `admin|final|${crypto.randomUUID()}`, room: "Společný úkol", floor: "Společné úkoly", floorSort: -1, building: "Škola", title: "", activityType: "other", frequency: "denně", assignedTo: "Úklidový tým", done: false, canComplete: false, dueToday: false, sortOrder: order, scheduleDays: [1, 3, 5], active: true });
-            setManagementView("plan"); setSection("Správa");
+            setManagementView("plan"); setSection("Plán úklidu");
           }}
         />
       )}
@@ -1146,16 +1152,11 @@ export default function App() {
           onOpenRooms={() => openManagement("rooms")}
           onOpenUsers={async () => {
             setUsers(await schoolRepository.users());
-            setSection("Uživatelé");
+            setSection("Účty a přístupy");
           }}
           onOpenCleaningDays={() => setSection("Kalendář")}
-          onOpenAssignments={() => setSection("Rozdělení práce")}
+          onOpenAssignments={() => setSection("Lidé a práce")}
           onOpenManual={() => setSection("Manuál")}
-          workplaces={workplaces}
-          appSettings={appSettings}
-          onSaveWorkplace={saveWorkplace}
-          onSaveDppLimit={saveDppLimit}
-          onSaveDpcSettings={saveDpcSettings}
         />
       )}
       {profileEditorOpen && (
@@ -1404,7 +1405,6 @@ function AttendanceDashboard({
   onSaveAttendance,
   onDeleteAttendance,
   onSaveSettings,
-  onSaveContract,
 }: {
   records: Attendance[];
   workers: AttendanceWorker[];
@@ -1430,7 +1430,6 @@ function AttendanceDashboard({
   ) => Promise<void>;
   onDeleteAttendance: (id: string, workerId: string) => Promise<void>;
   onSaveSettings: (value: number) => Promise<void>;
-  onSaveContract: (contract: WorkerContract) => Promise<void>;
 }) {
   const now = useCurrentTime();
   const [editingRecord, setEditingRecord] = useState<Attendance | null>(null);
@@ -1554,15 +1553,15 @@ function AttendanceDashboard({
           <div><span>ZBÝVÁ</span><strong>{formatPlanningHours(dppBudget.annualRemainingHours)}</strong></div>
           <div><span>MĚSÍČNÍ ROZPOČET</span><strong>≈ {formatPlanningHours(dppBudget.monthlyBudgetHours)}</strong><small>zbývá ≈ {formatPlanningHours(dppBudget.monthlyBudgetRemainingHours)}</small></div>
         </div>
+        <div className="shift-setting visible-setting">
+          <label>Plánovaný počet směn týdně<input type="number" min="1" max="7" value={plannedShifts} onChange={(event) => setPlannedShifts(Number(event.target.value))} disabled={!settings.configurable} /></label>
+          <button onClick={() => void onSaveSettings(plannedShifts)} disabled={!settings.configurable || plannedShifts === settings.plannedShiftsPerWeek}>Uložit</button>
+        </div>
         <details className="pace-explanation">
           <summary>ⓘ Jak se to počítá</summary>
           <div>
             <p>Měsíční rozpočet je orientační rovnoměrné rozložení zbývajícího ročního fondu do konce roku nebo aktuálního smluvního období.</p>
             <p>Nejde o zákonné měsíční maximum.</p>
-            <div className="shift-setting">
-              <label>Směn týdně<input type="number" min="1" max="7" value={plannedShifts} onChange={(event) => setPlannedShifts(Number(event.target.value))} disabled={!settings.configurable} /></label>
-              <button onClick={() => void onSaveSettings(plannedShifts)} disabled={!settings.configurable}>Uložit</button>
-            </div>
             {!settings.configurable && <small>Nastavení směn zatím nelze měnit.</small>}
           </div>
         </details>
@@ -1597,7 +1596,6 @@ function AttendanceDashboard({
         appSettings={appSettings}
         contracts={contracts}
       />
-      {isCaretaker && <WorkerContractsPanel workerId={selectedWorkerId} contracts={contracts} onSave={onSaveContract} />}
       <AttendanceHistory
         records={records}
         now={now}
@@ -2277,6 +2275,7 @@ function Management({
   onSetRoomActive,
   view,
   onView,
+  showTabs = true,
 }: {
   tasks: Task[];
   options: PlanOptions;
@@ -2290,6 +2289,7 @@ function Management({
   onSetRoomActive: (roomId: string, active: boolean) => Promise<void>;
   view: "plan" | "rooms";
   onView: (view: "plan" | "rooms") => void;
+  showTabs?: boolean;
 }) {
   const [adminBuildingId, setAdminBuildingId] = useState<string | null>(null);
   const adminBuilding = options.buildings.find((building) => building.id === adminBuildingId);
@@ -2319,7 +2319,7 @@ function Management({
     <>
       <button className="back-button" onClick={() => { onCancel(); setAdminBuildingId(null); }}>← Pracoviště</button>
       <h2>{adminBuilding.name}</h2>
-      <div className="management-tabs" role="tablist" aria-label="Správa školy">
+      {showTabs && <div className="management-tabs" role="tablist" aria-label="Správa školy">
         <button
           className={view === "plan" ? "active" : ""}
           onClick={() => onView("plan")}
@@ -2336,7 +2336,7 @@ function Management({
         >
           Místnosti
         </button>
-      </div>
+      </div>}
       {view === "plan" ? (
         <PlanManager
           tasks={buildingTasks}
@@ -2979,6 +2979,13 @@ const roleLabel = (role: AccessRole) =>
     visitor: "návštěvník",
   })[role];
 
+function AccountsAccessScreen({ users, currentUserId, onSave }: { users: UserProfile[]; currentUserId: string; onSave: (id: string, role: AccessRole, active: boolean) => Promise<void> }) {
+  return <div className="accounts-access-screen">
+    <section className="panel"><p className="eyebrow">ÚČTY A PŘÍSTUPY</p><h2>Uživatelé aplikace</h2><p className="hint">Zde schvalujete přihlášení a určujete, co člověk smí v aplikaci dělat. Pracovníci v rozpisu jsou samostatně v části Lidé a práce a účet mít nemusí.</p></section>
+    <UserManagement users={users} currentUserId={currentUserId} onSave={onSave} />
+  </div>;
+}
+
 function UserManagement({
   users,
   currentUserId,
@@ -3206,7 +3213,7 @@ function ManualScreen({ data, tasks, onSave, onSetActive, onEditDeparture, onAdd
   </div>;
   const categories = [...new Set(guides.map((entry) => entry.category))];
   return <div className="manual-screen">
-    <div className="manual-page-heading"><span><p className="eyebrow">RYCHLÁ POMOC PŘI PRÁCI</p><h2>Manuál úklidu</h2></span>{data.editable && <button onClick={() => setManage(true)}>Spravovat</button>}</div>
+    <div className="manual-page-heading"><span><p className="eyebrow">RYCHLÁ POMOC PŘI PRÁCI</p><h2>Manuál úklidu</h2></span>{data.editable && <button onClick={() => setManage(true)}>Upravit obsah</button>}</div>
     <label className="manual-search">Hledat v Manuálu<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Např. okna nebo WC" /></label>
     {!normalized && guides.some((entry) => entry.featured) && <section><h3>Rychlé návody</h3><div className="manual-featured">{guides.filter((entry) => entry.featured).map((entry) => <button key={entry.id} onClick={() => setOpenGuide(entry)}>{activityTypes[entry.activityTypes[0] as ActivityType]?.icon ?? "ⓘ"}<b>{entry.title}</b></button>)}</div></section>}
     {practical.length > 0 && <section className="panel practical-info"><p className="eyebrow">PRAKTICKÉ INFORMACE ŠKOLY</p>{practical.sort((a, b) => a.sortOrder - b.sortOrder).map((entry) => <article key={entry.id}><i style={{ backgroundColor: entry.markerColor || "#dcebe7" }} /><span><b>{entry.title}</b><small>{entry.body}</small></span></article>)}</section>}
@@ -3345,7 +3352,7 @@ function WeeklyResponsibilitiesEditor({ data, workers, canManage, onSave }: { da
   </section>;
 }
 
-function WorkAssignmentOverview({ data, profiles, options, canManage, onSaveWorker, onSaveAssignment, onSaveException, onSaveRotation, onSaveWeeklyResponsibility }: { data: WorkerPlanningData; profiles: AttendanceWorker[]; options: PlanOptions; canManage: boolean; onSaveWorker: (item: PlanningWorker) => Promise<void>; onSaveAssignment: (item: WorkerWorkAssignment) => Promise<void>; onSaveException: (item: WorkerScheduleException) => Promise<void>; onSaveRotation: (slotIndex: number, workerId: string | null, effectiveFrom: string) => Promise<void>; onSaveWeeklyResponsibility: (key: WeeklyWorkerResponsibility["responsibilityKey"], workerId: string | null, effectiveFrom: string) => Promise<void> }) {
+function LegacyWorkAssignmentOverview({ data, profiles, options, canManage, onSaveWorker, onSaveAssignment, onSaveException, onSaveRotation, onSaveWeeklyResponsibility }: { data: WorkerPlanningData; profiles: AttendanceWorker[]; options: PlanOptions; canManage: boolean; onSaveWorker: (item: PlanningWorker) => Promise<void>; onSaveAssignment: (item: WorkerWorkAssignment) => Promise<void>; onSaveException: (item: WorkerScheduleException) => Promise<void>; onSaveRotation: (slotIndex: number, workerId: string | null, effectiveFrom: string) => Promise<void>; onSaveWeeklyResponsibility: (key: WeeklyWorkerResponsibility["responsibilityKey"], workerId: string | null, effectiveFrom: string) => Promise<void> }) {
   const today = localDateKey();
   const [month, setMonth] = useState(today.slice(0, 7));
   const [assignment, setAssignment] = useState<WorkerWorkAssignment | null>(null);
@@ -3382,6 +3389,55 @@ function WorkAssignmentOverview({ data, profiles, options, canManage, onSaveWork
   </div>;
 }
 
+function PlannedShiftsSetting({ settings, onSave }: { settings: AttendanceSettings; onSave: (value: number) => Promise<void> }) {
+  const [value, setValue] = useState(settings.plannedShiftsPerWeek);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setValue(settings.plannedShiftsPerWeek), [settings.plannedShiftsPerWeek]);
+  return <div className="shift-setting visible-setting"><label>Plánovaný počet směn týdně<input type="number" min="1" max="7" value={value} disabled={!settings.configurable} onChange={(event) => setValue(Number(event.target.value))} /></label><button disabled={!settings.configurable || saving || value === settings.plannedShiftsPerWeek} onClick={async () => { setSaving(true); try { await onSave(value); } finally { setSaving(false); } }}>{saving ? "Ukládám…" : "Uložit"}</button></div>;
+}
+
+function WorkerWeeklyResponsibilities({ worker, data, canManage, onSave }: { worker: PlanningWorker; data: WorkerPlanningData; canManage: boolean; onSave: (key: WeeklyWorkerResponsibility["responsibilityKey"], workerId: string | null, effectiveFrom: string) => Promise<void> }) {
+  const [effectiveFrom, setEffectiveFrom] = useState(weekMonday(localDateKey()));
+  const [saving, setSaving] = useState<string | null>(null);
+  const keys = Object.keys(weeklyResponsibilityLabels) as WeeklyWorkerResponsibility["responsibilityKey"][];
+  const currentFor = (key: WeeklyWorkerResponsibility["responsibilityKey"]) => (data.weeklyResponsibilities ?? []).filter((item) => item.responsibilityKey === key && item.active && item.validFrom <= effectiveFrom && (!item.validTo || item.validTo >= effectiveFrom)).sort((a, b) => b.validFrom.localeCompare(a.validFrom))[0];
+  const startsOnMonday = effectiveFrom === weekMonday(effectiveFrom);
+  return <section className="worker-detail-section"><div className="section-heading"><span><p className="eyebrow">TÝDENNÍ POVINNOSTI</p><h3>Bez pevného dne</h3></span></div><p className="hint">Planner je rozloží mezi skutečné směny tohoto člověka. Má-li dost směn, každá povinnost dostane jiný den.</p>{canManage && <label className="compact-date">Platnost od pondělí<input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} />{!startsOnMonday && <small className="field-error">Vyberte pondělí.</small>}</label>}<div className="person-duty-list">{keys.map((key) => { const current = currentFor(key); const assignedHere = current?.workerId === worker.id; return <article key={key} className={assignedHere ? "assigned" : ""}><span><b>{weeklyResponsibilityLabels[key]}</b><small>{assignedHere ? "Přiřazeno tomuto pracovníkovi" : current?.workerName ? `Nyní: ${current.workerName}` : "Bez osobní odpovědnosti"}</small></span>{canManage && <button disabled={saving !== null || !startsOnMonday} onClick={async () => { setSaving(key); try { await onSave(key, assignedHere ? null : worker.id, effectiveFrom); } finally { setSaving(null); } }}>{saving === key ? "Ukládám…" : assignedHere ? "Odebrat" : "Přiřadit"}</button>}</article>; })}</div></section>;
+}
+
+function WorkAssignmentOverview({ data, profiles, options, canManage, contracts, attendanceSettings, appSettings, onSelectLinkedProfile, onSaveAttendanceSettings, onSaveContract, onSaveDppLimit, onSaveDpcSettings, onSaveWorker, onSaveAssignment, onSaveException, onSaveRotation, onSaveWeeklyResponsibility }: { data: WorkerPlanningData; profiles: AttendanceWorker[]; options: PlanOptions; canManage: boolean; contracts: WorkerContract[]; attendanceSettings: AttendanceSettings; appSettings: AppSettings; onSelectLinkedProfile: (id: string) => void; onSaveAttendanceSettings: (value: number) => Promise<void>; onSaveContract: (contract: WorkerContract) => Promise<void>; onSaveDppLimit: (value: number) => Promise<void>; onSaveDpcSettings: (weeklyHours: number, referenceWeeks: number, monthlyThreshold: number) => Promise<void>; onSaveWorker: (item: PlanningWorker) => Promise<void>; onSaveAssignment: (item: WorkerWorkAssignment) => Promise<void>; onSaveException: (item: WorkerScheduleException) => Promise<void>; onSaveRotation: (slotIndex: number, workerId: string | null, effectiveFrom: string) => Promise<void>; onSaveWeeklyResponsibility: (key: WeeklyWorkerResponsibility["responsibilityKey"], workerId: string | null, effectiveFrom: string) => Promise<void> }) {
+  const today = localDateKey();
+  const planningWorkers = data.planningWorkers ?? profiles.map((profile) => ({ id: profile.id, name: profile.name, linkedProfileId: profile.id, active: true }));
+  const workerOptions = planningWorkers.filter((worker) => worker.active).map(({ id, name }) => ({ id, name }));
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
+  const selectedWorker = planningWorkers.find((worker) => worker.id === selectedWorkerId) ?? null;
+  const [assignment, setAssignment] = useState<WorkerWorkAssignment | null>(null);
+  const [exception, setException] = useState<WorkerScheduleException | null>(null);
+  const [editingWorker, setEditingWorker] = useState<PlanningWorker | null>(null);
+  useEffect(() => { if (selectedWorker?.linkedProfileId) onSelectLinkedProfile(selectedWorker.linkedProfileId); }, [selectedWorker?.linkedProfileId]);
+  const workerAssignments = selectedWorker ? data.assignments.filter((item) => item.workerId === selectedWorker.id).sort((a, b) => b.validFrom.localeCompare(a.validFrom)) : [];
+  const workerExceptions = selectedWorker ? data.exceptions.filter((item) => item.workerId === selectedWorker.id).sort((a, b) => b.date.localeCompare(a.date)) : [];
+  const blankAssignment = (worker: PlanningWorker): WorkerWorkAssignment => ({ id: "", workerId: worker.id, workerName: worker.name, buildingId: "", buildingName: "", floorId: null, floorName: null, areaLabel: "", weekdays: [1, 3, 5], validFrom: today, validTo: null, active: true });
+  const blankException = (worker: PlanningWorker): WorkerScheduleException => ({ id: "", workerId: worker.id, workerName: worker.name, date: today, planned: false, buildingId: null, buildingName: null, floorId: null, floorName: null, areaLabel: null, note: "", active: true });
+  const saveAssignment = async (item: WorkerWorkAssignment) => { if (data.assignments.some((existing) => workAssignmentsConflict(existing, item))) throw new Error("Toto období se překrývá s již uloženým pracovním obdobím. Otevřete existující období a upravte ho."); await onSaveAssignment(item); };
+  const saveException = async (item: WorkerScheduleException) => { if (data.exceptions.some((existing) => scheduleExceptionsConflict(existing, item))) throw new Error("Pro tohoto pracovníka už je na vybraný den uložená výjimka. Otevřete ji a upravte."); await onSaveException(item); };
+
+  if (selectedWorker) return <div className="work-assignment-screen person-detail-screen">
+    <button className="back-button" onClick={() => { setSelectedWorkerId(null); setAssignment(null); setException(null); }}>← Lidé a práce</button>
+    <section className="panel person-detail-header"><div><p className="eyebrow">PRACOVNÍK</p><h2>{selectedWorker.name}</h2><small>{selectedWorker.linkedProfileId ? "Účet aplikace je propojen" : "Pracuje v plánu bez účtu aplikace"}{selectedWorker.active ? "" : " · Neaktivní"}</small></div>{canManage && <button onClick={() => setEditingWorker(selectedWorker)}>Upravit základní údaje</button>}</section>
+    {editingWorker && <PlanningWorkerEditor item={editingWorker} profiles={profiles} onCancel={() => setEditingWorker(null)} onSave={async (value) => { await onSaveWorker(value); setEditingWorker(null); }} />}
+    <section className="panel worker-detail-section"><div className="section-heading"><span><p className="eyebrow">PRACOVNÍ PLÁN</p><h3>Období, oblasti a dny</h3></span>{canManage && <button onClick={() => { setException(null); setAssignment(blankAssignment(selectedWorker)); }}>+ Přidat období</button>}</div><div className="worker-assignment-list">{workerAssignments.map((item) => <button className={item.active ? "" : "inactive"} key={item.id} disabled={!canManage} onClick={() => { setException(null); setAssignment(item); }}><span><b>{item.buildingName} · {item.areaLabel}</b><em>{weekdays.filter((_, index) => item.weekdays.includes(index + 1)).join(" · ")}</em><i>{formatDate(item.validFrom)}{item.validTo ? ` – ${formatDate(item.validTo)}` : " – bez konce"}{item.active ? "" : " · neaktivní"}</i></span>{canManage && <strong>Upravit ›</strong>}</button>)}{workerAssignments.length === 0 && <p className="hint">Zatím nemá uložené pracovní období.</p>}</div></section>
+    {assignment && <WorkerAssignmentEditor item={assignment} workers={workerOptions} options={options} onCancel={() => setAssignment(null)} onSave={saveAssignment} />}
+    <WorkerWeeklyResponsibilities worker={selectedWorker} data={data} canManage={canManage} onSave={onSaveWeeklyResponsibility} />
+    <section className="panel worker-detail-section"><div className="section-heading"><span><p className="eyebrow">VÝJIMKY</p><h3>Jednorázové změny směn</h3></span>{canManage && <button onClick={() => { setAssignment(null); setException(blankException(selectedWorker)); }}>+ Přidat výjimku</button>}</div><div className="person-exception-list">{workerExceptions.map((item) => <button key={item.id} disabled={!canManage} onClick={() => setException(item)}><b>{formatDate(item.date)}</b><span>{item.planned ? `Výjimečně pracuje · ${item.buildingName ?? "pracoviště"} · ${item.areaLabel ?? "oblast"}` : "Nepracuje"}</span>{item.note && <small>{item.note}</small>}</button>)}{workerExceptions.length === 0 && <p className="hint">Bez uložených výjimek.</p>}</div></section>
+    {exception && <WorkerExceptionEditor item={exception} workers={workerOptions} options={options} onCancel={() => setException(null)} onSave={saveException} />}
+    {selectedWorker.linkedProfileId ? <><WorkerContractsPanel workerId={selectedWorker.linkedProfileId} contracts={contracts.filter((item) => item.workerId === selectedWorker.linkedProfileId)} onSave={onSaveContract} /><section className="panel worker-detail-section"><p className="eyebrow">PLÁNOVÁNÍ DOCHÁZKY</p><h3>Pracovní tempo</h3><PlannedShiftsSetting settings={attendanceSettings} onSave={onSaveAttendanceSettings} /></section></> : <section className="panel"><p className="hint">Smlouvu a docházkové tempo lze nastavit po propojení s uživatelem aplikace. Pracovní plán funguje i bez účtu.</p></section>}
+    <details className="advanced-settings"><summary>Pokročilé / záložní nastavení</summary><p className="hint">A/B/C je pouze záložní pořadí 4. patra pro období bez osobní týdenní odpovědnosti.</p><FourthFloorRotationEditor data={data} workers={workerOptions} canManage={canManage} onSave={onSaveRotation} /></details>
+  </div>;
+
+  return <div className="work-assignment-screen"><section className="panel planning-worker-panel"><div className="section-heading"><span><p className="eyebrow">LIDÉ A PRÁCE</p><h2>Koho chcete upravit?</h2></span>{canManage && data.planningWorkers && <button onClick={() => setEditingWorker({ id: "", name: "", linkedProfileId: null, active: true })}>+ Přidat pracovníka</button>}</div><p className="hint">Pracovník v rozpisu nemusí mít účet. Po otevření osoby nastavíte její pracovní dny, povinnosti, výjimky a případně smlouvu.</p><div className="planning-worker-list person-cards">{planningWorkers.map((worker) => { const duties = (data.weeklyResponsibilities ?? []).filter((item) => item.active && item.workerId === worker.id && item.validFrom <= today && (!item.validTo || item.validTo >= today)).map((item) => weeklyResponsibilityLabels[item.responsibilityKey]); const periods = data.assignments.filter((item) => item.workerId === worker.id && item.active); return <button key={worker.id} onClick={() => setSelectedWorkerId(worker.id)}><span><b>{worker.name}{worker.active ? "" : " · Neaktivní"}</b><small>{worker.linkedProfileId ? "Účet propojen" : "Bez účtu"} · {periods.length} {periods.length === 1 ? "pracovní období" : "pracovní období"}</small>{duties.length > 0 && <small>{duties.join(" · ")}</small>}</span><strong>Otevřít ›</strong></button>; })}</div></section>{editingWorker && <PlanningWorkerEditor item={editingWorker} profiles={profiles} onCancel={() => setEditingWorker(null)} onSave={async (value) => { await onSaveWorker(value); setEditingWorker(null); }} />}<details className="advanced-settings global-employment-settings"><summary>Společné nastavení výkazů</summary><section className="panel"><DppLimitSetting value={appSettings.dppAnnualLimitHours} editable={canManage && appSettings.available} available={appSettings.available} onSave={onSaveDppLimit} /><DpcSettings value={appSettings.dpcWeeklyHoursReference} weeks={appSettings.dpcReferencePeriodWeeks} threshold={appSettings.dpcMonthlyInsuranceThreshold} editable={canManage && appSettings.compensationAvailable} onSave={onSaveDpcSettings} /></section></details></div>;
+}
+
 function MoreScreen({
   profile,
   pendingCount,
@@ -3391,11 +3447,6 @@ function MoreScreen({
   onOpenCleaningDays,
   onOpenAssignments,
   onOpenManual,
-  workplaces,
-  appSettings,
-  onSaveWorkplace,
-  onSaveDppLimit,
-  onSaveDpcSettings,
 }: {
   profile: Profile;
   pendingCount: number;
@@ -3405,11 +3456,6 @@ function MoreScreen({
   onOpenCleaningDays: () => void;
   onOpenAssignments: () => void;
   onOpenManual: () => void;
-  workplaces: Workplace[];
-  appSettings: AppSettings;
-  onSaveWorkplace: (workplace: Workplace) => Promise<void>;
-  onSaveDppLimit: (value: number) => Promise<void>;
-  onSaveDpcSettings: (weeklyHours: number, referenceWeeks: number, monthlyThreshold: number) => Promise<void>;
 }) {
   const admin = canManageOperations(profile);
   return (
@@ -3420,48 +3466,16 @@ function MoreScreen({
           <span>Otevřít správu uživatelů</span>
         </button>
       )}
-      <section className="panel manual-menu-link">
-        <button onClick={onOpenManual}><span><b>Manuál úklidu</b><small>Návody a praktické informace školy</small></span><i>›</i></button>
-      </section>
       {admin && (
-        <section className="panel admin-menu">
-          <p className="eyebrow">SPRÁVA APLIKACE</p>
-          <button onClick={onOpenPlan}><span><b>Plán úklidu</b><small>Patra, místnosti a činnosti</small></span><i>›</i></button>
-          <button onClick={onOpenRooms}><span><b>Místnosti</b><small>Struktura školy a aktivní místnosti</small></span><i>›</i></button>
-          <button onClick={onOpenCleaningDays}><span><b>Úklidové dny</b><small>Mimořádné úklidy a přesuny</small></span><i>›</i></button>
-          <button onClick={onOpenAssignments}><span><b>Pracovní rozdělení</b><small>Pracovníci, oblasti, dny a výjimky</small></span><i>›</i></button>
-          {profile.is_owner && (
-            <button onClick={() => void onOpenUsers()}>
-              <span><b>Uživatelé</b><small>Role a čekající účty</small></span>
-              <i>{pendingCount > 0 ? pendingCount : "›"}</i>
-            </button>
-          )}
-        </section>
+        <>
+          <section className="panel admin-menu"><p className="eyebrow">LIDÉ A PRÁCE</p><button onClick={onOpenAssignments}><span><b>Pracovníci a jejich plán</b><small>Období, pracovní dny, výjimky, povinnosti a smlouvy</small></span><i>›</i></button></section>
+          <section className="panel admin-menu"><p className="eyebrow">PLÁN ÚKLIDU</p><button onClick={onOpenPlan}><span><b>Úkoly a frekvence</b><small>Co se uklízí a jak často</small></span><i>›</i></button><button onClick={onOpenCleaningDays}><span><b>Mimořádné a přesunuté dny</b><small>Změny běžného kalendáře úklidu</small></span><i>›</i></button></section>
+          <section className="panel admin-menu"><p className="eyebrow">PROSTORY</p><button onClick={onOpenRooms}><span><b>Pracoviště, patra a místnosti</b><small>Fyzická struktura školy a školky</small></span><i>›</i></button></section>
+        </>
       )}
-      <section className="panel">
-        <p className="eyebrow">NASTAVENÍ</p>
-        <h2>Pracoviště</h2>
-        <WorkplaceSettings
-          workplaces={admin ? workplaces : workplaces.filter((item) => item.active)}
-          canManage={admin}
-          onSave={onSaveWorkplace}
-        />
-        <h2>Docházka</h2>
-        <DppLimitSetting
-          value={appSettings.dppAnnualLimitHours}
-          editable={admin && appSettings.available}
-          available={appSettings.available}
-          onSave={onSaveDppLimit}
-        />
-        <DpcSettings
-          value={appSettings.dpcWeeklyHoursReference}
-          weeks={appSettings.dpcReferencePeriodWeeks}
-          threshold={appSettings.dpcMonthlyInsuranceThreshold}
-          editable={admin && appSettings.compensationAvailable}
-          onSave={onSaveDpcSettings}
-        />
-        <p className="hint">Přihlášen: {profile.full_name} · {roleLabel(accessRole(profile))}</p>
-      </section>
+      <section className="panel admin-menu"><p className="eyebrow">MANUÁL</p><button onClick={onOpenManual}><span><b>Manuál úklidu</b><small>Návody, praktické informace a provozní připomínky</small></span><i>›</i></button></section>
+      {profile.is_owner && <section className="panel admin-menu"><p className="eyebrow">ÚČTY A PŘÍSTUPY</p><button onClick={() => void onOpenUsers()}><span><b>Uživatelé aplikace</b><small>Schválení přihlášení a přístupové role</small></span><i>{pendingCount > 0 ? pendingCount : "›"}</i></button></section>}
+      <p className="hint more-account-note">Přihlášen: {profile.full_name} · {roleLabel(accessRole(profile))}</p>
     </div>
   );
 }

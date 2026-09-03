@@ -29,8 +29,9 @@ const migration30 = readFileSync(new URL('../supabase/migrations/20260831003000_
 const settingsDiagnostics = readFileSync(new URL('../supabase/diagnostics/verify_02300_02400_state.sql', import.meta.url), 'utf8')
 const attendanceRepair = readFileSync(new URL('../supabase/diagnostics/repair_attendance_d05aac53.sql', import.meta.url), 'utf8')
 
-test('produktové UI neobsahuje A/B ani work-part ovládání', () => {
-  assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|a\/b|work.?part|rotation_anchor|rotation_interval/i)
+test('produktové UI neobnovuje A/B work-part plán a záložní rotaci skrývá v pokročilém nastavení', () => {
+  assert.doesNotMatch(`${app}\n${types}`, /část\s+[ab]|work.?part|rotation_anchor|rotation_interval/i)
+  assert.match(app, /Pokročilé \/ záložní nastavení/)
 })
 
 test('editor nenabízí dezinfekci a repository ji obranně skryje', () => {
@@ -427,7 +428,7 @@ test('Manuál je databázově řízený, soft-delete a chráněný rolemi', () =
   assert.match(migration20, /revoke delete on public\.manual_entries from authenticated/i)
   assert.doesNotMatch(migration20, /delete\s+from\s+public\.manual_entries|truncate\s+public\.manual_entries/i)
   assert.match(repository, /from\('manual_entries'\)[\s\S]*missingRelation/)
-  for (const action of ['Spravovat', '+ Návod', '+ Praktická informace', '+ Připomínka po příchodu']) assert.match(app, new RegExp(action.replace('+', '\\+')))
+  for (const action of ['Upravit obsah', '+ Návod', '+ Praktická informace', '+ Připomínka po příchodu']) assert.match(app, new RegExp(action.replace('+', '\\+')))
 })
 
 test('jeden návod se mapuje na více úkolů přes activity category', () => {
