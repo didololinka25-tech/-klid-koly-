@@ -3876,6 +3876,46 @@ function printWeekRange(days: CalendarDaySummary[]) {
   return `${format.format(start)} – ${format.format(end)}`;
 }
 
+function CalendarFloorEffortNotes() {
+  return <section className="calendar-print-explanations">
+    <h2>Vysvětlivky k náročnosti pater</h2>
+    <p className="calendar-print-explanations-intro">Orientační popis rozsahu práce. Nemění plán ani rozdělení pracovníků.</p>
+    <article>
+      <h3>1. patro – nejnáročnější</h3>
+      <p><b>Proč:</b> Největší směs prostorů, povrchů a způsobů úklidu.</p>
+      <p><b>Obsahuje:</b> Vstup, šatnu / chodbu, kuchyň, jídelnu, úklidovou a společenskou místnost, WC a Řadírnu.</p>
+      <p>Koberce, běžné podlahy, kuchyňské a jídelní plochy, stoly, dřezy, koše i specifickou pěnovou podlahu Řadírny.</p>
+      <strong>Nejvíce různých činností a typů povrchů.</strong>
+    </article>
+    <article>
+      <h3>2. patro – středně náročné až náročné</h3>
+      <p><b>Proč:</b> Mnoho samostatných místností a opakujících se ploch.</p>
+      <p><b>Obsahuje:</b> WC, školní zázemí se čtyřmi místnostmi, čtyři učebny, další místnost s gauči, částí koberce, umyvadlem a košem a chodbu.</p>
+      <p>Ve školním zázemí jsou stoly, počítače, dřez a koš; v učebnách stoly, židle, umyvadla a koše.</p>
+      <strong>Méně různorodé než 1. patro, ale časově náročné kvůli množství místností a vybavení.</strong>
+    </article>
+    <article>
+      <h3>3. patro – relativně nejjednodušší z hlavních pater</h3>
+      <p><b>Proč:</b> Méně samostatných místností, klasických učeben, stolů a židlí než ve 2. patře.</p>
+      <p><b>Obsahuje:</b> Ateliér, WC, WC / sprchu, úklidovou místnost, místnost s nářadím, Pohybovku a chodbu.</p>
+      <p>Není lehké – Ateliér, sprcha a Pohybovka vyžadují specifický úklid.</p>
+      <strong>Méně místností a nábytku, ale několik specifických prostorů.</strong>
+    </article>
+    <article>
+      <h3>4. patro – samostatný týdenní úkol</h3>
+      <p><b>Proč:</b> Malý rozsah není potřeba řešit jako hlavní patro při každém úklidu.</p>
+      <p><b>Obsahuje:</b> Mediační místnost a chodbu. V místnosti je koberec, sedačka / křesla, skříňka a okno.</p>
+      <strong>Malý prostor vhodný jako samostatný týdenní úkol.</strong>
+    </article>
+    <article>
+      <h3>Schodiště – samostatný týdenní úkol</h3>
+      <p><b>Proč:</b> Prochází celou budovou a nepatří k jednomu konkrétnímu patru.</p>
+      <p><b>Obsahuje:</b> Schody a zábradlí. Okna na schodišti patří do samostatného periodického mytí oken, ne do týdenního úklidu schodů.</p>
+      <strong>Samostatný úsek budovy napříč všemi patry.</strong>
+    </article>
+  </section>;
+}
+
 function CalendarPrintPlan({ mode, days, month, monthLabel }: { mode: CalendarPrintMode; days: CalendarDaySummary[]; month: string; monthLabel: string }) {
   if (mode === "month") return <section className="calendar-print-root calendar-print-month" aria-hidden="true">
     <header><p>PLÁN ÚKLIDU</p><h1>{monthLabel}</h1></header>
@@ -3916,6 +3956,7 @@ function CalendarPrintPlan({ mode, days, month, monthLabel }: { mode: CalendarPr
         </div>
       </article>;
     }) : <p className="calendar-print-empty">V tomto týdnu není naplánovaný úklid.</p>}</div>
+    <CalendarFloorEffortNotes />
   </section>;
 }
 

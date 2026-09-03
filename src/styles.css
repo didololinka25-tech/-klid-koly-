@@ -1704,6 +1704,13 @@ nav .active {
   .calendar-print-day li small { color: #333; font-size: 7.5pt; }
   .calendar-print-day section > p,
   .calendar-print-empty { margin: 0; color: #444; font-size: 8.5pt; }
+  .calendar-print-explanations { margin-top: 7mm; border-top: 2px solid #000; }
+  .calendar-print-explanations > h2 { margin: 0; padding: 4mm 0 1mm; font-size: 14pt; break-after: avoid; page-break-after: avoid; }
+  .calendar-print-explanations-intro { margin: 0 0 2mm; font-size: 8pt; break-after: avoid; page-break-after: avoid; }
+  .calendar-print-explanations > article { padding: 2.2mm 0; border-top: 1px solid #888; break-inside: avoid; page-break-inside: avoid; }
+  .calendar-print-explanations > article h3 { margin: 0 0 1mm; font-size: 9.5pt; text-transform: uppercase; }
+  .calendar-print-explanations > article p { margin: .7mm 0; font-size: 8pt; line-height: 1.25; }
+  .calendar-print-explanations > article strong { display: block; margin-top: 1mm; font-size: 8pt; }
   .calendar-print-month { page: calendar-month-plan; }
   .calendar-print-month header { margin-bottom: 3mm; }
   .calendar-print-weekdays,

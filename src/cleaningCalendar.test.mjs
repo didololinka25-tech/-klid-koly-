@@ -470,3 +470,17 @@ test('tisk používá browser print a samostatné A4 portrait/landscape layouty 
   assert.match(css, /@media print[\s\S]*body \* \{ visibility: hidden !important/)
   assert.match(css, /\.calendar-print-day \{[^}]*break-inside: avoid/)
 })
+
+test('vysvětlivky náročnosti jsou pouze v týdenním tisku a bezpečně se zalamují na A4', () => {
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
+  const printComponent = app.slice(app.indexOf('function CalendarPrintPlan'), app.indexOf('function CleaningCalendar'))
+  const monthBranch = printComponent.slice(0, printComponent.indexOf('const workDays'))
+  const weekBranch = printComponent.slice(printComponent.indexOf('const workDays'))
+  assert.doesNotMatch(monthBranch, /CalendarFloorEffortNotes/)
+  assert.match(weekBranch, /<CalendarFloorEffortNotes \/>/)
+  for (const title of ['1. patro – nejnáročnější', '2. patro – středně náročné až náročné', '3. patro – relativně nejjednodušší z hlavních pater', '4. patro – samostatný týdenní úkol', 'Schodiště – samostatný týdenní úkol']) assert.match(app, new RegExp(title))
+  assert.match(app, /Okna na schodišti patří do samostatného periodického mytí oken/)
+  assert.match(css, /\.calendar-print-explanations > article \{[^}]*break-inside: avoid[^}]*page-break-inside: avoid/)
+  assert.match(css, /@page calendar-week-plan \{ size: A4 portrait/)
+})
