@@ -63,6 +63,18 @@ export function monthGridDates(month: string) {
   })
 }
 
+export function dateRangeChunks(from: string, to: string, maximumDays = 7) {
+  if (maximumDays < 1 || from > to) return []
+  const chunks: Array<{ from: string; to: string }> = []
+  let cursor = from
+  while (cursor <= to) {
+    const chunkTo = addDays(cursor, maximumDays - 1)
+    chunks.push({ from: cursor, to: chunkTo < to ? chunkTo : to })
+    cursor = addDays(chunkTo, 1)
+  }
+  return chunks
+}
+
 function daysBetween(start: string, end: string) {
   const a = dateParts(start); const b = dateParts(end)
   return Math.round((Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day)) / 86400000)

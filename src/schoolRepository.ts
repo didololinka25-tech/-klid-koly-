@@ -3,6 +3,7 @@ import type { Attendance, Task } from './types'
 import { supabase } from './supabase'
 import {
   isTaskDueForCleaningDay,
+  dateRangeChunks,
   resolveCleaningDay,
   type CleaningDayContext,
   type CleaningDayException,
@@ -301,11 +302,20 @@ export const schoolRepository = {
     return { dateKey: date, tasks, bulkActions, cleaningDay, cleaningDaysAvailable: !exceptionResult.error }
   },
   dynamicSchoolPlan: async (from: string, to: string): Promise<Map<string, Map<string, DynamicSchoolPlanItem>> | null> => {
-    const result = await client().rpc('get_dynamic_school_cleaning_plan', { target_from: from, target_to: to })
-    if (missingFunction(result.error)) return null
-    if (result.error) throw result.error
+    // PostgREST commonly caps one RPC response at 1,000 rows. A six-week
+    // calendar can exceed that limit and silently lose later floors/extras.
+    // Weekly chunks stay well below the cap while preserving one interval load
+    // from the component and the server planner remains the only source of truth.
+    const results = await Promise.all(dateRangeChunks(from, to).map((chunk) =>
+      client().rpc('get_dynamic_school_cleaning_plan', { target_from: chunk.from, target_to: chunk.to })))
+    if (results.some((result) => missingFunction(result.error))) return null
+    const failed = results.find((result) => result.error)
+    if (failed?.error) throw failed.error
+    if (results.some((result) => (result.data?.length ?? 0) >= 1000)) {
+      throw new Error('Dynamický plán překročil bezpečný limit načtení. Zkuste načtení zopakovat.')
+    }
     const byDate = new Map<string, Map<string, DynamicSchoolPlanItem>>()
-    for (const row of result.data ?? []) {
+    for (const row of results.flatMap((result) => result.data ?? [])) {
       const date = String((row as any).scheduled_date)
       const items = byDate.get(date) ?? new Map<string, DynamicSchoolPlanItem>()
       const item: DynamicSchoolPlanItem = {

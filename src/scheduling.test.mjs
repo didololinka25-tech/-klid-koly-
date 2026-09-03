@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   isTaskDueForCleaningDay,
   isTaskDueOnDate,
+  dateRangeChunks,
   monthGridDates,
   resolveCleaningDay,
 } from './scheduling.ts'
@@ -10,6 +11,15 @@ import {
 const everyCleaningDay = { frequency: 'cleaning_day', schedule_days: [1, 3, 5] }
 const fridayOnly = { frequency: 'weekly', schedule_days: [5] }
 const monthly = { frequency: 'monthly', schedule_days: [], monthly_day: 1 }
+
+test('šestitýdenní kalendář dělí planner na úplné týdenní intervaly bez mezer', () => {
+  const chunks = dateRangeChunks('2026-08-31', '2026-10-11')
+  assert.equal(chunks.length, 6)
+  assert.deepEqual(chunks[0], { from: '2026-08-31', to: '2026-09-06' })
+  assert.deepEqual(chunks[1], { from: '2026-09-07', to: '2026-09-13' })
+  assert.deepEqual(chunks.at(-1), { from: '2026-10-05', to: '2026-10-11' })
+  assert.deepEqual(dateRangeChunks('2026-09-07', '2026-09-07'), [{ from: '2026-09-07', to: '2026-09-07' }])
+})
 
 test('standardní pondělí, středa a pátek jsou splatné', () => {
   assert.equal(isTaskDueOnDate(everyCleaningDay, '2026-08-24'), true)

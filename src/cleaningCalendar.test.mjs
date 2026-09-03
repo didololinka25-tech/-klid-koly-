@@ -375,7 +375,7 @@ test('Plán dne umí skutečně prázdný den bez vymyšlené práce', () => {
   assert.deepEqual(summary.extraCategories, [])
 })
 
-test('Plán dne je read-only mobilní dialog a Kalendář načítá planner jednou pro interval', () => {
+test('Plán dne je read-only a měsíční interval načte po bezpečných blocích bez PostgREST ořezu', () => {
   const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const repository = readFileSync(new URL('./schoolRepository.ts', import.meta.url), 'utf8')
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
@@ -384,7 +384,9 @@ test('Plán dne je read-only mobilní dialog a Kalendář načítá planner jedn
   assert.match(detail, /aria-modal="true"/)
   assert.match(detail, /HLAVNÍ PLÁN DNE/)
   assert.doesNotMatch(detail, /Příchod|Odchod|Hotovo|completion/i)
-  assert.match(repository, /get_dynamic_school_cleaning_plan[\s\S]*target_from: from, target_to: to/)
+  assert.match(repository, /get_dynamic_school_cleaning_plan[\s\S]*target_from: chunk\.from, target_to: chunk\.to/)
+  assert.match(repository, /dateRangeChunks\(from, to\)[\s\S]*Promise\.all/)
+  assert.match(repository, /result\.data\?\.length[\s\S]*>= 1000/)
   assert.match(repository, /planReason:[\s\S]*assignedWorkerId:[\s\S]*plannerPriority:/)
   assert.match(css, /\.calendar-day-sheet \{[^}]*width: min\(100%, 620px\)[^}]*overflow-x: hidden/)
   assert.match(css, /\.calendar-day-close \{[^}]*width: 44px[^}]*height: 44px/)
