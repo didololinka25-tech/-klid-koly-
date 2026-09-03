@@ -806,6 +806,8 @@ h2 {
 .arrival-reminders > p span { grid-row: 1 / 3; font-size: 15px; }
 .arrival-reminders > p b { font-size: 12px; }
 .arrival-reminders small { color: #5d7771; font-size: 10px; }
+.today-school-manual-link { width: 100%; min-height: 44px; margin: 0 0 8px; padding: 7px 10px; display: flex; align-items: center; gap: 7px; border: 1px solid #dbe8e5; border-radius: 9px; background: #f7fbfa; color: #315b54; font-size: 12px; font-weight: 850; text-align: left; }
+.today-school-manual-link span { font-size: 15px; }
 
 .manual-menu-link { padding: 0; overflow: hidden; }
 .manual-menu-link > button { width: 100%; border: 0; background: #fff; color: #164f46; padding: 15px; display: flex; justify-content: space-between; text-align: left; }
@@ -816,6 +818,21 @@ h2 {
 .manual-search { display: grid; gap: 5px; margin-bottom: 18px; font-weight: 900; color: #234f47; }
 .manual-featured { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; margin-bottom: 18px; }
 .manual-featured button { min-height: 64px; display: grid; grid-template-columns: 28px 1fr; align-items: center; text-align: left; gap: 8px; }
+.manual-featured .school-manual-card { grid-template-columns: 28px minmax(0, 1fr) auto; }
+.school-manual-card-full { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; align-items: start; }
+.school-manual-card-full > span { font-size: 24px; }
+.school-manual-card-full h2, .school-manual-card-full p { margin: 0 0 8px; }
+.school-manual-card-full p { color: #627b75; }
+.school-manual-card-full button { min-height: 44px; }
+.school-manual-lightbox { position: fixed; inset: 0; z-index: 300; padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); display: grid; place-items: center; overflow: hidden; background: rgb(9 24 21 / .9); }
+.school-manual-viewer { position: relative; width: min(760px, 100%); max-width: 100%; max-height: 100%; padding: 48px 8px 8px; display: grid; place-items: center; overflow: auto; border-radius: 14px; background: #172b27; }
+.school-manual-close { position: absolute; z-index: 2; top: 4px; right: 4px; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: #fff; color: #173d38; font-size: 28px; line-height: 1; }
+.school-manual-image-button { width: 100%; max-width: 100%; padding: 0; border: 0; display: block; background: transparent; cursor: zoom-in; }
+.school-manual-image-button img { display: block; width: 100%; max-width: 100%; height: auto; margin: auto; object-fit: contain; }
+.school-manual-lightbox.expanded { padding: 0; }
+.school-manual-lightbox.expanded .school-manual-viewer { width: 100%; height: 100%; max-width: none; max-height: none; padding: 52px 8px 8px; border-radius: 0; }
+.school-manual-lightbox.expanded .school-manual-image-button { cursor: zoom-out; }
+.school-manual-lightbox.expanded .school-manual-image-button img { width: auto; max-width: 100%; max-height: calc(100dvh - 60px); }
 .practical-info article { display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid #e5efec; }
 .practical-info article > i { width: 18px; height: 18px; border: 1px solid #9caeaa; border-radius: 50%; }
 .practical-info article span, .manual-block-small { display: grid; gap: 2px; }

@@ -105,6 +105,7 @@ const activityTypes: Record<
 const weekdays = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
 const fourthFloorSlotIndices = [0, 1, 2] as const;
 const finalCheckPrefix = "v2026|school|common|final-";
+const schoolOpeningManualAsset = "/manuals/manual-open-close-school.jpg";
 const isFinalCheckTask = (task: Task) => Boolean(task.planKey?.startsWith(finalCheckPrefix) || task.planKey?.startsWith("admin|final|"));
 const todayLabel = (dateKey: string) => new Intl.DateTimeFormat("cs-CZ", {
   weekday: "long",
@@ -152,6 +153,7 @@ export default function App() {
   const [attendanceBuildingId, setAttendanceBuildingId] = useState("");
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [schoolOpeningManualOpen, setSchoolOpeningManualOpen] = useState(false);
   const [attendanceRefresh, setAttendanceRefresh] = useState(0);
   const [attendanceSaving, setAttendanceSaving] = useState(false);
   const attendanceWriteLock = useRef(false);
@@ -1016,6 +1018,9 @@ export default function App() {
               onBuildingChange={setAttendanceBuildingId}
             />
           )}
+          <button className="today-school-manual-link" onClick={() => setSchoolOpeningManualOpen(true)}>
+            <span aria-hidden="true">🔑</span> Otevření / zavření školy
+          </button>
           {displayCleaningDay.kind !== "standard" && <section className={`today-day-context ${displayCleaningDay.kind}`}>
             <b>{cleaningDayHeading(displayCleaningDay, visible.length)}</b>
             <small>{cleaningDayDescription(displayCleaningDay)}</small>
@@ -1142,6 +1147,7 @@ export default function App() {
             setEditing({ id: "", planKey: `admin|final|${crypto.randomUUID()}`, room: "Společný úkol", floor: "Společné úkoly", floorSort: -1, building: "Škola", title: "", activityType: "other", frequency: "denně", assignedTo: "Úklidový tým", done: false, canComplete: false, dueToday: false, sortOrder: order, scheduleDays: [1, 3, 5], active: true });
             setManagementView("plan"); setSection("Plán úklidu");
           }}
+          onOpenSchoolManual={() => setSchoolOpeningManualOpen(true)}
         />
       )}
       {section === "Více" && (
@@ -1166,6 +1172,7 @@ export default function App() {
           onSave={saveOwnProfile}
         />
       )}
+      {schoolOpeningManualOpen && <SchoolOpeningManualModal onClose={() => setSchoolOpeningManualOpen(false)} />}
       <nav>
         {navigation.map((item) => (
           <button
@@ -3188,10 +3195,11 @@ function newManualEntry(entryType: ManualEntry["entryType"]): ManualEntry {
   return { id: "", entryType, title: "", category: entryType === "arrival" ? "Po příchodu" : "Ostatní", body: "", supplies: "", steps: "", warnings: "", schoolNote: "", markerColor: "", activityTypes: [], featured: false, active: true, sortOrder: 100 };
 }
 
-function ManualScreen({ data, tasks, onSave, onSetActive, onEditDeparture, onAddDeparture }: {
+function ManualScreen({ data, tasks, onSave, onSetActive, onEditDeparture, onAddDeparture, onOpenSchoolManual }: {
   data: ManualData; tasks: Task[];
   onSave: (entry: ManualEntry) => Promise<void>; onSetActive: (id: string, active: boolean) => Promise<void>;
   onEditDeparture: (task: Task) => void; onAddDeparture: () => void;
+  onOpenSchoolManual: () => void;
 }) {
   const [search, setSearch] = useState("");
   const [manage, setManage] = useState(false);
@@ -3203,7 +3211,7 @@ function ManualScreen({ data, tasks, onSave, onSetActive, onEditDeparture, onAdd
   const practical = active.filter((entry) => entry.entryType === "practical" && (!normalized || `${entry.title} ${entry.category} ${entry.body}`.toLocaleLowerCase("cs").includes(normalized)));
   const arrival = active.filter((entry) => entry.entryType === "arrival");
   const departures = tasks.filter(isFinalCheckTask).sort((a, b) => a.sortOrder - b.sortOrder);
-  if (!data.available) return <section className="panel"><h2>Manuál úklidu</h2><p>Manuál bude dostupný po aplikaci migrace 02000.</p></section>;
+  if (!data.available) return <div className="manual-screen"><SchoolOpeningManualCard onOpen={onOpenSchoolManual} /><section className="panel"><h2>Manuál úklidu</h2><p>Další návody se zatím nepodařilo načíst.</p></section></div>;
   if (editingEntry) return <ManualEntryEditor entry={editingEntry} onCancel={() => setEditingEntry(null)} onSave={async (entry) => { await onSave(entry); setEditingEntry(null); }} />;
   if (manage && data.editable) return <div className="manual-admin">
     <div className="manual-page-heading"><span><p className="eyebrow">SPRÁVA OBSAHU</p><h2>Manuál úklidu</h2></span><button onClick={() => setManage(false)}>Hotovo</button></div>
@@ -3215,7 +3223,7 @@ function ManualScreen({ data, tasks, onSave, onSetActive, onEditDeparture, onAdd
   return <div className="manual-screen">
     <div className="manual-page-heading"><span><p className="eyebrow">RYCHLÁ POMOC PŘI PRÁCI</p><h2>Manuál úklidu</h2></span>{data.editable && <button onClick={() => setManage(true)}>Upravit obsah</button>}</div>
     <label className="manual-search">Hledat v Manuálu<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Např. okna nebo WC" /></label>
-    {!normalized && guides.some((entry) => entry.featured) && <section><h3>Rychlé návody</h3><div className="manual-featured">{guides.filter((entry) => entry.featured).map((entry) => <button key={entry.id} onClick={() => setOpenGuide(entry)}>{activityTypes[entry.activityTypes[0] as ActivityType]?.icon ?? "ⓘ"}<b>{entry.title}</b></button>)}</div></section>}
+    {!normalized && <section><h3>Rychlé návody</h3><div className="manual-featured"><SchoolOpeningManualCard onOpen={onOpenSchoolManual} compact />{guides.filter((entry) => entry.featured).map((entry) => <button key={entry.id} onClick={() => setOpenGuide(entry)}>{activityTypes[entry.activityTypes[0] as ActivityType]?.icon ?? "ⓘ"}<b>{entry.title}</b></button>)}</div></section>}
     {practical.length > 0 && <section className="panel practical-info"><p className="eyebrow">PRAKTICKÉ INFORMACE ŠKOLY</p>{practical.sort((a, b) => a.sortOrder - b.sortOrder).map((entry) => <article key={entry.id}><i style={{ backgroundColor: entry.markerColor || "#dcebe7" }} /><span><b>{entry.title}</b><small>{entry.body}</small></span></article>)}</section>}
     {!normalized && arrival.length > 0 && <section className="panel"><p className="eyebrow">PO PŘÍCHODU</p>{arrival.sort((a, b) => a.sortOrder - b.sortOrder).map((entry) => <p key={entry.id}><b>{entry.title}</b>{entry.body && <small className="manual-block-small">{entry.body}</small>}</p>)}</section>}
     {categories.map((category) => <section className="manual-category" key={category}><h3>{category}</h3><div>{guides.filter((entry) => entry.category === category).sort((a, b) => a.sortOrder - b.sortOrder).map((entry) => <button key={entry.id} onClick={() => setOpenGuide(entry)}><span>{activityTypes[entry.activityTypes[0] as ActivityType]?.icon ?? "ⓘ"}</span><b>{entry.title}</b><i>›</i></button>)}</div></section>)}
@@ -3386,6 +3394,28 @@ function LegacyWorkAssignmentOverview({ data, profiles, options, canManage, onSa
     <label className="worker-plan-month">Zobrazený měsíc<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label>
     <section className="worker-assignment-list">{current.map((item) => <button className={item.active ? "" : "inactive"} key={item.id} disabled={!canManage} onClick={() => { setException(null); setAssignment(item); }}><span><b>{item.workerName}{!item.active ? " · Neaktivní" : ""}</b><small>{item.buildingName} · {item.areaLabel}</small><em>{weekdays.filter((_, index) => item.weekdays.includes(index + 1)).join(" · ")}</em><i>{formatDate(item.validFrom)}{item.validTo ? ` – ${formatDate(item.validTo)}` : " – bez konce"}</i></span>{canManage && <strong>Upravit ›</strong>}</button>)}{data.available && current.length === 0 && <p className="hint">Pro tento měsíc zatím není uložené žádné pracovní rozdělení.</p>}</section>
     {data.exceptions.length > 0 && <details className="worker-exception-list"><summary>Výjimky rozvrhu</summary>{data.exceptions.slice().sort((a, b) => b.date.localeCompare(a.date)).map((item) => <button key={item.id} disabled={!canManage} onClick={() => setException(item)}><b>{formatDate(item.date)} · {item.workerName}</b><span>{item.planned ? `Výjimečně: ${item.buildingName ?? "pracoviště"} · ${item.areaLabel ?? "oblast"}` : "Nepřijde"}</span>{item.note && <small>{item.note}</small>}</button>)}</details>}
+  </div>;
+}
+
+function SchoolOpeningManualCard({ onOpen, compact = false }: { onOpen: () => void; compact?: boolean }) {
+  if (compact) return <button className="school-manual-card compact" onClick={onOpen}><span aria-hidden="true">🔑</span><b>Otevření a zavření školy</b><i>›</i></button>;
+  return <section className="panel school-manual-card-full"><span aria-hidden="true">🔑</span><div><h2>Otevření a zavření školy</h2><p>Jak vstoupit do školy, odkódovat Jablotron a bezpečně školu při odchodu zakódovat.</p><button onClick={onOpen}>Zobrazit návod</button></div></section>;
+}
+
+function SchoolOpeningManualModal({ onClose }: { onClose: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+  return <div className={`school-manual-lightbox${expanded ? " expanded" : ""}`} role="dialog" aria-modal="true" aria-label="Otevření a zavření školy" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="school-manual-viewer">
+      <button className="school-manual-close" onClick={onClose} aria-label="Zavřít návod">×</button>
+      <button className="school-manual-image-button" onClick={() => setExpanded((value) => !value)} aria-label={expanded ? "Zmenšit návod" : "Zvětšit návod na celou obrazovku"}>
+        <img src={schoolOpeningManualAsset} alt="Otevření a zavření školy – rychlý manuál" />
+      </button>
+    </div>
   </div>;
 }
 
