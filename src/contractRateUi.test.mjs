@@ -11,7 +11,7 @@ test('editor existujícího i nového vztahu zobrazuje mobilní hodinovou sazbu'
   assert.match(app, /min="0\.01"[\s\S]*step="0\.01"/)
   assert.match(app, /value=\{editing\.hourlyRate \?\? ""\}/)
   assert.match(app, /<span>Kč\/h<\/span>/)
-  assert.match(app, /hourlyRate: undefined[\s\S]*Přidat období/)
+  assert.match(app, /hourlyRate: undefined[\s\S]*>\+ Přidat</)
 })
 
 test('repository načte sazbu, odešle ji do RPC a po uložení proběhne refetch', () => {

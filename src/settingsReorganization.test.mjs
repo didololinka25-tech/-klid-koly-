@@ -15,18 +15,46 @@ test('Více je rozdělené do pěti lidských skupin bez vloženého databázov�
   assert.match(app, /section === "Prostory"/)
 })
 
-test('Lidé a práce otevírá detail osoby se všemi provozními vrstvami', () => {
-  for (const label of ['PRACOVNÍ PLÁN', 'TÝDENNÍ POVINNOSTI', 'VÝJIMKY', 'PRACOVNÍ VZTAHY', 'PLÁNOVÁNÍ DOCHÁZKY']) assert.match(app, new RegExp(label))
+test('Lidé a práce skládá detail osoby do tří výchozím stavem zavřených sekcí', () => {
+  for (const label of ['Rozvrh práce', 'Týdenní povinnosti', 'Smlouva a docházka']) assert.match(app, new RegExp(`<b>${label}</b>`))
+  assert.equal((app.match(/className="worker-detail-accordion"/g) ?? []).length, 3)
+  assert.doesNotMatch(app, /<details className="worker-detail-accordion" open/)
+  assert.match(app, /Aktivní pracovní období/)
+  assert.match(app, /Jednorázové změny směn/)
+  assert.match(app, /Bez výjimek/)
   assert.match(app, /Pokročilé \/ záložní nastavení/)
   assert.match(app, /A\/B\/C je pouze záložní pořadí/)
   assert.match(app, /Plánovaný počet směn týdně/)
   assert.match(app, /Pracovníci v rozpisu jsou samostatně v části Lidé a práce a účet mít nemusí/)
 })
 
-test('mobilní detail osoby drží plnou šířku a 44px ovládání', () => {
+test('hlavička shrnuje pracoviště, směny, povinnosti a stav účtu bez velké karty', () => {
+  assert.match(app, /activeWorkplaces\.join\(" \+ "\)/)
+  assert.match(app, /shiftCountLabel/)
+  assert.match(app, /worker-duty-chips/)
+  assert.match(app, /Účet propojen/)
+  assert.match(app, /Bez účtu/)
+  assert.match(app, /worker-profile-edit/)
+})
+
+test('týdenní povinnost ukáže datum až po volbě změny a smluvní historie zůstává sbalená', () => {
+  assert.match(app, /editingKey === key/)
+  assert.match(app, /editing && canManage && <div className="duty-edit-controls"/)
+  assert.match(app, /<summary>ⓘ Jak se povinnosti plánují<\/summary>/)
+  assert.match(app, /<details className="contract-history"><summary>Zobrazit historii/)
+})
+
+test('mobilní detail osoby drží plnou šířku, 44px ovládání a bez vodorovného přetečení', () => {
   assert.match(css, /@media \(max-width: 430px\)[\s\S]*\.person-detail-header/)
   assert.match(css, /\.person-duty-list button \{[^}]*min-height: 44px/)
   assert.match(css, /\.person-exception-list > button \{[^}]*width: 100%/)
+  assert.match(css, /\.worker-detail-accordion \{[^}]*min-width: 0[^}]*overflow: hidden/)
+  assert.match(css, /\.worker-detail-accordion > summary \{[^}]*min-height: 54px[^}]*minmax\(0, 1fr\)/)
+})
+
+test('obrazový manuál se při přechodu na pracovní admin obrazovky zavře', () => {
+  assert.match(app, /onOpenAssignments=\{\(\) => \{ setSchoolOpeningManualOpen\(false\); setSection\("Lidé a práce"\); \}\}/)
+  assert.match(app, /onClick=\{\(\) => \{ setSchoolOpeningManualOpen\(false\); setSection\(item\); \}\}/)
 })
 
 // Stejná priorita jako v 03700: nejdřív dosud nepoužitá směna osoby,
