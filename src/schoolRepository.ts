@@ -65,7 +65,7 @@ export type CleaningDayRecord = CleaningDayException & {
 export type CleaningDayDraft = {
   id?: string
   buildingId: string
-  kind: 'extraordinary' | 'rescheduled'
+  kind: 'extraordinary' | 'rescheduled' | 'cancelled_standard'
   executionDate: string
   sourceDate?: string | null
   title: string
@@ -500,6 +500,17 @@ export const schoolRepository = {
     }
   },
   saveCleaningDay: async (draft: CleaningDayDraft) => {
+    if (draft.kind === 'cancelled_standard') {
+      const { error } = await client().rpc('save_cancelled_standard_cleaning_day', {
+        target_exception_id: draft.id ?? null,
+        target_building_id: draft.buildingId,
+        target_execution_date: draft.executionDate,
+        target_note: draft.note?.trim() || null,
+      })
+      if (missingFunction(error)) throw new Error('Zrušení běžného úklidu ještě není v databázi aktivní. Spusťte migraci 03900.')
+      if (error) throw error
+      return
+    }
     if (draft.kind === 'extraordinary' && draft.selectedTaskIds) {
       const { error } = await client().rpc('save_extraordinary_cleaning_day', {
         target_exception_id: draft.id ?? null,
@@ -674,6 +685,11 @@ export const schoolRepository = {
       if (legacy.error) throw legacy.error
       return
     }
+    if (error) throw error
+  },
+  restoreCancelledStandardCleaningDay: async (id: string) => {
+    const { error } = await client().rpc('restore_cancelled_standard_cleaning_day', { target_exception_id: id })
+    if (missingFunction(error)) throw new Error('Obnovení běžného úklidu ještě není v databázi aktivní. Spusťte migraci 03900.')
     if (error) throw error
   },
   saveWeeklyResponsibility: async (responsibilityKey: WeeklyWorkerResponsibility['responsibilityKey'], workerId: string | null, effectiveFrom: string) => {

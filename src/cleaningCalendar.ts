@@ -5,11 +5,23 @@ import { cleaningRotationForOccurrence, workersForDate, type PlannedWorker, type
 import { buildTodayWorkBlocks, type TodayBuildingWork } from './todayWorkBlocks.ts'
 
 export type CalendarExceptionInput = {
-  kind: 'extraordinary' | 'rescheduled'
+  id?: string
+  buildingId?: string
+  buildingName?: string
+  kind: 'extraordinary' | 'rescheduled' | 'cancelled_standard'
   executionDate: string
   sourceDate?: string | null
   title: string
+  note?: string | null
   status: 'active' | 'cancelled'
+}
+
+export type CancelledWorkplace = {
+  id: string
+  buildingId: string
+  buildingName: string
+  title: string
+  note?: string | null
 }
 
 export type CalendarExtraCategory = {
@@ -50,6 +62,7 @@ export type CalendarDaySummary = {
   rescheduled: string[]
   movedTo?: string
   cancelledExceptions: string[]
+  cancelledWorkplaces: CancelledWorkplace[]
   context: CleaningDayContext
   tasks: Task[]
   workBlocks: TodayBuildingWork[]
@@ -168,7 +181,13 @@ export function buildCalendarDaySummary({
     }))
   }
   const activeExecuting = exceptions.filter((item) => item.status === 'active' && item.executionDate === date)
-  const cancelled = exceptions.filter((item) => item.status === 'cancelled' && item.executionDate === date)
+  const cancelledWorkplaces = exceptions.filter((item) => item.status === 'active' && item.kind === 'cancelled_standard' && item.executionDate === date).map((item) => ({
+    id: item.id ?? '',
+    buildingId: item.buildingId ?? '',
+    buildingName: item.buildingName ?? 'Pracoviště',
+    title: item.title,
+    note: item.note,
+  }))
   return {
     date,
     isToday: date === today,
@@ -186,7 +205,8 @@ export function buildCalendarDaySummary({
     extraordinary: activeExecuting.filter((item) => item.kind === 'extraordinary').map((item) => item.title),
     rescheduled: activeExecuting.filter((item) => item.kind === 'rescheduled').map((item) => item.title),
     movedTo: context.kind === 'moved_away' ? context.movedTo : undefined,
-    cancelledExceptions: cancelled.map((item) => item.title),
+    cancelledExceptions: cancelledWorkplaces.map((item) => `${item.buildingName} · ÚKLID ZRUŠEN`),
+    cancelledWorkplaces,
     context,
     tasks: cleaningTasks,
     workBlocks: buildTodayWorkBlocks(cleaningTasks),
@@ -287,6 +307,7 @@ export type CalendarPrintDay = {
   hasFourthFloor: boolean
   fourthFloorWorker: string | null
   workplaces: string[]
+  cancellations: Array<{ building: string; note?: string | null }>
   hasWork: boolean
 }
 
@@ -315,7 +336,8 @@ export function calendarPrintDay(summary: CalendarDaySummary): CalendarPrintDay 
     hasFourthFloor: view.hasFourthFloor,
     fourthFloorWorker: view.fourthFloorWorker,
     workplaces,
-    hasWork: summary.tasks.length > 0 || summary.workers.length > 0 || summary.extraordinary.length > 0 || summary.rescheduled.length > 0,
+    cancellations: summary.cancelledWorkplaces.map((item) => ({ building: item.buildingName, note: item.note })),
+    hasWork: summary.tasks.length > 0 || summary.workers.length > 0 || summary.extraordinary.length > 0 || summary.rescheduled.length > 0 || summary.cancelledWorkplaces.length > 0,
   }
 }
 

@@ -124,10 +124,15 @@ test('mimořádný, přidaný, přesunutý a zrušený den používají skutečn
   const moved = { id: 'move', buildingId: 'school', kind: 'rescheduled', sourceDate: '2026-09-04', executionDate: '2026-09-05', title: 'Přesun kvůli akci', status: 'active' }
   assert.equal(resolveCleaningDay('2026-09-04', [moved]).kind, 'moved_away')
   assert.equal(resolveCleaningDay('2026-09-05', [moved]).kind, 'rescheduled')
-  const cancelled = { ...extra, status: 'cancelled' }
-  assert.equal(due([standard], '2026-09-05', [cancelled]).length, 0)
-  const cancelledSummary = buildCalendarDaySummary({ date: '2026-09-05', today: '2026-09-01', tasks: [], context: resolveCleaningDay('2026-09-05', [cancelled]), exceptions: [cancelled] })
-  assert.deepEqual(cancelledSummary.cancelledExceptions, ['Generální úklid'])
+  const cancelled = { id: 'cancel-school', buildingId: 'school', buildingName: 'Škola', kind: 'cancelled_standard', executionDate: '2026-09-04', title: 'Úklid zrušen', note: 'Škola se dnes neuklízí.', status: 'active' }
+  assert.equal(due([standard], '2026-09-04', [cancelled]).length, 0)
+  const cancelledSummary = buildCalendarDaySummary({ date: '2026-09-04', today: '2026-09-01', tasks: [], context: resolveCleaningDay('2026-09-04', [cancelled]), exceptions: [cancelled] })
+  assert.deepEqual(cancelledSummary.cancelledExceptions, ['Škola · ÚKLID ZRUŠEN'])
+  assert.deepEqual(cancelledSummary.cancelledWorkplaces, [{ id: 'cancel-school', buildingId: 'school', buildingName: 'Škola', title: 'Úklid zrušen', note: 'Škola se dnes neuklízí.' }])
+
+  const restored = { ...cancelled, status: 'cancelled' }
+  assert.equal(due([standard], '2026-09-04', [restored]).length, 1)
+  assert.equal(resolveCleaningDay('2026-09-04', [restored]).kind, 'standard')
 })
 
 test('Kalendář a Dnes dostanou pro stejné datum stejný resolved task universe', () => {

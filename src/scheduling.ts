@@ -12,7 +12,7 @@ export type SchedulableTask = {
 
 export type CleaningDayException = {
   id: string
-  kind: 'extraordinary' | 'rescheduled'
+  kind: 'extraordinary' | 'rescheduled' | 'cancelled_standard'
   executionDate: string
   sourceDate?: string | null
   title: string
@@ -22,7 +22,7 @@ export type CleaningDayException = {
 }
 
 export type CleaningDayContext = {
-  kind: 'standard' | 'extraordinary' | 'rescheduled' | 'moved_away' | 'preview'
+  kind: 'standard' | 'extraordinary' | 'rescheduled' | 'moved_away' | 'cancelled' | 'preview'
   executionDate: string
   scheduleDate: string
   title: string
@@ -173,6 +173,16 @@ export function resolveCleaningDay(
 
   const active = exceptions.filter((item) => item.status === 'active')
   const executing = active.find((item) => item.executionDate === executionDate)
+  if (executing?.kind === 'cancelled_standard') {
+    return {
+      kind: 'cancelled',
+      executionDate,
+      scheduleDate: executionDate,
+      title: executing.title,
+      note: executing.note,
+      exceptionId: executing.id,
+    }
+  }
   if (executing?.kind === 'rescheduled' && executing.sourceDate) {
     return {
       kind: 'rescheduled',
@@ -222,7 +232,7 @@ export function isTaskDueForCleaningDay(
   task: SchedulableTask,
   context: CleaningDayContext,
 ) {
-  if (context.kind === 'moved_away') return false
+  if (context.kind === 'moved_away' || context.kind === 'cancelled') return false
   if (context.kind === 'preview') return isTaskDueOnDate(task, context.scheduleDate, true)
   if (context.kind === 'extraordinary') {
     const baseline = normalizeFrequency(task.frequency) === 'cleaning_day'
