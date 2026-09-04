@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { buildCalendarDaySummary, calendarDayCellScope, calendarDayPlanView, calendarPrintDay, calendarWorkerOptions, circledFloor, filterCalendarTasks, projectDynamicSchoolPlan } from './cleaningCalendar.ts'
+import { buildCalendarDaySummary, calendarDayCellScope, calendarDayPlanView, calendarPrintDay, calendarPrintWorkplaces, calendarWorkerOptions, circledFloor, filterCalendarExceptions, filterCalendarPlanning, filterCalendarTasks, projectDynamicSchoolPlan } from './cleaningCalendar.ts'
 import { isTaskDueForCleaningDay, monthGridDates, resolveCleaningDay } from './scheduling.ts'
 
 const task = (overrides = {}) => ({
@@ -99,6 +99,100 @@ test('Škola a Školka mohou být ve stejném dni a filtr pouze skryje druhé pr
   assert.deepEqual(summary.workBlocks.map((item) => [item.building, item.blocks[0]?.title]), [['Škola', 'Podlahy – 1. patro'], ['Školka', 'Úklid – Prostory']])
   assert.deepEqual(filterCalendarTasks(tasks, 'kg').map((item) => item.id), ['kg'])
   assert.equal(filterCalendarTasks(tasks, 'all').length, 2)
+})
+
+test('tiskový workplace scope izoluje tasky, pracovníky, extras a zrušení Školy a Školky', () => {
+  const date = '2026-09-04'
+  const tasks = [
+    task({ id: 'school-floor' }),
+    task({ id: 'school-stairs', roomId: 'stairs', room: 'Schodiště', floor: 'Schodiště', activityType: 'vacuum', plannerReason: 'weekly-special' }),
+    task({ id: 'school-fourth', roomId: 'fourth', room: 'Mediační místnost', floor: '4. patro', activityType: 'vacuum', plannerReason: 'weekly-special' }),
+    task({ id: 'kg-floor', buildingId: 'kg', building: 'Školka', roomId: 'kg-room', room: 'Kuchyň', floor: 'Prostory' }),
+  ]
+  const planning = {
+    available: true,
+    planningWorkers: [], rotationDefinitions: [], rotationSlots: [], weeklyResponsibilities: [],
+    assignments: [
+      { id: 'school-assignment', workerId: 'school-worker', workerName: 'Martina', buildingId: 'school', buildingName: 'Škola', areaLabel: '1. patro', weekdays: [5], validFrom: '2026-09-01', validTo: null, active: true },
+      { id: 'kg-assignment', workerId: 'kg-worker', workerName: 'Olga', buildingId: 'kg', buildingName: 'Školka', areaLabel: 'Prostory', weekdays: [5], validFrom: '2026-09-01', validTo: null, active: true },
+    ],
+    exceptions: [],
+  }
+  const exceptions = [
+    { id: 'cancel-school', buildingId: 'school', buildingName: 'Škola', kind: 'cancelled_standard', executionDate: date, title: 'Zrušeno', note: 'Akce školy', status: 'active' },
+    { id: 'cancel-kg', buildingId: 'kg', buildingName: 'Školka', kind: 'cancelled_standard', executionDate: date, title: 'Zrušeno', note: 'Akce školky', status: 'active' },
+  ]
+  const scopedSummary = (buildingId) => {
+    const scopedTasks = filterCalendarTasks(tasks, buildingId)
+    return buildCalendarDaySummary({
+      date, today: date, tasks: scopedTasks, context: resolveCleaningDay(date, filterCalendarExceptions(exceptions, buildingId)),
+      exceptions: filterCalendarExceptions(exceptions, buildingId), planning: filterCalendarPlanning(planning, buildingId),
+    })
+  }
+
+  const school = calendarPrintDay(scopedSummary('school'))
+  assert.deepEqual(school.workers.map((item) => item.name), ['Martina'])
+  assert.deepEqual(school.workplaces, ['Škola'])
+  assert.equal(school.hasFourthFloor, true)
+  assert.ok(school.extras.some((item) => item.key === 'staircase'))
+  assert.deepEqual(school.cancellations.map((item) => item.building), ['Škola'])
+  assert.doesNotMatch(JSON.stringify(school), /Školka|Olga|Akce školky/)
+
+  const kindergarten = calendarPrintDay(scopedSummary('kg'))
+  assert.deepEqual(kindergarten.workers.map((item) => item.name), ['Olga'])
+  assert.deepEqual(kindergarten.workplaces, ['Školka'])
+  assert.equal(kindergarten.hasFourthFloor, false)
+  assert.equal(kindergarten.extras.some((item) => item.key === 'staircase'), false)
+  assert.deepEqual(kindergarten.cancellations.map((item) => item.building), ['Školka'])
+  assert.doesNotMatch(JSON.stringify(kindergarten), /Škola|Martina|4\. patro|Schodiště|Akce školy/)
+
+  const all = calendarPrintWorkplaces(calendarPrintDay(scopedSummary('all')))
+  assert.deepEqual(all.map((item) => item.name), ['Škola', 'Školka'])
+  assert.deepEqual(all.find((item) => item.name === 'Škola').workers.map((item) => item.name), ['Martina'])
+  assert.deepEqual(all.find((item) => item.name === 'Školka').workers.map((item) => item.name), ['Olga'])
+})
+
+test('mimořádnost a přesun se v tisku drží svého pracoviště', () => {
+  const date = '2026-09-05'
+  const exceptions = [
+    { buildingId: 'school', buildingName: 'Škola', kind: 'extraordinary', executionDate: date, title: 'Generální úklid školy', status: 'active' },
+    { buildingId: 'kg', buildingName: 'Školka', kind: 'rescheduled', executionDate: date, sourceDate: '2026-09-01', title: 'Přesun školky', status: 'active' },
+  ]
+  const make = (buildingId) => calendarPrintDay(buildCalendarDaySummary({
+    date, today: date, tasks: [], context: resolveCleaningDay(date, filterCalendarExceptions(exceptions, buildingId)),
+    exceptions: filterCalendarExceptions(exceptions, buildingId),
+  }))
+  assert.deepEqual(make('school').notices, [{ building: 'Škola', kind: 'extraordinary', title: 'Generální úklid školy' }])
+  assert.deepEqual(make('kg').notices, [{ building: 'Školka', kind: 'rescheduled', title: 'Přesun školky' }])
+  assert.doesNotMatch(JSON.stringify(make('school')), /Školka|Přesun školky/)
+})
+
+test('worker filtr a workplace filtr se skládají bez návratu dat jiného pracoviště', () => {
+  const planning = {
+    available: true, planningWorkers: [], rotationDefinitions: [], rotationSlots: [],
+    assignments: [
+      { id: 'school', workerId: 'martina', workerName: 'Martina', buildingId: 'school', buildingName: 'Škola', areaLabel: 'Škola', weekdays: [5], validFrom: '2026-09-01', validTo: null, active: true },
+      { id: 'kg', workerId: 'olga', workerName: 'Olga', buildingId: 'kg', buildingName: 'Školka', areaLabel: 'Školka', weekdays: [5], validFrom: '2026-09-01', validTo: null, active: true },
+    ], exceptions: [],
+  }
+  const summary = buildCalendarDaySummary({
+    date: '2026-09-04', today: '2026-09-04',
+    tasks: filterCalendarTasks([task(), task({ buildingId: 'kg', building: 'Školka', floor: 'Prostory' })], 'kg'),
+    context: resolveCleaningDay('2026-09-04', []), planning: filterCalendarPlanning(planning, 'kg'), workerId: 'martina',
+  })
+  assert.equal(calendarPrintDay(summary).hasWork, false)
+  assert.deepEqual(summary.workers, [])
+  assert.deepEqual(summary.tasks, [])
+})
+
+test('print UI předvolí aktivní pracoviště, při Vše výchozí Školu a použije společný scope model', () => {
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  assert.match(app, /defaultPrintBuildingFilter = buildingFilter !== "all" \? buildingFilter : schoolBuildingId \?\? "all"/)
+  assert.match(app, /setPrintBuildingFilter\(defaultPrintBuildingFilter\)/)
+  assert.match(app, /Všechna pracoviště/)
+  assert.match(app, /buildScopedDays\(effectivePrintBuildingFilter\)/)
+  assert.match(app, /calendarPrintWorkplaces\(view\)/)
+  assert.match(app, /Pro zvolený rozsah není naplánovaný úklid\./)
 })
 
 test('weekly, monthly a period_months práce se agregují po kategorii pouze jednou', () => {
@@ -430,7 +524,7 @@ test('buňka, detail dne a tisk sdílejí jeden view model pro 4F a schodiště'
   assert.equal(scope.hasStairs, view.extras.some((item) => item.key === 'staircase'))
   assert.deepEqual(print.extras, view.extras)
   const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  assert.match(app, /const printCalendarDays = calendarDays;/)
+  assert.match(app, /const printCalendarDays = useMemo\(\(\) => buildScopedDays\(effectivePrintBuildingFilter\)/)
 })
 
 test('Plán dne umí skutečně prázdný den bez vymyšlené práce', () => {
@@ -529,7 +623,8 @@ test('tisk používá browser print a samostatné A4 portrait/landscape layouty 
   assert.match(app, /Tento týden/)
   assert.match(app, /Tento měsíc/)
   assert.match(app, /window\.print\(\)/)
-  assert.match(app, /const printCalendarDays = calendarDays;/)
+  assert.match(app, /buildScopedDays\(effectivePrintBuildingFilter\)/)
+  assert.match(app, /Pracoviště: \{workplaceLabel\}/)
   assert.match(css, /@page calendar-week-plan \{ size: A4 portrait/)
   assert.match(css, /@page calendar-month-plan \{ size: A4 landscape/)
   assert.match(css, /@media print[\s\S]*body \* \{ visibility: hidden !important/)

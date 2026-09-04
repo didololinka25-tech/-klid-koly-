@@ -49,7 +49,7 @@ import {
   isExtraCleaningTask,
   isStandardCleaningTask,
 } from "./cleaningPresentation";
-import { buildCalendarDaySummary, calendarDayCellScope, calendarDayPlanView, calendarPrintDay, calendarWorkerOptions, filterCalendarTasks, projectDynamicSchoolPlan, type CalendarDaySummary } from "./cleaningCalendar";
+import { buildCalendarDaySummary, calendarDayCellScope, calendarDayPlanView, calendarPrintDay, calendarPrintWorkplaces, calendarWorkerOptions, filterCalendarExceptions, filterCalendarPlanning, filterCalendarTasks, projectDynamicSchoolPlan, type CalendarDaySummary, type CalendarPrintWorkplace } from "./cleaningCalendar";
 import { assignmentOverlapsMonth, scheduleExceptionsConflict, weekMonday, weeklyResponsibilitiesForDate, workAssignmentsConflict, workerPlanningSaveError, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
 import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
 import { appHistoryState, refreshAreasForRealtimeTable, shouldReloadIdentity, shouldRunResumeRefresh, withAppHistoryState } from "./appStability";
@@ -4157,9 +4157,12 @@ function CalendarFloorEffortNotes() {
   </section>;
 }
 
-function WeeklyWorkerResponsibilitiesPrint({ days, planning }: { days: CalendarDaySummary[]; planning: WorkerPlanningData }) {
+function WeeklyWorkerResponsibilitiesPrint({ days, planning, workplace, workerId }: { days: CalendarDaySummary[]; planning: WorkerPlanningData; workplace: string; workerId: string }) {
+  if (workplace === "Školka") return null;
   if (!days.length) return null;
-  const responsibilities = weeklyResponsibilitiesForDate(days[0].date, planning);
+  const visibleWorkerIds = new Set(days.flatMap((day) => day.workers.filter((item) => item.buildingName === "Škola").map((item) => item.workerId)));
+  const responsibilities = weeklyResponsibilitiesForDate(days[0].date, planning)
+    .filter((item) => workerId === "all" ? visibleWorkerIds.has(item.workerId!) : item.workerId === workerId);
   const grouped = new Map<string, { name: string; labels: string[] }>();
   responsibilities.forEach((item) => {
     if (!item.workerId) return;
@@ -4177,25 +4180,44 @@ function WeeklyWorkerResponsibilitiesPrint({ days, planning }: { days: CalendarD
   </section>;
 }
 
-function CalendarPrintPlan({ mode, days, month, monthLabel, planning }: { mode: CalendarPrintMode; days: CalendarDaySummary[]; month: string; monthLabel: string; planning: WorkerPlanningData }) {
+function printWorkplaceScope(workplace: CalendarPrintWorkplace) {
+  const blockTitles = workplace.mainPlan.map((item) => item.title);
+  return {
+    floors: [...new Set(blockTitles.flatMap((title) => {
+      const match = title.match(/Podlahy\s*[–-]\s*([1-4])\. patro/i);
+      return match && match[1] !== "4" ? [`${match[1]}F`] : [];
+    }))],
+    hasWc: blockTitles.some((title) => /^WC\s*[–-]/i.test(title)),
+    hasStairs: workplace.extras.some((item) => item.key === "staircase"),
+    extraCount: workplace.extras.filter((item) => item.key !== "staircase" && item.key !== "floors").length,
+  };
+}
+
+function CalendarPrintPlan({ mode, days, month, monthLabel, planning, workplaceLabel, workerLabel, workerId }: { mode: CalendarPrintMode; days: CalendarDaySummary[]; month: string; monthLabel: string; planning: WorkerPlanningData; workplaceLabel: string; workerLabel: string | null; workerId: string }) {
+  const hasPrintedSchool = days.some((summary) => calendarPrintWorkplaces(calendarPrintDay(summary)).some((item) => item.name === "Škola"));
   if (mode === "month") return <section className="calendar-print-root calendar-print-month" aria-hidden="true">
-    <header><p>PLÁN ÚKLIDU</p><h1>{monthLabel}</h1></header>
+    <header><p>PLÁN ÚKLIDU</p><h1>{monthLabel}</h1><small>Pracoviště: {workplaceLabel}{workerLabel ? ` · Pracovník: ${workerLabel}` : ""}</small></header>
+    {!days.some((summary) => summary.date.slice(0, 7) === month && calendarPrintDay(summary).hasWork) && <p className="calendar-print-empty">Pro zvolený rozsah není naplánovaný úklid.</p>}
     <div className="calendar-print-weekdays">{weekdays.map((day) => <b key={day}>{day}</b>)}</div>
     <div className="calendar-print-month-grid">{days.map((summary) => {
       const outside = summary.date.slice(0, 7) !== month;
-      const scope = calendarDayCellScope(summary);
       const view = calendarPrintDay(summary);
+      const workplaces = calendarPrintWorkplaces(view);
       return <article key={summary.date} className={outside ? "outside" : view.hasWork ? "has-work" : ""}>
-        {!outside && <><strong>{Number(summary.date.slice(8, 10))}</strong>{view.hasWork && <div>
-          {view.workplaces.length > 0 && <b>{view.workplaces.map((name) => name === "Školka" ? "MŠ" : name === "Škola" ? "Š" : name).join(" + ")}</b>}
-          {scope.workers > 0 && <span>{scope.workers} {scope.workers === 1 ? "člověk" : scope.workers < 5 ? "lidé" : "lidí"}</span>}
-          {scope.floors.length > 0 && <span>{scope.floors.join(" + ")}</span>}
-          {scope.hasWc && <span>WC</span>}
-          {scope.hasStairs && <span>SCH</span>}
-          {scope.hasFourthFloor && <span>4F</span>}
-          {scope.extraCount > 0 && <span>+{scope.extraCount} extra</span>}
-          {view.cancellations.map((item) => <span className="print-cancelled" key={item.building}>{item.building} · ZRUŠENO</span>)}
-        </div>}</>}
+        {!outside && <><strong>{Number(summary.date.slice(8, 10))}</strong>{workplaces.map((workplace) => {
+          const scope = printWorkplaceScope(workplace);
+          return <div className="calendar-print-month-workplace" key={workplace.name}>
+            <b>{workplace.name === "Školka" ? "MŠ" : workplace.name === "Škola" ? "Š" : workplace.name}</b>
+            {workplace.workers.length > 0 && <span>{workplace.workers.length} {workplace.workers.length === 1 ? "člověk" : workplace.workers.length < 5 ? "lidé" : "lidí"}</span>}
+            {scope.floors.length > 0 && <span>{scope.floors.join(" + ")}</span>}
+            {scope.hasWc && <span>WC</span>}
+            {scope.hasStairs && <span>SCH</span>}
+            {workplace.hasFourthFloor && <span>4F</span>}
+            {scope.extraCount > 0 && <span>+{scope.extraCount} extra</span>}
+            {workplace.notices.map((item) => <span key={`${item.kind}|${item.title}`}>{item.kind === "extraordinary" ? "MIMOŘÁDNĚ" : item.kind === "rescheduled" ? "PŘESUNUTO" : "PŘESUNUTÝ TERMÍN"}</span>)}
+            {workplace.cancellations.map((item) => <span className="print-cancelled" key={item.building}>ZRUŠENO</span>)}
+          </div>;
+        })}</>}
       </article>;
     })}</div>
     <footer>Š = Škola · MŠ = Školka · SCH = Schodiště · 4F = 4. patro · extra = periodická nebo přenesená práce</footer>
@@ -4203,24 +4225,28 @@ function CalendarPrintPlan({ mode, days, month, monthLabel, planning }: { mode: 
 
   const workDays = days.filter((summary) => calendarPrintDay(summary).hasWork);
   return <section className="calendar-print-root calendar-print-week" aria-hidden="true">
-    <header><p>PLÁN ÚKLIDU</p><h1>{printWeekRange(days)}</h1></header>
+    <header><p>PLÁN ÚKLIDU</p><h1>{printWeekRange(days)}</h1><small>Pracoviště: {workplaceLabel}{workerLabel ? ` · Pracovník: ${workerLabel}` : ""}</small></header>
     <div className="calendar-print-days">{workDays.length > 0 ? workDays.map((summary) => {
       const view = calendarPrintDay(summary);
       return <article className="calendar-print-day" key={summary.date}>
         <h2>{printDayTitle(summary.date)}</h2>
-        {view.cancellations.map((item) => <p className="calendar-print-cancelled" key={item.building}><b>{item.building} – úklid zrušen</b>{item.note && <small>{item.note}</small>}</p>)}
-        <div className="calendar-print-day-columns">
-          <section><h3>Kdo pracuje</h3>{view.workers.length ? <ul>{view.workers.map((worker) => <li key={`${worker.id}|${worker.building}`}><b>{worker.name}</b><small>{worker.building}{worker.area ? ` · ${worker.area}` : ""}</small></li>)}</ul> : <p>Bez naplánovaného pracovníka</p>}</section>
-          <section><h3>Hlavní plán</h3>{view.mainPlan.length ? <ul>{view.mainPlan.map((item) => <li key={`${item.building}|${item.title}`}><b>{item.title}</b><small>{item.building}{item.queue ? " · otevřená fronta" : ""}</small></li>)}</ul> : <p>Bez běžného plánu</p>}</section>
-          <section><h3>Práce navíc</h3>{view.extras.length || view.hasFourthFloor ? <ul>
-            {view.hasFourthFloor && <li><b>4. patro – Mediační místnost + chodba</b><small>{view.fourthFloorWorker ? `Pracovník: ${view.fourthFloorWorker}` : "Bez přiřazeného pracovníka"}</small></li>}
-            {view.extras.map((extra) => <li key={extra.key}><b>{extra.label}{extra.overdue ? " — PŘENESENO" : ""}</b><small>{extra.scopes.join(" · ")}</small></li>)}
-          </ul> : <p>Nic navíc</p>}</section>
-        </div>
+        {calendarPrintWorkplaces(view).map((workplace) => <section className="calendar-print-workplace" key={workplace.name}>
+          <h3>{workplace.name}</h3>
+          {workplace.cancellations.map((item) => <p className="calendar-print-cancelled" key={item.building}><b>{item.building} – úklid zrušen</b>{item.note && <small>{item.note}</small>}</p>)}
+          {workplace.notices.map((item) => <p className="calendar-print-notice" key={`${item.kind}|${item.title}`}><b>{item.kind === "extraordinary" ? "Mimořádný úklid" : item.kind === "rescheduled" ? "Přesunutý úklid" : "Úklid přesunut"}</b><small>{item.title}</small></p>)}
+          <div className="calendar-print-day-columns">
+            <section><h4>Kdo pracuje</h4>{workplace.workers.length ? <ul>{workplace.workers.map((worker) => <li key={`${worker.id}|${worker.building}`}><b>{worker.name}</b><small>{worker.area || worker.building}</small></li>)}</ul> : <p>Bez naplánovaného pracovníka</p>}</section>
+            <section><h4>Hlavní plán</h4>{workplace.mainPlan.length ? <ul>{workplace.mainPlan.map((item) => <li key={`${item.building}|${item.title}`}><b>{item.title}</b><small>{item.queue ? "Otevřená fronta" : workplace.name}</small></li>)}</ul> : <p>Bez běžného plánu</p>}</section>
+            <section><h4>Práce navíc</h4>{workplace.extras.length || workplace.hasFourthFloor ? <ul>
+              {workplace.hasFourthFloor && <li><b>4. patro – Mediační místnost + chodba</b><small>{workplace.fourthFloorWorker ? `Pracovník: ${workplace.fourthFloorWorker}` : "Bez přiřazeného pracovníka"}</small></li>}
+              {workplace.extras.map((extra) => <li key={extra.key}><b>{extra.label}{extra.overdue ? " — PŘENESENO" : ""}</b><small>{extra.scopes.join(" · ")}</small></li>)}
+            </ul> : <p>Nic navíc</p>}</section>
+          </div>
+        </section>)}
       </article>;
-    }) : <p className="calendar-print-empty">V tomto týdnu není naplánovaný úklid.</p>}</div>
-    <WeeklyWorkerResponsibilitiesPrint days={days} planning={planning} />
-    <CalendarFloorEffortNotes />
+    }) : <p className="calendar-print-empty">Pro zvolený rozsah není naplánovaný úklid.</p>}</div>
+    <WeeklyWorkerResponsibilitiesPrint days={days} planning={planning} workplace={workplaceLabel} workerId={workerId} />
+    {hasPrintedSchool && <CalendarFloorEffortNotes />}
   </section>;
 }
 
@@ -4262,25 +4288,19 @@ function CleaningCalendar({
   const closeDayDetail = useHistoryLayer(dayDetailOpen, "calendar-day-detail", () => setDayDetailOpen(false));
   const closeCleaningDayEditor = useHistoryLayer(Boolean(editing), "cleaning-day-editor", () => setEditing(null));
   const [printMode, setPrintMode] = useState<CalendarPrintMode | null>(null);
+  const [printBuildingFilter, setPrintBuildingFilter] = useState<string | null>(null);
   const workerOptions = useMemo(() => {
     const values = new Map(calendarWorkerOptions(planning).map((worker) => [worker.id, worker.name]));
     availableWorkers.forEach((worker) => values.set(worker.id, worker.name));
     return [...values.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "cs"));
   }, [planning, availableWorkers]);
   const planTasks = useMemo(() => tasks.filter((task) => !isFinalCheckTask(task)), [tasks]);
-  const visibleRecords = useMemo(
-    () => buildingFilter === "all" ? records : records.filter((record) => record.buildingId === buildingFilter),
-    [records, buildingFilter],
-  );
+  const visibleRecords = useMemo(() => filterCalendarExceptions(records, buildingFilter), [records, buildingFilter]);
   const visibleExceptionRecords = useMemo(() => visibleRecords.map((record) => ({
     ...record,
     buildingName: buildings.find((building) => building.id === record.buildingId)?.name ?? "Pracoviště",
   })), [visibleRecords, buildings]);
-  const visiblePlanning = useMemo(() => buildingFilter === "all" ? planning : ({
-    ...planning,
-    assignments: planning.assignments.filter((item) => item.buildingId === buildingFilter),
-    exceptions: planning.exceptions.filter((item) => !item.planned || item.buildingId === buildingFilter),
-  }), [planning, buildingFilter]);
+  const visiblePlanning = useMemo(() => filterCalendarPlanning(planning, buildingFilter), [planning, buildingFilter]);
   const future = records.filter((item) => item.executionDate >= today).sort((a, b) => a.executionDate.localeCompare(b.executionDate));
   const gridDates = useMemo(() => monthGridDates(month), [month]);
   useEffect(() => {
@@ -4322,14 +4342,29 @@ function CleaningCalendar({
     date,
     tasks: plannerStatus === "ready" ? plannedTasksForDate(planTasks, records, date, serverPlanForCalendarDate(date, records, serverDynamicPlan)) : [],
   })), [gridDates, records, planTasks, serverDynamicPlan, plannerStatus]);
-  const calendarDays = useMemo(() => resolvedCalendarDays.map((item) => {
-    const visibleTasks = filterCalendarTasks(item.tasks, buildingFilter);
-    const context = calendarContextForDate(visibleTasks, visibleRecords, item.date);
-    return buildCalendarDaySummary({ date: item.date, today, tasks: visibleTasks, context, exceptions: visibleExceptionRecords, planning: visiblePlanning, workerId: workerFilter });
-  }), [resolvedCalendarDays, buildingFilter, visibleRecords, visibleExceptionRecords, visiblePlanning, workerFilter, today]);
-  // Tisk musí zachovat přesně tentýž filtrovaný planner view jako buňka a
-  // detail dne; nesmí si znovu skládat paralelní nevyfiltrovaný souhrn.
-  const printCalendarDays = calendarDays;
+  const buildScopedDays = useCallback((workplaceId: string) => {
+    const scopedRecords = filterCalendarExceptions(records, workplaceId);
+    const scopedExceptions = scopedRecords.map((record) => ({
+      ...record,
+      buildingName: buildings.find((building) => building.id === record.buildingId)?.name ?? "Pracoviště",
+    }));
+    const scopedPlanning = filterCalendarPlanning(planning, workplaceId);
+    return resolvedCalendarDays.map((item) => {
+      const scopedTasks = filterCalendarTasks(item.tasks, workplaceId);
+      const context = calendarContextForDate(scopedTasks, scopedRecords, item.date);
+      return buildCalendarDaySummary({ date: item.date, today, tasks: scopedTasks, context, exceptions: scopedExceptions, planning: scopedPlanning, workerId: workerFilter });
+    });
+  }, [records, buildings, planning, resolvedCalendarDays, today, workerFilter]);
+  const calendarDays = useMemo(() => buildScopedDays(buildingFilter), [buildScopedDays, buildingFilter]);
+  const schoolBuildingId = buildings.find((building) => building.name === "Škola")?.id ?? null;
+  const defaultPrintBuildingFilter = buildingFilter !== "all" ? buildingFilter : schoolBuildingId ?? "all";
+  const effectivePrintBuildingFilter = printBuildingFilter ?? defaultPrintBuildingFilter;
+  const printCalendarDays = useMemo(() => buildScopedDays(effectivePrintBuildingFilter), [buildScopedDays, effectivePrintBuildingFilter]);
+  const printPlanning = useMemo(() => filterCalendarPlanning(planning, effectivePrintBuildingFilter), [planning, effectivePrintBuildingFilter]);
+  const printWorkplaceLabel = effectivePrintBuildingFilter === "all"
+    ? "Všechna pracoviště"
+    : buildings.find((building) => building.id === effectivePrintBuildingFilter)?.name ?? "Pracoviště";
+  const printWorkerLabel = workerFilter === "all" ? null : workerOptions.find((worker) => worker.id === workerFilter)?.name ?? "Vybraný pracovník";
   const selected = calendarDays.find((item) => item.date === selectedDate)
     ?? (() => {
       const due = filterCalendarTasks(plannerStatus === "ready" ? plannedTasksForDate(planTasks, records, selectedDate, serverPlanForCalendarDate(selectedDate, records, serverDynamicPlan)) : [], buildingFilter);
@@ -4367,8 +4402,11 @@ function CleaningCalendar({
       {!planning.available && <div className="notice">Pracovní rozdělení se zobrazí po zkontrolování a aplikaci migrace 03100. Práce navíc zůstává dostupná.</div>}
       <div className="calendar-filter" role="group" aria-label="Filtrovat pracoviště"><button className={buildingFilter === "all" ? "active" : ""} onClick={() => setBuildingFilter("all")}>Vše</button>{buildings.map((building) => <button className={buildingFilter === building.id ? "active" : ""} key={building.id} onClick={() => setBuildingFilter(building.id)}>{building.name}</button>)}</div>
       <label className="calendar-worker-filter">Pracovník<select value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)}><option value="all">Všichni</option>{workerOptions.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></label>
-      <details className="calendar-print-menu">
+      <details className="calendar-print-menu" onToggle={(event) => {
+        if (event.currentTarget.open) setPrintBuildingFilter(defaultPrintBuildingFilter);
+      }}>
         <summary>Vytisknout plán</summary>
+        <label>Pracoviště<select value={effectivePrintBuildingFilter} onChange={(event) => setPrintBuildingFilter(event.target.value)}>{buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}<option value="all">Všechna pracoviště</option></select></label>
         <div><button disabled={plannerStatus !== "ready"} onClick={() => setPrintMode("week")}>Tento týden</button><button disabled={plannerStatus !== "ready"} onClick={() => setPrintMode("month")}>Tento měsíc</button></div>
         {plannerStatus !== "ready" && <small>Nejdřív je potřeba načíst dynamický plán.</small>}
       </details>
@@ -4420,7 +4458,7 @@ function CleaningCalendar({
         ))}
         {available && !future.length && <p className="hint">Nejsou naplánované žádné budoucí výjimky.</p>}
       </section>
-      {printMode && <CalendarPrintPlan mode={printMode} days={printMode === "week" ? printWeekDays : printCalendarDays} month={month} monthLabel={monthLabel} planning={planning} />}
+      {printMode && <CalendarPrintPlan mode={printMode} days={printMode === "week" ? printWeekDays : printCalendarDays} month={month} monthLabel={monthLabel} planning={printPlanning} workplaceLabel={printWorkplaceLabel} workerLabel={printWorkerLabel} workerId={workerFilter} />}
     </div>
   );
 }

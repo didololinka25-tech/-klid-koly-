@@ -63,6 +63,7 @@ export type CalendarDaySummary = {
   movedTo?: string
   cancelledExceptions: string[]
   cancelledWorkplaces: CancelledWorkplace[]
+  cleaningNotices: Array<{ building: string; kind: 'extraordinary' | 'rescheduled' | 'moved_away'; title: string }>
   context: CleaningDayContext
   tasks: Task[]
   workBlocks: TodayBuildingWork[]
@@ -180,8 +181,10 @@ export function buildCalendarDaySummary({
       scopes: [...new Set(items.filter((task) => extraCategory(task) === key).map((task) => `${task.building} · ${task.floor}${task.room && task.room !== 'Společné úkoly' ? ` · ${task.room}` : ''}`))],
     }))
   }
-  const activeExecuting = exceptions.filter((item) => item.status === 'active' && item.executionDate === date)
-  const cancelledWorkplaces = exceptions.filter((item) => item.status === 'active' && item.kind === 'cancelled_standard' && item.executionDate === date).map((item) => ({
+  const activeExecuting = workerId === 'all' || workers.length > 0
+    ? exceptions.filter((item) => item.status === 'active' && item.executionDate === date)
+    : []
+  const cancelledWorkplaces = activeExecuting.filter((item) => item.kind === 'cancelled_standard').map((item) => ({
     id: item.id ?? '',
     buildingId: item.buildingId ?? '',
     buildingName: item.buildingName ?? 'Pracoviště',
@@ -207,6 +210,14 @@ export function buildCalendarDaySummary({
     movedTo: context.kind === 'moved_away' ? context.movedTo : undefined,
     cancelledExceptions: cancelledWorkplaces.map((item) => `${item.buildingName} · ÚKLID ZRUŠEN`),
     cancelledWorkplaces,
+    cleaningNotices: [
+      ...activeExecuting.flatMap((item) => item.kind === 'extraordinary' || item.kind === 'rescheduled'
+        ? [{ building: item.buildingName ?? 'Pracoviště', kind: item.kind, title: item.title }]
+        : []),
+      ...(workerId === 'all' || workers.length > 0 ? exceptions.flatMap((item) => item.status === 'active' && item.kind === 'rescheduled' && item.sourceDate === date
+        ? [{ building: item.buildingName ?? 'Pracoviště', kind: 'moved_away' as const, title: `${item.title} · nový termín ${item.executionDate}` }]
+        : []) : []),
+    ],
     context,
     tasks: cleaningTasks,
     workBlocks: buildTodayWorkBlocks(cleaningTasks),
@@ -251,6 +262,28 @@ export function calendarWorkerOptions(planning: WorkerPlanningData) {
 
 export function filterCalendarTasks(tasks: Task[], buildingId: string) {
   return buildingId === 'all' ? tasks : tasks.filter((task) => task.buildingId === buildingId)
+}
+
+/**
+ * Stejný workplace scope jako u tasků musí dostat i rozvrh pracovníků.
+ * Nepřítomnost bez building_id ponecháváme jen lidem, kteří mají v daném
+ * scope pracovní období; jinak by mohla ovlivnit souhrn jiného pracoviště.
+ */
+export function filterCalendarPlanning(planning: WorkerPlanningData, buildingId: string): WorkerPlanningData {
+  if (buildingId === 'all') return planning
+  const assignments = planning.assignments.filter((item) => item.buildingId === buildingId)
+  const scopedWorkerIds = new Set(assignments.map((item) => item.workerId))
+  return {
+    ...planning,
+    assignments,
+    exceptions: planning.exceptions.filter((item) => item.planned
+      ? item.buildingId === buildingId
+      : scopedWorkerIds.has(item.workerId)),
+  }
+}
+
+export function filterCalendarExceptions<T extends { buildingId?: string }>(items: T[], buildingId: string) {
+  return buildingId === 'all' ? items : items.filter((item) => item.buildingId === buildingId)
 }
 
 /**
@@ -308,6 +341,7 @@ export type CalendarPrintDay = {
   fourthFloorWorker: string | null
   workplaces: string[]
   cancellations: Array<{ building: string; note?: string | null }>
+  notices: CalendarDaySummary['cleaningNotices']
   hasWork: boolean
 }
 
@@ -337,8 +371,55 @@ export function calendarPrintDay(summary: CalendarDaySummary): CalendarPrintDay 
     fourthFloorWorker: view.fourthFloorWorker,
     workplaces,
     cancellations: summary.cancelledWorkplaces.map((item) => ({ building: item.buildingName, note: item.note })),
-    hasWork: summary.tasks.length > 0 || summary.workers.length > 0 || summary.extraordinary.length > 0 || summary.rescheduled.length > 0 || summary.cancelledWorkplaces.length > 0,
+    notices: summary.cleaningNotices,
+    hasWork: summary.tasks.length > 0 || summary.workers.length > 0 || summary.cleaningNotices.length > 0 || summary.cancelledWorkplaces.length > 0,
   }
+}
+
+export type CalendarPrintWorkplace = {
+  name: string
+  workers: CalendarPrintDay['workers']
+  mainPlan: CalendarPrintDay['mainPlan']
+  extras: CalendarExtraCategory[]
+  cancellations: CalendarPrintDay['cancellations']
+  notices: CalendarPrintDay['notices']
+  hasFourthFloor: boolean
+  fourthFloorWorker: string | null
+  hasWork: boolean
+}
+
+/** Rozdělí společný tiskový den na čitelné, vzájemně izolované provozy. */
+export function calendarPrintWorkplaces(day: CalendarPrintDay): CalendarPrintWorkplace[] {
+  const names = [...new Set([
+    ...day.workplaces,
+    ...day.workers.map((item) => item.building),
+    ...day.mainPlan.map((item) => item.building),
+    ...day.cancellations.map((item) => item.building),
+    ...day.notices.map((item) => item.building),
+    ...day.extras.flatMap((item) => item.scopes.map((scope) => scope.split(' · ')[0])).filter(Boolean),
+  ])]
+  return names.map((name) => {
+    const workers = day.workers.filter((item) => item.building === name)
+    const mainPlan = day.mainPlan.filter((item) => item.building === name)
+    const extras = day.extras.flatMap((item) => {
+      const scopes = item.scopes.filter((scope) => scope === name || scope.startsWith(`${name} · `))
+      return scopes.length ? [{ ...item, scopes }] : []
+    })
+    const cancellations = day.cancellations.filter((item) => item.building === name)
+    const notices = day.notices.filter((item) => item.building === name)
+    const hasFourthFloor = name === 'Škola' && day.hasFourthFloor
+    return {
+      name,
+      workers,
+      mainPlan,
+      extras,
+      cancellations,
+      notices,
+      hasFourthFloor,
+      fourthFloorWorker: hasFourthFloor ? day.fourthFloorWorker : null,
+      hasWork: workers.length > 0 || mainPlan.length > 0 || extras.length > 0 || cancellations.length > 0 || notices.length > 0 || hasFourthFloor,
+    }
+  }).filter((item) => item.hasWork)
 }
 
 export function circledFloor(marker: string) {

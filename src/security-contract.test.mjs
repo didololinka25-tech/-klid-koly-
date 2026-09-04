@@ -507,7 +507,7 @@ test('pracoviště je lokální součást konkrétní akce, ne globální filtr'
   assert.match(app, /Pracoviště této směny/)
   assert.match(app, /Aktuální směna:/)
   assert.match(app, /PRACOVIŠTĚ/)
-  assert.match(app, /filterCalendarTasks\(item\.tasks, buildingFilter\)/)
+  assert.match(app, /filterCalendarTasks\(item\.tasks, workplaceId\)/)
   assert.match(app, /buildCalendarDaySummary/)
   assert.doesNotMatch(app, /selectedBuildingId|Zobrazené pracoviště/)
   assert.match(repository, /attendanceStartValues\(workerId, buildingId/)

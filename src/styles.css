@@ -1389,6 +1389,8 @@ h2 {
 .calendar-worker-filter select, .rotation-editor select, .rotation-editor input { min-height: 44px; width: 100%; box-sizing: border-box; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; padding: 8px 10px; color: #173d38; font: inherit; }
 .calendar-print-menu { border: 1px solid #d4e3df; border-radius: 11px; background: #fff; color: #165e56; }
 .calendar-print-menu > summary { min-height: 44px; padding: 9px 12px; display: flex; align-items: center; cursor: pointer; font-size: 12px; font-weight: 900; }
+.calendar-print-menu > label { padding: 0 10px 10px; display: grid; gap: 5px; color: #48645e; font-size: 12px; font-weight: 800; }
+.calendar-print-menu > label select { width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; color: #173f39; font: inherit; }
 .calendar-print-menu > div { padding: 0 10px 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .calendar-print-menu button { min-height: 44px; border: 1px solid #bcd4ce; border-radius: 9px; background: #eef7f4; color: #165e56; font-weight: 900; }
 .calendar-print-menu button:disabled { opacity: .55; }
@@ -1621,6 +1623,7 @@ h2 {
 .calendar-actions button.danger-link { color: #a3342b; border-color: #e8b4ae; }
 .calendar-print-cancelled { margin: 0 0 8px; padding: 7px 9px; border: 1px solid #555; display: grid; gap: 2px; }
 .calendar-print-cancelled small { color: #333; }
+.calendar-print-notice { margin: 0; padding: 1.5mm 3mm; border-bottom: 1px solid #888; display: grid; gap: .5mm; font-size: 8.5pt; }
 .print-cancelled { font-weight: 900; }
 @media (max-width: 430px) {
   .calendar-cancellation-actions article { grid-template-columns: 1fr; }
@@ -1797,14 +1800,18 @@ nav .active {
   .calendar-print-root header { margin: 0 0 6mm; padding: 0 0 3mm; border-bottom: 2px solid #000; }
   .calendar-print-root header p { margin: 0 0 1mm; font-size: 9pt; font-weight: 800; letter-spacing: .12em; }
   .calendar-print-root header h1 { margin: 0; font-size: 20pt; line-height: 1.1; text-transform: capitalize; }
+  .calendar-print-root header > small { display: block; margin-top: 1.5mm; font-size: 8.5pt; }
   .calendar-print-week { page: calendar-week-plan; }
   .calendar-print-days { display: grid; gap: 3mm; }
   .calendar-print-day { break-inside: avoid; page-break-inside: avoid; border: 1px solid #000; }
   .calendar-print-day > h2 { margin: 0; padding: 2.5mm 3mm; border-bottom: 1px solid #000; background: #eee !important; font-size: 12pt; text-transform: uppercase; }
+  .calendar-print-workplace { break-inside: avoid; page-break-inside: avoid; }
+  .calendar-print-workplace + .calendar-print-workplace { border-top: 2px solid #000; }
+  .calendar-print-workplace > h3 { margin: 0; padding: 1.5mm 3mm; background: #ddd !important; font-size: 9pt; letter-spacing: .08em; text-transform: uppercase; }
   .calendar-print-day-columns { display: grid; grid-template-columns: .85fr 1.1fr 1.2fr; }
   .calendar-print-day-columns > section { min-width: 0; padding: 2.5mm 3mm; border-left: 1px solid #888; }
   .calendar-print-day-columns > section:first-child { border-left: 0; }
-  .calendar-print-day h3 { margin: 0 0 1.5mm; font-size: 8pt; letter-spacing: .06em; text-transform: uppercase; }
+  .calendar-print-day h4 { margin: 0 0 1.5mm; font-size: 8pt; letter-spacing: .06em; text-transform: uppercase; }
   .calendar-print-day ul { margin: 0; padding: 0; display: grid; gap: 1.2mm; list-style: none; }
   .calendar-print-day li { display: grid; gap: .4mm; font-size: 9pt; line-height: 1.2; }
   .calendar-print-day li small { color: #333; font-size: 7.5pt; }
@@ -1836,5 +1843,6 @@ nav .active {
   .calendar-print-month-grid article > strong { display: block; margin-bottom: 1mm; font-size: 8pt; }
   .calendar-print-month-grid article > div { display: flex; flex-wrap: wrap; align-content: start; gap: .7mm 1.5mm; font-size: 7pt; line-height: 1.2; }
   .calendar-print-month-grid article > div b { width: 100%; font-size: 7.5pt; }
+  .calendar-print-month-grid article > div + div { margin-top: 1mm; padding-top: 1mm; border-top: 1px dotted #777; }
   .calendar-print-month footer { margin-top: 2mm; font-size: 7pt; }
 }
