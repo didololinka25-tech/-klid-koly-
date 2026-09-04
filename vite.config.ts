@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       manifest: {
         name: 'Úklid školy', short_name: 'Úklid', lang: 'cs', display: 'standalone',
         theme_color: '#165e56', background_color: '#f5f8f7', start_url: '/',

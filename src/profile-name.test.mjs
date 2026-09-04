@@ -45,7 +45,7 @@ test('UI po úspěchu aktualizuje profil i odvozená jména bez reloadu', () => 
 
 test('chyba RPC zůstane uživateli čitelná a formulář se zavře jen po úspěchu', () => {
   assert.match(repository, /if \(error\) throw new Error\(error\.message/)
-  assert.match(app, /const savedName = await schoolRepository\.updateOwnProfileName\(fullName\);[\s\S]*setProfileEditorOpen\(false\)/)
+  assert.match(app, /const savedName = await schoolRepository\.updateOwnProfileName\(fullName\);[\s\S]*closeProfileEditor\(\)/)
   assert.match(app, /catch \(error\)[\s\S]*error instanceof Error \? error\.message/)
 })
 

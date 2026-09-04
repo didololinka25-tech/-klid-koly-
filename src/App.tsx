@@ -52,6 +52,7 @@ import {
 import { buildCalendarDaySummary, calendarDayCellScope, calendarDayPlanView, calendarPrintDay, calendarWorkerOptions, filterCalendarTasks, projectDynamicSchoolPlan, type CalendarDaySummary } from "./cleaningCalendar";
 import { assignmentOverlapsMonth, scheduleExceptionsConflict, weekMonday, weeklyResponsibilitiesForDate, workAssignmentsConflict, workerPlanningSaveError, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
 import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
+import { appHistoryState, refreshAreasForRealtimeTable, shouldReloadIdentity, shouldRunResumeRefresh, withAppHistoryState } from "./appStability";
 
 type Section =
   | "Dnes"
@@ -114,6 +115,32 @@ const todayLabel = (dateKey: string) => new Intl.DateTimeFormat("cs-CZ", {
   month: "long",
   timeZone: "UTC",
 }).format(new Date(`${dateKey}T12:00:00Z`));
+
+function useHistoryLayer(active: boolean, layer: string, onDismiss: () => void) {
+  const dismissRef = useRef(onDismiss);
+  const tokenRef = useRef<string | null>(null);
+  dismissRef.current = onDismiss;
+  useEffect(() => {
+    if (!active) return;
+    const token = `${layer}:${crypto.randomUUID()}`;
+    tokenRef.current = token;
+    const current = appHistoryState(window.history.state);
+    window.history.pushState(withAppHistoryState(window.history.state, { ...current, layer, token }), "");
+    const onPopState = (event: PopStateEvent) => {
+      if (appHistoryState(event.state).token === token) return;
+      tokenRef.current = null;
+      dismissRef.current();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [active, layer]);
+  return useCallback(() => {
+    const token = tokenRef.current;
+    if (token && appHistoryState(window.history.state).token === token) window.history.back();
+    else dismissRef.current();
+  }, []);
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -162,7 +189,12 @@ export default function App() {
   const [pendingTaskIds, setPendingTaskIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [section, setSection] = useState<Section>("Dnes");
+  const [section, setSection] = useState<Section>(() => {
+    const saved = appHistoryState(window.history.state).section;
+    return saved && [...sections, "Manuál", "Lidé a práce", "Plán úklidu", "Prostory", "Účty a přístupy"].includes(saved)
+      ? saved as Section
+      : "Dnes";
+  });
   const [notice, setNotice] = useState("");
   const [planOptions, setPlanOptions] = useState<PlanOptions>({
     buildings: [],
@@ -177,10 +209,34 @@ export default function App() {
   const todayPlanLoaded = useRef(false);
   const todayPlanRequests = useRef(createLatestRequestGate());
   const sessionUserId = useRef<string | null>(null);
+  const lastResumeRefreshAt = useRef(0);
+  const resumeRefreshRunning = useRef(false);
+  const closeProfileEditor = useHistoryLayer(profileEditorOpen, "profile-editor", () => setProfileEditorOpen(false));
+  const closeTaskEditor = useHistoryLayer(Boolean(editing), "cleaning-plan-editor", () => setEditing(null));
+  const closeSchoolOpeningManual = useHistoryLayer(schoolOpeningManualOpen, "school-opening-manual", () => setSchoolOpeningManualOpen(false));
+  const navigateToSection = useCallback((next: Section) => {
+    if (next === section) return;
+    const nextState = { section: next };
+    if (sections.includes(next)) window.history.replaceState(withAppHistoryState(window.history.state, nextState), "");
+    else window.history.pushState(withAppHistoryState(window.history.state, nextState), "");
+    setSection(next);
+  }, [section]);
+  useEffect(() => {
+    const current = appHistoryState(window.history.state);
+    if (!current.section) window.history.replaceState(withAppHistoryState(window.history.state, { section }), "");
+    const onPopState = (event: PopStateEvent) => {
+      const previousSection = appHistoryState(event.state).section;
+      if (previousSection && [...sections, "Manuál", "Lidé a práce", "Plán úklidu", "Prostory", "Účty a přístupy"].includes(previousSection)) {
+        setSection(previousSection as Section);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
   const load = useCallback(
     async (current: Session, knownProfile?: Profile | null) => {
       const planRequestId = todayPlanRequests.current.begin();
-      setTodayPlanStatus(todayPlanLoaded.current ? "refreshing" : "loading");
+      if (!todayPlanLoaded.current) setTodayPlanStatus("loading");
       setTodayPlanError("");
       const activeProfile =
         knownProfile ?? (await schoolRepository.profile(current.user.id));
@@ -301,16 +357,56 @@ export default function App() {
     },
     [],
   );
+  const refreshTodaySilently = useCallback(async (activeProfile = profile) => {
+    if (!activeProfile || !canViewSchool(activeProfile)) return;
+    const requestId = todayPlanRequests.current.begin();
+    const refreshed = await schoolRepository.tasks(activeProfile, canManageOperations(activeProfile), localDateKey());
+    if (!todayPlanRequests.current.isLatest(requestId)) return;
+    setTasks(refreshed.tasks);
+    setBulkActions(refreshed.bulkActions);
+    setCleaningDay(refreshed.cleaningDay);
+    setCleaningDaysAvailable(refreshed.cleaningDaysAvailable);
+    setTodayPlanDate(refreshed.dateKey);
+    todayPlanLoaded.current = true;
+    setTodayPlanStatus("ready");
+    setTodayPlanError("");
+  }, [profile]);
+  const refreshAttendanceSilently = useCallback(async (activeProfile = profile) => {
+    if (!activeProfile || !canWork(activeProfile)) return;
+    setAttendance(await schoolRepository.attendance(activeProfile.id));
+    setAttendanceRefresh((value) => value + 1);
+  }, [profile]);
+  const refreshCleaningDaysSilently = useCallback(async () => {
+    const result = await schoolRepository.cleaningDays();
+    setCleaningDays(result.records);
+    setCleaningDaysAvailable(result.available);
+    setCleaningTaskSelectionAvailable(result.taskSelectionAvailable);
+  }, []);
+  const refreshOperationsSilently = useCallback(async () => {
+    setOperations(await schoolRepository.operations());
+  }, []);
+  const refreshManualSilently = useCallback(async (activeProfile = profile) => {
+    if (!activeProfile) return;
+    setManual(await schoolRepository.manuals(activeProfile));
+  }, [profile]);
+  const refreshWorkerPlanningSilently = useCallback(async () => {
+    setWorkerPlanning(await schoolRepository.workerPlanning());
+  }, []);
+  const refreshPlanOptionsSilently = useCallback(async () => {
+    setPlanOptions(await schoolRepository.planOptions());
+  }, []);
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     schoolRepository.getSession().then((next) => {
-      sessionUserId.current = next?.user.id ?? null;
+      const nextUserId = next?.user.id ?? null;
+      const identityChanged = shouldReloadIdentity(sessionUserId.current, nextUserId);
+      sessionUserId.current = nextUserId;
       setSession(next);
-      if (next) load(next).catch((error) => setNotice(error.message));
+      if (next && identityChanged) load(next).catch((error) => setNotice(error.message));
     });
     const { data } = schoolRepository.onAuthChange((next) => {
       const nextUserId = next?.user.id ?? null;
-      const identityChanged = sessionUserId.current !== nextUserId;
+      const identityChanged = shouldReloadIdentity(sessionUserId.current, nextUserId);
       sessionUserId.current = nextUserId;
       setSession(next);
       if (identityChanged) {
@@ -333,49 +429,50 @@ export default function App() {
         setWorkerPlanning({ assignments: [], exceptions: [], rotationDefinitions: [], rotationSlots: [], available: false });
         setAttendanceBuildingId("");
       }
-      if (next) load(next).catch((error) => setNotice(error.message));
+      if (next && identityChanged) load(next).catch((error) => setNotice(error.message));
     });
     return () => data.subscription.unsubscribe();
   }, [load]);
   useEffect(() => {
     if (!session || !profile || !canViewSchool(profile)) return;
-    const channel = schoolRepository.subscribe(() => {
-      setAttendanceRefresh((value) => value + 1);
-      load(session, profile).catch((error) => setNotice(error.message));
+    const channel = schoolRepository.subscribe((table) => {
+      const areas = refreshAreasForRealtimeTable(table);
+      if (areas.includes("today")) void refreshTodaySilently().catch((error) => console.error("Realtime aktualizace dnešního plánu selhala:", error));
+      if (areas.includes("attendance")) void refreshAttendanceSilently().catch((error) => console.error("Realtime aktualizace docházky selhala:", error));
+      if (areas.includes("cleaning-days")) void refreshCleaningDaysSilently().catch((error) => console.error("Realtime aktualizace úklidových dnů selhala:", error));
+      if (areas.includes("operations")) void refreshOperationsSilently().catch((error) => console.error("Realtime aktualizace Provozu selhala:", error));
+      if (areas.includes("manual")) void refreshManualSilently().catch((error) => console.error("Realtime aktualizace Manuálu selhala:", error));
+      if (areas.includes("worker-planning")) void refreshWorkerPlanningSilently().catch((error) => console.error("Realtime aktualizace pracovního plánu selhala:", error));
+      if (areas.includes("plan-options")) void refreshPlanOptionsSilently().catch((error) => console.error("Realtime aktualizace struktury plánu selhala:", error));
     });
     return () => {
       channel.unsubscribe();
     };
-  }, [session, profile, load]);
+  }, [session, profile, refreshTodaySilently, refreshAttendanceSilently, refreshCleaningDaysSilently, refreshOperationsSilently, refreshManualSilently, refreshWorkerPlanningSilently, refreshPlanOptionsSilently]);
   useEffect(() => {
     if (!session || !profile || !canViewSchool(profile)) return;
-    const refreshToday = () => {
+    const refreshInBackground = () => {
       if (document.visibilityState === "hidden") return;
-      load(session, profile).catch((error) => {
-        console.error("Aktualizace po návratu do aplikace selhala:", error);
-        setNotice("Nepodařilo se aktualizovat data aplikace.");
-      });
+      const now = Date.now();
+      if (resumeRefreshRunning.current || !shouldRunResumeRefresh(lastResumeRefreshAt.current, now)) return;
+      lastResumeRefreshAt.current = now;
+      resumeRefreshRunning.current = true;
+      Promise.allSettled([
+        refreshTodaySilently(),
+        refreshAttendanceSilently(),
+        refreshCleaningDaysSilently(),
+        section === "Provoz" ? refreshOperationsSilently() : Promise.resolve(),
+      ]).then((results) => {
+        results.filter((result) => result.status === "rejected").forEach((result) => console.error("Tichá aktualizace po návratu selhala:", (result as PromiseRejectedResult).reason));
+      }).finally(() => { resumeRefreshRunning.current = false; });
     };
-    window.addEventListener("focus", refreshToday);
-    document.addEventListener("visibilitychange", refreshToday);
+    window.addEventListener("focus", refreshInBackground);
+    document.addEventListener("visibilitychange", refreshInBackground);
     return () => {
-      window.removeEventListener("focus", refreshToday);
-      document.removeEventListener("visibilitychange", refreshToday);
+      window.removeEventListener("focus", refreshInBackground);
+      document.removeEventListener("visibilitychange", refreshInBackground);
     };
-  }, [session, profile, load]);
-  useEffect(() => {
-    if (!session || !profile?.is_owner) return;
-    const refreshUsers = () => {
-      if (document.visibilityState === "hidden") return;
-      schoolRepository.users().then(setUsers).catch((error) => setNotice(error.message));
-    };
-    window.addEventListener("focus", refreshUsers);
-    document.addEventListener("visibilitychange", refreshUsers);
-    return () => {
-      window.removeEventListener("focus", refreshUsers);
-      document.removeEventListener("visibilitychange", refreshUsers);
-    };
-  }, [session, profile]);
+  }, [session, profile, section, refreshTodaySilently, refreshAttendanceSilently, refreshCleaningDaysSilently, refreshOperationsSilently]);
   useEffect(() => {
     if (!profile || !canWork(profile)) return;
     const workerId = selectedAttendanceWorker || profile.id;
@@ -460,7 +557,7 @@ export default function App() {
         completedAt: !target.done ? new Date().toISOString() : null,
       } : task));
       try {
-        await load(session, profile);
+        await refreshTodaySilently();
       } catch {
         setNotice("Úkol je uložený, ale aktuální stav se nepodařilo znovu načíst. Zkontrolujte připojení.");
       }
@@ -492,7 +589,7 @@ export default function App() {
       const completedAt = new Date().toISOString();
       setTasks((current) => current.map((task) => completedIds.has(task.id) ? { ...task, done: true, completedBy: profile.full_name, completedById: profile.id, completedAt } : task));
       try {
-        await load(session, profile);
+        await refreshTodaySilently();
       } catch {
         setNotice("Úkoly jsou uložené, ale aktuální stav se nepodařilo znovu načíst. Zkontrolujte připojení.");
       }
@@ -518,7 +615,7 @@ export default function App() {
       setTasks((current) => applyBulkUndo(current, action.taskIds));
       setBulkActions((current) => current.filter((item) => item.id !== action.id));
       try {
-        await load(session, profile);
+        await refreshTodaySilently();
       } catch {
         setNotice("Vrácení je uložené, ale aktuální stav se nepodařilo znovu načíst. Zkontrolujte připojení.");
       }
@@ -612,7 +709,7 @@ export default function App() {
     try {
       setNotice("");
       await schoolRepository.updateAttendance(id, startedAt, endedAt, buildingId);
-      await load(session, profile);
+      await refreshAttendanceSilently();
       setAttendanceRefresh((value) => value + 1);
     } catch (error) {
       setNotice(
@@ -687,7 +784,7 @@ export default function App() {
             : action,
         ),
       );
-      setProfileEditorOpen(false);
+      closeProfileEditor();
       setNotice("Profil byl uložen.");
     } catch (error) {
       setNotice(
@@ -817,7 +914,7 @@ export default function App() {
       setTasks(refreshed.tasks);
       setCleaningDay(refreshed.cleaningDay);
       setCleaningDaysAvailable(refreshed.cleaningDaysAvailable);
-      setEditing(null);
+      closeTaskEditor();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Plán se nepodařilo uložit.";
       setNotice(message);
@@ -828,8 +925,8 @@ export default function App() {
     try {
       setNotice("");
       await schoolRepository.setTaskActive(taskId, active);
-      setEditing(null);
-      await load(session, profile);
+      closeTaskEditor();
+      await refreshTodaySilently();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Stav úkolu se nepodařilo změnit.";
       setNotice(message);
@@ -840,7 +937,7 @@ export default function App() {
     try {
       setNotice("");
       await schoolRepository.saveRoom(room);
-      await load(session, profile);
+      await Promise.all([refreshTodaySilently(), refreshPlanOptionsSilently()]);
     } catch (error) {
       setNotice(
         error instanceof Error
@@ -854,7 +951,7 @@ export default function App() {
     try {
       setNotice("");
       await schoolRepository.saveFloor(floor);
-      await load(session, profile);
+      await Promise.all([refreshTodaySilently(), refreshPlanOptionsSilently()]);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Patro nebo sekci se nepodařilo uložit.");
       throw error;
@@ -885,7 +982,7 @@ export default function App() {
     try {
       setNotice("");
       await schoolRepository.setRoomActive(roomId, active);
-      await load(session, profile);
+      await Promise.all([refreshTodaySilently(), refreshPlanOptionsSilently()]);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Stav místnosti se nepodařilo změnit.";
       setNotice(message);
@@ -911,11 +1008,7 @@ export default function App() {
     }
   };
   const refreshCleaningDays = async () => {
-    const result = await schoolRepository.cleaningDays();
-    setCleaningDays(result.records);
-    setCleaningDaysAvailable(result.available);
-    setCleaningTaskSelectionAvailable(result.taskSelectionAvailable);
-    await load(session, profile);
+    await Promise.all([refreshCleaningDaysSilently(), refreshTodaySilently()]);
   };
   const saveCleaningDay = async (draft: CleaningDayDraft) => {
     try {
@@ -951,7 +1044,7 @@ export default function App() {
     setSchoolOpeningManualOpen(false);
     setManagementView(view);
     setEditing(null);
-    setSection(view === "plan" ? "Plán úklidu" : "Prostory");
+    navigateToSection(view === "plan" ? "Plán úklidu" : "Prostory");
   };
   const pendingCount = profile.is_owner
     ? users.filter((user) => user.active && user.role === "pending").length
@@ -976,7 +1069,7 @@ export default function App() {
     : todayContexts.length > 1
       ? { kind: "standard", executionDate: todayPlanDate, scheduleDate: todayPlanDate, title: "Úklid více pracovišť" }
       : cleaningDay;
-  const retryTodayPlan = () => load(session, profile).catch((error) => {
+  const retryTodayPlan = () => refreshTodaySilently().catch((error) => {
     console.error("Opakované načtení dnešního plánu selhalo:", error);
     setNotice("Nepodařilo se načíst dnešní plán.");
   });
@@ -1086,7 +1179,7 @@ export default function App() {
           options={planOptions}
           editing={editing}
           onEdit={setEditing}
-          onCancel={() => setEditing(null)}
+          onCancel={closeTaskEditor}
           onSaveTask={saveTask}
           onSetTaskActive={setTaskActive}
           onSaveRoom={saveRoom}
@@ -1156,11 +1249,11 @@ export default function App() {
           tasks={tasks}
           onSave={saveManualEntry}
           onSetActive={setManualEntryActive}
-          onEditDeparture={(task) => { setEditing(task); setManagementView("plan"); setSection("Plán úklidu"); }}
+          onEditDeparture={(task) => { setEditing(task); setManagementView("plan"); navigateToSection("Plán úklidu"); }}
           onAddDeparture={() => {
             const order = Math.max(930, ...tasks.filter(isFinalCheckTask).map((task) => task.sortOrder)) + 10;
             setEditing({ id: "", planKey: `admin|final|${crypto.randomUUID()}`, room: "Společný úkol", floor: "Společné úkoly", floorSort: -1, building: "Škola", title: "", activityType: "other", frequency: "denně", assignedTo: "Úklidový tým", done: false, canComplete: false, dueToday: false, sortOrder: order, scheduleDays: [1, 3, 5], active: true });
-            setManagementView("plan"); setSection("Plán úklidu");
+            setManagementView("plan"); navigateToSection("Plán úklidu");
           }}
           onOpenSchoolManual={() => setSchoolOpeningManualOpen(true)}
         />
@@ -1174,27 +1267,27 @@ export default function App() {
           onOpenUsers={async () => {
             setSchoolOpeningManualOpen(false);
             setUsers(await schoolRepository.users());
-            setSection("Účty a přístupy");
+            navigateToSection("Účty a přístupy");
           }}
-          onOpenCleaningDays={() => { setSchoolOpeningManualOpen(false); setSection("Kalendář"); }}
-          onOpenAssignments={() => { setSchoolOpeningManualOpen(false); setSection("Lidé a práce"); }}
-          onOpenManual={() => { setSchoolOpeningManualOpen(false); setSection("Manuál"); }}
+          onOpenCleaningDays={() => { setSchoolOpeningManualOpen(false); navigateToSection("Kalendář"); }}
+          onOpenAssignments={() => { setSchoolOpeningManualOpen(false); navigateToSection("Lidé a práce"); }}
+          onOpenManual={() => { setSchoolOpeningManualOpen(false); navigateToSection("Manuál"); }}
         />
       )}
       {profileEditorOpen && (
         <ProfileEditor
           profile={profile}
-          onCancel={() => setProfileEditorOpen(false)}
+          onCancel={closeProfileEditor}
           onSave={saveOwnProfile}
         />
       )}
-      {schoolOpeningManualOpen && <SchoolOpeningManualModal onClose={() => setSchoolOpeningManualOpen(false)} />}
+      {schoolOpeningManualOpen && <SchoolOpeningManualModal onClose={closeSchoolOpeningManual} />}
       <nav>
         {navigation.map((item) => (
           <button
             key={item}
             className={section === item ? "active" : ""}
-            onClick={() => { setSchoolOpeningManualOpen(false); setSection(item); }}
+            onClick={() => { setSchoolOpeningManualOpen(false); navigateToSection(item); }}
           >
             <i>{icon[item]}</i>
             <span>{item}</span>
@@ -1457,6 +1550,8 @@ function AttendanceDashboard({
   const now = useCurrentTime();
   const [editingRecord, setEditingRecord] = useState<Attendance | null>(null);
   const [deletingRecord, setDeletingRecord] = useState<Attendance | null>(null);
+  const closeAttendanceEditor = useHistoryLayer(Boolean(editingRecord), "attendance-editor", () => setEditingRecord(null));
+  const closeAttendanceDelete = useHistoryLayer(Boolean(deletingRecord), "attendance-delete-confirmation", () => setDeletingRecord(null));
   const [plannedShifts, setPlannedShifts] = useState(
     settings.plannedShiftsPerWeek,
   );
@@ -1629,24 +1724,24 @@ function AttendanceDashboard({
       {editingRecord && (
         <AttendanceEditor
           record={editingRecord}
-          onCancel={() => setEditingRecord(null)}
+          onCancel={closeAttendanceEditor}
           workplaces={workplaces}
           onSave={async (start, end, buildingId) => {
             await onSaveAttendance(editingRecord.id, start, end, buildingId);
-            setEditingRecord(null);
+            closeAttendanceEditor();
           }}
         />
       )}
       {deletingRecord && (
         <DeleteAttendanceConfirmation
           record={deletingRecord}
-          onCancel={() => setDeletingRecord(null)}
+          onCancel={closeAttendanceDelete}
           onConfirm={async () => {
             await onDeleteAttendance(
               deletingRecord.id,
               deletingRecord.workerId,
             );
-            setDeletingRecord(null);
+            closeAttendanceDelete();
           }}
         />
       )}
@@ -1656,6 +1751,7 @@ function AttendanceDashboard({
 
 function WorkerContractsPanel({ workerId, contracts, onSave }: { workerId: string; contracts: WorkerContract[]; onSave: (contract: WorkerContract) => Promise<void> }) {
   const [editing, setEditing] = useState<WorkerContract | null>(null);
+  const closeContractEditor = useHistoryLayer(Boolean(editing), "worker-contract-editor", () => setEditing(null));
   const [saving, setSaving] = useState(false);
   const label = (value: WorkerContract["contractType"]) => value === "dpp" ? "DPP" : value === "dpc" ? "DPČ" : "Jiný vztah";
   const today = localDateKey();
@@ -1666,7 +1762,7 @@ function WorkerContractsPanel({ workerId, contracts, onSave }: { workerId: strin
   return <section className="worker-contracts compact-contracts"><div className="subsection-heading"><h3>Aktuální smlouva</h3><button onClick={() => setEditing({ id: "", workerId, contractType: "dpp", validFrom: localDateKey(), validTo: undefined, hourlyRate: undefined, note: "", active: true })}>+ Přidat</button></div>
     {currentContract ? contractRow(currentContract) : <p className="hint">Pracovní vztah zatím není nastaven. Datum zahájení se úmyslně nehádá.</p>}
     {olderContracts.length > 0 && <details className="contract-history"><summary>Zobrazit historii ({olderContracts.length})</summary>{olderContracts.map(contractRow)}</details>}
-    {editing && <div className="confirmation-backdrop" role="dialog" aria-modal="true"><form className="confirmation-dialog" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave(editing); setEditing(null); } finally { setSaving(false); } }}><h2>{editing.id ? "Upravit pracovní vztah" : "Nový pracovní vztah"}</h2>
+    {editing && <div className="confirmation-backdrop" role="dialog" aria-modal="true"><form className="confirmation-dialog" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave(editing); closeContractEditor(); } finally { setSaving(false); } }}><h2>{editing.id ? "Upravit pracovní vztah" : "Nový pracovní vztah"}</h2>
       <label>Typ<select value={editing.contractType} onChange={(event) => setEditing({ ...editing, contractType: event.target.value as WorkerContract["contractType"] })}><option value="dpp">DPP</option><option value="dpc">DPČ</option><option value="other">Jiný vztah</option></select></label>
       <label>Platí od<input type="date" required value={editing.validFrom} onChange={(event) => setEditing({ ...editing, validFrom: event.target.value })} /></label>
       <label>Platí do<input type="date" value={editing.validTo ?? ""} onChange={(event) => setEditing({ ...editing, validTo: event.target.value || undefined })} /></label>
@@ -1674,7 +1770,7 @@ function WorkerContractsPanel({ workerId, contracts, onSave }: { workerId: strin
       <small>Sazba platí jen pro toto období. Při změně sazby vytvořte nové období.</small>
       <label>Poznámka<textarea rows={2} value={editing.note} onChange={(event) => setEditing({ ...editing, note: event.target.value })} /></label>
       <label className="switch"><input type="checkbox" checked={editing.active} onChange={(event) => setEditing({ ...editing, active: event.target.checked })} /> Aktivní</label>
-      <div className="editor-actions"><button type="button" onClick={() => setEditing(null)} disabled={saving}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
+      <div className="editor-actions"><button type="button" onClick={closeContractEditor} disabled={saving}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Uložit"}</button></div>
     </form></div>}
   </section>;
 }
@@ -1842,6 +1938,7 @@ function AttendanceHistory({
   canViewAudit: boolean;
 }) {
   const [auditRecord, setAuditRecord] = useState<Attendance | null>(null);
+  const closeAttendanceAudit = useHistoryLayer(Boolean(auditRecord), "attendance-audit", () => setAuditRecord(null));
   const [auditEntries, setAuditEntries] = useState<AttendanceAuditEntry[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditMessage, setAuditMessage] = useState("");
@@ -1913,7 +2010,7 @@ function AttendanceHistory({
           entries={auditEntries}
           loading={auditLoading}
           message={auditMessage}
-          onClose={() => setAuditRecord(null)}
+          onClose={closeAttendanceAudit}
         />
       )}
     </section>
@@ -3202,9 +3299,10 @@ function ArrivalReminders({ entries }: { entries: ManualEntry[] }) {
 }
 
 function ManualGuideModal({ entry, onClose }: { entry: ManualEntry; onClose: () => void }) {
-  return <div className="confirmation-backdrop manual-modal" role="dialog" aria-modal="true" aria-label={entry.title} onClick={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+  const closeWithHistory = useHistoryLayer(true, "manual-guide", onClose);
+  return <div className="confirmation-backdrop manual-modal" role="dialog" aria-modal="true" aria-label={entry.title} onClick={(event) => { if (event.currentTarget === event.target) closeWithHistory(); }}>
     <article className="confirmation-dialog manual-detail">
-      <div className="manual-detail-heading"><span><p className="eyebrow">{entry.category}</p><h2>{entry.title}</h2></span><button onClick={onClose} aria-label="Zavřít návod">Zavřít</button></div>
+      <div className="manual-detail-heading"><span><p className="eyebrow">{entry.category}</p><h2>{entry.title}</h2></span><button onClick={closeWithHistory} aria-label="Zavřít návod">Zavřít</button></div>
       {entry.supplies && <section><h3>Co potřebuji</h3><ManualGuideText value={entry.supplies} /></section>}
       {entry.steps && <section><h3>Jak postupovat</h3><ManualGuideText value={entry.steps} steps /></section>}
       {entry.warnings && <section className="manual-warning"><h3>Na co si dát pozor</h3><ManualGuideText value={entry.warnings} /></section>}
@@ -3472,6 +3570,11 @@ function WorkAssignmentOverview({ data, profiles, options, canManage, contracts,
   const planningWorkers = data.planningWorkers ?? profiles.map((profile) => ({ id: profile.id, name: profile.name, linkedProfileId: profile.id, active: true }));
   const workerOptions = planningWorkers.filter((worker) => worker.active).map(({ id, name }) => ({ id, name }));
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
+  const closeWorkerDetail = useHistoryLayer(Boolean(selectedWorkerId), "worker-detail", () => {
+    setSelectedWorkerId(null);
+    setAssignment(null);
+    setException(null);
+  });
   const selectedWorker = planningWorkers.find((worker) => worker.id === selectedWorkerId) ?? null;
   const [assignment, setAssignment] = useState<WorkerWorkAssignment | null>(null);
   const [exception, setException] = useState<WorkerScheduleException | null>(null);
@@ -3491,7 +3594,7 @@ function WorkAssignmentOverview({ data, profiles, options, canManage, contracts,
   const shiftCountLabel = `${plannedWeekdays.size} ${plannedWeekdays.size === 1 ? "směna" : plannedWeekdays.size >= 2 && plannedWeekdays.size <= 4 ? "směny" : "směn"} týdně`;
 
   if (selectedWorker) return <div className="work-assignment-screen person-detail-screen">
-    <button className="back-button" onClick={() => { setSelectedWorkerId(null); setAssignment(null); setException(null); }}>← Lidé a práce</button>
+    <button className="back-button" onClick={closeWorkerDetail}>← Lidé a práce</button>
     <section className="panel person-detail-header"><div><div className="worker-name-row"><h2>{selectedWorker.name}</h2><small>{selectedWorker.linkedProfileId ? "Účet propojen" : "Bez účtu"}{selectedWorker.active ? "" : " · Neaktivní"}</small></div><p className="worker-summary-line">{activeWorkplaces.length > 0 ? activeWorkplaces.join(" + ") : "Bez aktivního pracoviště"} · {shiftCountLabel}</p>{currentDuties.length > 0 && <div className="worker-duty-chips">{currentDuties.map((item) => <span key={item.id}>{weeklyResponsibilityLabels[item.responsibilityKey].replace(" – 1× týdně", "")}</span>)}</div>}</div>{canManage && <button className="worker-profile-edit" onClick={() => setEditingWorker(selectedWorker)}>Upravit základní údaje</button>}</section>
     {editingWorker && <PlanningWorkerEditor item={editingWorker} profiles={profiles} onCancel={() => setEditingWorker(null)} onSave={async (value) => { await onSaveWorker(value); setEditingWorker(null); }} />}
     <details className="worker-detail-accordion"><summary><span aria-hidden="true">📅</span><b>Rozvrh práce</b><i>›</i></summary><div className="worker-detail-accordion-content"><div className="subsection-heading"><h3>Aktivní pracovní období</h3>{canManage && <button onClick={() => { setException(null); setAssignment(blankAssignment(selectedWorker)); }}>+ Přidat další období</button>}</div><div className="worker-assignment-list">{workerAssignments.map((item) => <button className={item.active ? "" : "inactive"} key={item.id} disabled={!canManage} onClick={() => { setException(null); setAssignment(item); }}><span><b>{item.buildingName} · {item.areaLabel}</b><em>{weekdays.filter((_, index) => item.weekdays.includes(index + 1)).join(" · ")}</em><i>{formatDate(item.validFrom)}{item.validTo ? ` – ${formatDate(item.validTo)}` : " – bez konce"}{item.active ? "" : " · neaktivní"}</i></span>{canManage && <strong>Upravit ›</strong>}</button>)}{workerAssignments.length === 0 && <p className="hint">Zatím nemá uložené pracovní období.</p>}</div>{assignment && <WorkerAssignmentEditor item={assignment} workers={workerOptions} options={options} onCancel={() => setAssignment(null)} onSave={saveAssignment} />}<div className="subsection-heading schedule-exception-heading"><h3>Jednorázové změny směn</h3>{canManage && <button onClick={() => { setAssignment(null); setException(blankException(selectedWorker)); }}>+ Přidat výjimku</button>}</div><div className="person-exception-list">{workerExceptions.map((item) => <button key={item.id} disabled={!canManage} onClick={() => setException(item)}><b>{formatDate(item.date)}</b><span>{item.planned ? `Výjimečně pracuje · ${item.buildingName ?? "pracoviště"} · ${item.areaLabel ?? "oblast"}` : "Nepracuje"}</span>{item.note && <small>{item.note}</small>}</button>)}{workerExceptions.length === 0 && <p className="hint">Bez výjimek.</p>}</div>{exception && <WorkerExceptionEditor item={exception} workers={workerOptions} options={options} onCancel={() => setException(null)} onSave={saveException} />}</div></details>
@@ -4152,6 +4255,8 @@ function CleaningCalendar({
   const [plannerStatus, setPlannerStatus] = useState<CalendarPlannerStatus>("loading");
   const [plannerReload, setPlannerReload] = useState(0);
   const [dayDetailOpen, setDayDetailOpen] = useState(false);
+  const closeDayDetail = useHistoryLayer(dayDetailOpen, "calendar-day-detail", () => setDayDetailOpen(false));
+  const closeCleaningDayEditor = useHistoryLayer(Boolean(editing), "cleaning-day-editor", () => setEditing(null));
   const [printMode, setPrintMode] = useState<CalendarPrintMode | null>(null);
   const workerOptions = useMemo(() => {
     const values = new Map(calendarWorkerOptions(planning).map((worker) => [worker.id, worker.name]));
@@ -4273,8 +4378,8 @@ function CleaningCalendar({
           buildings={buildings}
           tasks={tasks}
           taskSelectionAvailable={taskSelectionAvailable}
-          onCancel={() => setEditing(null)}
-          onSave={async (draft) => { await onSave(draft); setEditing(null); }}
+          onCancel={closeCleaningDayEditor}
+          onSave={async (draft) => { await onSave(draft); closeCleaningDayEditor(); }}
         />
       )}
       <section className="month-calendar" aria-label="Měsíční plán úklidu">
@@ -4285,7 +4390,7 @@ function CleaningCalendar({
         </div>
         <CalendarLegend />
       </section>
-      {dayDetailOpen && <CalendarDayModal summary={selected} plannerStatus={plannerStatus} buildings={buildings} canManage={canManage} preferredBuildingId={buildingFilter === "all" ? null : buildingFilter} onRetry={() => setPlannerReload((value) => value + 1)} onCancelStandard={onSave} onRestoreCancellation={onRestoreCancellation} onClose={() => setDayDetailOpen(false)} />}
+      {dayDetailOpen && <CalendarDayModal summary={selected} plannerStatus={plannerStatus} buildings={buildings} canManage={canManage} preferredBuildingId={buildingFilter === "all" ? null : buildingFilter} onRetry={() => setPlannerReload((value) => value + 1)} onCancelStandard={onSave} onRestoreCancellation={onRestoreCancellation} onClose={closeDayDetail} />}
       <section className="calendar-list">
         <h2>Plánované výjimky</h2>
         {future.map((item) => (

@@ -308,7 +308,7 @@ test('uložení plánu čeká na potvrzený INSERT a refetch před zavřením ed
   const saveFlow = app.match(/const saveTask = async[\s\S]*?const setTaskActive/)?.[0] ?? ''
   assert.match(saveFlow, /const savedId = await schoolRepository\.saveTask/)
   assert.match(saveFlow, /await schoolRepository\.tasks\(profile, true\)/)
-  assert.ok(saveFlow.indexOf('setTasks(refreshed.tasks)') < saveFlow.indexOf('setEditing(null)'))
+  assert.ok(saveFlow.indexOf('setTasks(refreshed.tasks)') < saveFlow.indexOf('closeTaskEditor()'))
   assert.match(repository, /if \(!result\.data\?\.id\)/)
 })
 

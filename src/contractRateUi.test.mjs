@@ -21,8 +21,8 @@ test('repository načte sazbu, odešle ji do RPC a po uložení proběhne refetc
   assert.match(app, /await schoolRepository\.saveWorkerContract\(contract\);[\s\S]*setWorkerContracts\(await schoolRepository\.workerContracts\(contract\.workerId\)\)/)
 })
 
-test('PWA po aktivaci nové verze obnoví starý otevřený klient', () => {
-  assert.match(main, /navigator\.serviceWorker\.addEventListener\('controllerchange'/)
-  assert.match(main, /window\.location\.reload\(\)/)
+test('PWA nekontrolovaně neobnoví otevřenou pracovní obrazovku', () => {
+  assert.doesNotMatch(main, /controllerchange/)
+  assert.doesNotMatch(main, /window\.location\.reload\(\)/)
   assert.match(main, /registration\.update\(\)/)
 })

@@ -882,12 +882,21 @@ export const schoolRepository = {
     if (error) throw attendanceError(error)
     return mapAttendance(data)
   },
-  subscribe: (onChange: () => void): RealtimeChannel => client().channel('school-changes')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_completions' }, onChange)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, onChange)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_day_exceptions' }, onChange)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_items' }, onChange)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents' }, onChange)
+  subscribe: (onChange: (table: 'cleaning_completions' | 'attendance' | 'cleaning_day_exceptions' | 'stock_items' | 'incidents' | 'manual_entries' | 'cleaning_tasks' | 'rooms' | 'floors' | 'planning_workers' | 'worker_work_assignments' | 'worker_schedule_exceptions' | 'cleaning_rotation_slot_assignments' | 'worker_weekly_responsibilities') => void): RealtimeChannel => client().channel('school-changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_completions' }, () => onChange('cleaning_completions'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, () => onChange('attendance'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_day_exceptions' }, () => onChange('cleaning_day_exceptions'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_items' }, () => onChange('stock_items'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents' }, () => onChange('incidents'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'manual_entries' }, () => onChange('manual_entries'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_tasks' }, () => onChange('cleaning_tasks'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, () => onChange('rooms'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'floors' }, () => onChange('floors'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'planning_workers' }, () => onChange('planning_workers'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'worker_work_assignments' }, () => onChange('worker_work_assignments'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'worker_schedule_exceptions' }, () => onChange('worker_schedule_exceptions'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_rotation_slot_assignments' }, () => onChange('cleaning_rotation_slot_assignments'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'worker_weekly_responsibilities' }, () => onChange('worker_weekly_responsibilities'))
     .subscribe(),
 }
 

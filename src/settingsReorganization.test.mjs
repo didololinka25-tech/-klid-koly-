@@ -53,8 +53,8 @@ test('mobilní detail osoby drží plnou šířku, 44px ovládání a bez vodoro
 })
 
 test('obrazový manuál se při přechodu na pracovní admin obrazovky zavře', () => {
-  assert.match(app, /onOpenAssignments=\{\(\) => \{ setSchoolOpeningManualOpen\(false\); setSection\("Lidé a práce"\); \}\}/)
-  assert.match(app, /onClick=\{\(\) => \{ setSchoolOpeningManualOpen\(false\); setSection\(item\); \}\}/)
+  assert.match(app, /onOpenAssignments=\{\(\) => \{ setSchoolOpeningManualOpen\(false\); navigateToSection\("Lidé a práce"\); \}\}/)
+  assert.match(app, /onClick=\{\(\) => \{ setSchoolOpeningManualOpen\(false\); navigateToSection\(item\); \}\}/)
 })
 
 // Stejná priorita jako v 03700: nejdřív dosud nepoužitá směna osoby,
