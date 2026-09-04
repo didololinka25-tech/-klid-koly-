@@ -18,6 +18,7 @@ const expectedKeys = [
   "guide-upholstery", "guide-trash", "guide-tools", "guide-laundry", "guide-machine",
   "guide-machine-carpet",
 ];
+const seededManualValues = migration.slice(0, migration.indexOf("on conflict (entry_key)"));
 
 test("03800 bezpečně doplní všechny potvrzené praktické návody", () => {
   for (const key of expectedKeys) assert.match(migration, new RegExp(`'${key}'`));
@@ -26,15 +27,33 @@ test("03800 bezpečně doplní všechny potvrzené praktické návody", () => {
   assert.match(migration, /count\(\*\)[\s\S]*cardinality\(expected_keys\)/i);
 });
 
-test("potvrzená ředění a bezpečnostní hranice nejsou nahrazena domyšleným dávkováním", () => {
-  assert.match(migration, /Lili → 1 : 10/);
-  assert.match(migration, /Medium → 1 : 10/);
-  assert.match(migration, /Jasněnka → 1 : 10/);
-  assert.match(migration, /Mýval → 1 : 10 běžně \/ 1 : 5 silná špína/);
-  assert.match(migration, /Balzamína → 20 ml \/ 1 l vlažné vody/);
-  assert.match(migration, /Přesnou dávku[\s\S]*zatím neuvádíme/);
-  assert.match(migration, /Mýval není potvrzený pro nalití do Nilfisk SC100/);
-  assert.match(migration, /modrý strojový saponát, ne Lili/i);
+test("03800 neobsahuje neověřené dávkování ani parametry stroje", () => {
+  assert.doesNotMatch(seededManualValues, /1\s*:\s*(?:5|10)/);
+  assert.doesNotMatch(seededManualValues, /(?:20|30)\s*ml|3\s*l\s+nádrž|1\s*%|[12]\s*kapk/i);
+  assert.doesNotMatch(seededManualValues, /víčko nádrže slouží jako odměrka/i);
+  assert.doesNotMatch(seededManualValues, /modrý strojový saponát/i);
+  assert.doesNotMatch(seededManualValues, /Carpet Complete Kit pro SC100 ve škole máme/i);
+  assert.match(seededManualValues, /dávkování doplní správce až po ověření/i);
+  assert.match(seededManualValues, /Mýval nelij do Nilfisk SC100 bez výslovného potvrzení výrobce a školy/i);
+  assert.match(seededManualValues, /Pouze prostředek určený výrobcem pro tento stroj a povrch/i);
+});
+
+test("potvrzené školní barvy hadrů a pytlů zůstávají přesné", () => {
+  assert.match(migration, /Modrý hadr je určený pro okna a zrcadla/);
+  assert.match(migration, /Žlutý hadr používej pouze na WC/);
+  assert.match(migration, /Tříděný odpad → modrý pytel 60 l/);
+  assert.match(migration, /Plasty → žlutý pytel 35 l/);
+  assert.match(migration, /Běžné koše → bílý pytel 25 l/);
+  assert.match(migration, /Mini koše → bílý pytel 10 l/);
+});
+
+test("všechny entry_key jsou v seed části právě jednou a vazby aktivit zůstávají", () => {
+  for (const key of expectedKeys) {
+    assert.equal(seededManualValues.match(new RegExp(`'${key}'`, "g"))?.length, 1, key);
+  }
+  assert.match(seededManualValues, /'guide-toilet'[\s\S]*?'\{toilet\}'/);
+  assert.match(seededManualValues, /'guide-floors'[\s\S]*?'\{vacuum,mop\}'/);
+  assert.match(seededManualValues, /'guide-windows'[\s\S]*?'\{windows\}'/);
 });
 
 test("vyhledávání najde prostředky v názvu i obsahu návodu", () => {
