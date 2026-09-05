@@ -78,6 +78,22 @@ test('trigger-only functions are inventoried but are not in authenticated allowl
   }
 })
 
+test('03500 planner base helper is inventoried as internal mutating security definer only', () => {
+  const inventories = [...migration.matchAll(/application_function_names constant text\[\] := array\[([\s\S]*?)\n  \];/g)]
+  assert.equal(inventories.length, 2)
+  for (const inventory of inventories) {
+    assert.match(inventory[1], /'refresh_dynamic_school_cleaning_plan_base_03500'/)
+  }
+
+  const mutatingBlock = migration.match(/mutating_security_definer_names constant text\[\] := array\[([\s\S]*?)\n  \];/)?.[1] ?? ''
+  const frontendBlock = migration.match(/frontend_rpc_signatures constant text\[\] := array\[([\s\S]*?)\n  \];/)?.[1] ?? ''
+  const authenticatedBlock = migration.match(/authenticated_signatures constant text\[\] := array\[([\s\S]*?)\n  \];/)?.[1] ?? ''
+
+  assert.match(mutatingBlock, /'refresh_dynamic_school_cleaning_plan_base_03500'/)
+  assert.doesNotMatch(frontendBlock, /refresh_dynamic_school_cleaning_plan_base_03500/)
+  assert.doesNotMatch(authenticatedBlock, /refresh_dynamic_school_cleaning_plan_base_03500/)
+})
+
 test('legacy swap RPC is retained but denied to both client roles', () => {
   assert.match(
     migration,
