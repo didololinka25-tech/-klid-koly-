@@ -13,6 +13,7 @@
   "dependencies": {
     "@supabase/supabase-js": "latest",
     "@vitejs/plugin-react": "latest",
+    "ical.js": "2.2.1",
     "vite": "latest",
     "vite-plugin-pwa": "latest",
     "react": "latest",

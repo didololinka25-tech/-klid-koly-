@@ -3,6 +3,7 @@ import type { CleaningDayContext } from './scheduling'
 import { isExtraCleaningTask, summarizeCleaningDay } from './cleaningPresentation.ts'
 import { cleaningRotationForOccurrence, workersForDate, type PlannedWorker, type RotationForDate, type WorkerPlanningData } from './workerPlanning.ts'
 import { buildTodayWorkBlocks, type TodayBuildingWork } from './todayWorkBlocks.ts'
+import type { SchoolCalendarEvent } from './schoolCalendarApi.ts'
 
 export type CalendarExceptionInput = {
   id?: string
@@ -69,9 +70,9 @@ export type CalendarDaySummary = {
   workBlocks: TodayBuildingWork[]
   fourthFloorRotation: RotationForDate | null
   fourthFloorAssignedWorker: { workerId: string; workerName: string } | null
-  // Rezervované místo pro budoucí sekundární vrstvu školních akcí.
-  // Google Calendar ani jeho data se v této iteraci neimplementují.
-  schoolEvents: Array<{ id: string; title: string; collision: boolean }>
+  // Sekundární read-only vrstva; zatím se nenačítá ani nevykresluje a
+  // nijak nevstupuje do planneru.
+  schoolEvents: SchoolCalendarEvent[]
 }
 
 const extraCategoryMeta: Record<CalendarExtraCategory['key'], Pick<CalendarExtraCategory, 'symbol' | 'label'>> = {

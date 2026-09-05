@@ -13,6 +13,7 @@ import { pragueDateKey, validateAttendanceInterval } from './attendanceTime'
 import { attendanceStartValues } from './buildingScope'
 import { inferredBulkCompletable, isBulkCompletableTask } from './cleaningBulk'
 import { workerPlanningSaveError, type CleaningRotationSlot, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from './workerPlanning'
+import { calendarInvokeFailure, parseSchoolCalendarResponse, type SchoolCalendarEventsResult } from './schoolCalendarApi'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -184,6 +185,13 @@ export const schoolRepository = {
     if (missingFunction(error)) throw new Error('Ukládání profilu ještě není v databázi aktivní. Aplikujte migraci 02900.')
     if (error) throw new Error(error.message || 'Profil se nepodařilo uložit.')
     return String(data)
+  },
+  getSchoolCalendarEvents: async ({ from, to }: { from: string; to: string }): Promise<SchoolCalendarEventsResult> => {
+    const { data, error } = await client().functions.invoke('school-calendar-events', {
+      body: { from, to },
+    })
+    if (error) return calendarInvokeFailure(error)
+    return parseSchoolCalendarResponse(data)
   },
   profile: async (id: string): Promise<Profile | null> => {
     const extended = await client().from('profiles').select('id,full_name,role,access_role,active,is_owner,email,created_at,first_signed_in_at,last_signed_in_at').eq('id', id).maybeSingle()
