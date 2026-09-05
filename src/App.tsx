@@ -4072,7 +4072,7 @@ function CalendarDayDetail({ summary, plannerStatus, onRetry }: { summary: Calen
       <section className="calendar-day-summary"><b className="calendar-detail-label">KDO PRACUJE · {summary.workers.length}</b>{summary.workers.length > 0 ? <div className="calendar-worker-list">{summary.workers.map((worker) => <span key={`${worker.workerId}|${worker.buildingId}`}><i className={`worker-color-${worker.colorIndex}`}>{worker.initials}</i><b>{worker.workerName}</b><small>{worker.buildingName} · {worker.areaLabel}{worker.exception ? " · výjimečně" : ""}</small></span>)}</div> : <p className="hint">Nikdo není podle rozvrhu naplánovaný.</p>}</section>
       {plannerStatus === "loading" && <section className="calendar-plan-state" role="status">Načítám plán dne…</section>}
       {plannerStatus === "error" && <section className="calendar-plan-state error" role="alert"><b>Plán dne se nepodařilo načíst.</b><button onClick={onRetry}>Zkusit znovu</button></section>}
-      {plannerStatus === "unavailable" && <section className="calendar-plan-state error" role="alert"><b>Dynamický plán není dostupný.</b><button onClick={onRetry}>Zkusit znovu</button></section>}
+      {plannerStatus === "unavailable" && <section className="calendar-plan-state error" role="alert"><b>Plán úklidu teď není dostupný.</b><button onClick={onRetry}>Zkusit znovu</button></section>}
       {plannerStatus === "ready" && view.mainBlocks.length > 0 && <section className="calendar-day-summary"><b className="calendar-detail-label">HLAVNÍ PLÁN DNE</b><div className="calendar-main-plan">{view.mainBlocks.map(({ building, block }) => <article key={block.id}><span><b>{block.title}</b><small>{building}{block.queue ? " · otevřená fronta" : ""}</small></span><p>{block.queue ? "Postupujte od nejnižšího patra nahoru. Udělejte podle času." : block.rooms.map((room) => room.name).join(" · ")}</p></article>)}</div></section>}
       {plannerStatus === "ready" && view.hasFourthFloor && <section className="calendar-day-summary calendar-rotation-detail"><b className="calendar-detail-label">4. PATRO</b><p><strong>Mediační místnost + chodba</strong><span>{view.fourthFloorWorker ? `Na řadě: ${view.fourthFloorWorker}` : summary.fourthFloorRotation ? `Pozice ${summary.fourthFloorRotation.slotLabel} zatím není přiřazena` : "Bez přiřazeného pracovníka"}</span></p></section>}
       {plannerStatus === "ready" && view.extras.length > 0 && <section className="calendar-day-summary"><b className="calendar-detail-label">PRÁCE NAVÍC</b><div className="calendar-extra-detail">{view.extras.map((category) => <article key={category.key}><i>{category.symbol}</i><span><b>{category.label}{category.overdue ? " · PŘENESENO" : ""}</b><small>{category.taskCount} {category.taskCount === 1 ? "úkol" : category.taskCount < 5 ? "úkoly" : "úkolů"}</small><ul>{category.scopes.map((scope) => <li key={scope}>{scope}</li>)}</ul></span></article>)}</div></section>}
@@ -4284,6 +4284,7 @@ function CleaningCalendar({
   const [serverDynamicPlan, setServerDynamicPlan] = useState<Map<string, Map<string, DynamicSchoolPlanItem>> | null>(null);
   const [plannerStatus, setPlannerStatus] = useState<CalendarPlannerStatus>("loading");
   const [plannerReload, setPlannerReload] = useState(0);
+  const retryPlanner = useCallback(() => setPlannerReload((value) => value + 1), []);
   const [dayDetailOpen, setDayDetailOpen] = useState(false);
   const closeDayDetail = useHistoryLayer(dayDetailOpen, "calendar-day-detail", () => setDayDetailOpen(false));
   const closeCleaningDayEditor = useHistoryLayer(Boolean(editing), "cleaning-day-editor", () => setEditing(null));
@@ -4335,7 +4336,7 @@ function CleaningCalendar({
         setServerDynamicPlan(merged);
         setPlannerStatus("ready");
       })
-      .catch((error) => { console.error("Dynamický plán kalendáře se nepodařilo načíst:", error); if (active) { setServerDynamicPlan(null); setPlannerStatus("error"); } });
+      .catch((error) => { console.error("Plán úklidu v kalendáři se nepodařilo načíst:", error); if (active) { setServerDynamicPlan(null); setPlannerStatus("error"); } });
     return () => { active = false; };
   }, [gridDates, records, plannerReload]);
   const resolvedCalendarDays = useMemo(() => gridDates.map((date) => ({
@@ -4399,7 +4400,7 @@ function CleaningCalendar({
         <b>Kdo je v práci a co se dělá navíc.</b>
         <small>Plán se automaticky přepočítá podle skutečně naplánovaných pracovníků. Rutinní mikroúkoly kalendář nezaplňují.</small>
       </section>
-      {!planning.available && <div className="notice">Pracovní rozdělení se zobrazí po zkontrolování a aplikaci migrace 03100. Práce navíc zůstává dostupná.</div>}
+      {!planning.available && <div className="notice">Pracovní rozdělení teď není dostupné. Práce navíc zůstává dostupná.</div>}
       <div className="calendar-filter" role="group" aria-label="Filtrovat pracoviště"><button className={buildingFilter === "all" ? "active" : ""} onClick={() => setBuildingFilter("all")}>Vše</button>{buildings.map((building) => <button className={buildingFilter === building.id ? "active" : ""} key={building.id} onClick={() => setBuildingFilter(building.id)}>{building.name}</button>)}</div>
       <label className="calendar-worker-filter">Pracovník<select value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)}><option value="all">Všichni</option>{workerOptions.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></label>
       <details className="calendar-print-menu" onToggle={(event) => {
@@ -4408,10 +4409,12 @@ function CleaningCalendar({
         <summary>Vytisknout plán</summary>
         <label>Pracoviště<select value={effectivePrintBuildingFilter} onChange={(event) => setPrintBuildingFilter(event.target.value)}>{buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}<option value="all">Všechna pracoviště</option></select></label>
         <div><button disabled={plannerStatus !== "ready"} onClick={() => setPrintMode("week")}>Tento týden</button><button disabled={plannerStatus !== "ready"} onClick={() => setPrintMode("month")}>Tento měsíc</button></div>
-        {plannerStatus !== "ready" && <small>Nejdřív je potřeba načíst dynamický plán.</small>}
+        {plannerStatus === "loading" && <small role="status">Plán úklidu se načítá…</small>}
+        {plannerStatus === "error" && <div className="calendar-print-state error" role="alert"><small>Plán úklidu se nepodařilo načíst.</small><button type="button" onClick={retryPlanner}>Zkusit znovu</button></div>}
+        {plannerStatus === "unavailable" && <div className="calendar-print-state error" role="alert"><small>Plán úklidu teď není dostupný.</small><button type="button" onClick={retryPlanner}>Zkusit znovu</button></div>}
       </details>
       {!available && (
-        <div className="notice">Správa skutečných mimořádných a přesunutých dnů bude dostupná po zkontrolování a aplikaci migrace 01300.</div>
+        <div className="notice">Správa mimořádných a přesunutých dnů teď není dostupná.</div>
       )}
       {available && canManage && !editing && <button className="primary-action" onClick={() => setEditing("new")}>+ Přidat úklidový den</button>}
       {available && editing && (
@@ -4432,7 +4435,7 @@ function CleaningCalendar({
         </div>
         <CalendarLegend />
       </section>
-      {dayDetailOpen && <CalendarDayModal summary={selected} plannerStatus={plannerStatus} buildings={buildings} canManage={canManage} preferredBuildingId={buildingFilter === "all" ? null : buildingFilter} onRetry={() => setPlannerReload((value) => value + 1)} onCancelStandard={onSave} onRestoreCancellation={onRestoreCancellation} onClose={closeDayDetail} />}
+      {dayDetailOpen && <CalendarDayModal summary={selected} plannerStatus={plannerStatus} buildings={buildings} canManage={canManage} preferredBuildingId={buildingFilter === "all" ? null : buildingFilter} onRetry={retryPlanner} onCancelStandard={onSave} onRestoreCancellation={onRestoreCancellation} onClose={closeDayDetail} />}
       <section className="calendar-list">
         <h2>Plánované výjimky</h2>
         {future.map((item) => (

@@ -444,6 +444,23 @@ test('Kalendář během načítání nebo chyby nepoužije starý statický plá
   assert.match(app, /setPlannerStatus\("loading"\)[\s\S]*setServerDynamicPlan\(null\)/)
 })
 
+test('Kalendář rozlišuje stav tisku lidskými texty a retry používá plannerReload', () => {
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const calendar = app.slice(app.indexOf('function CleaningCalendar'), app.indexOf('function isExtraordinaryBaselineTask'))
+  const printMenu = calendar.slice(calendar.indexOf('className="calendar-print-menu"'), calendar.indexOf('{!available'))
+  const dayDetail = app.slice(app.indexOf('function CalendarDayDetail'), app.indexOf('function CalendarDayModal'))
+
+  assert.match(printMenu, /plannerStatus === "loading"[^\n]*Plán úklidu se načítá…/)
+  assert.match(printMenu, /plannerStatus === "error"[^\n]*Plán úklidu se nepodařilo načíst\.[^\n]*Zkusit znovu/)
+  assert.match(printMenu, /plannerStatus === "unavailable"[^\n]*Plán úklidu teď není dostupný\.[^\n]*Zkusit znovu/)
+  assert.doesNotMatch(printMenu, /\{plannerStatus !== "ready" && <small|Nejdřív je potřeba načíst dynamický plán/)
+  assert.match(dayDetail, /plannerStatus === "unavailable"[^\n]*Plán úklidu teď není dostupný\./)
+  assert.doesNotMatch(dayDetail, /Dynamický plán není dostupný/)
+  assert.match(calendar, /const retryPlanner = useCallback\(\(\) => setPlannerReload\(\(value\) => value \+ 1\)/)
+  assert.match(calendar, /onRetry=\{retryPlanner\}/)
+  assert.match(calendar, /\}, \[gridDates, records, plannerReload\]\)/, 'změna měsíce přes gridDates musí dál automaticky načíst plán')
+})
+
 test('Plán dne zachová overdue metadata, schodiště a skutečného pracovníka 4. patra', () => {
   const date = '2026-09-07'
   const planning = {
