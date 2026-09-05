@@ -98,6 +98,207 @@ h1 {
   border: 1px solid #e0ebe7;
   border-radius: 16px;
 }
+
+/* Shared school launcher and cafeteria foundation. */
+.system-app,
+.cafeteria-app {
+  min-height: 100dvh;
+  padding-bottom: 6.5rem;
+}
+
+.system-header,
+.cafeteria-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.system-header h1,
+.cafeteria-header h1 {
+  margin-bottom: 0;
+}
+
+.system-signout,
+.back-to-modules {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.system-signout {
+  width: auto;
+  padding-inline: 0.85rem;
+}
+
+.back-to-modules {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 2rem;
+  padding: 0;
+}
+
+.system-welcome {
+  color: #67817c;
+  margin: 0.75rem 0 1.25rem;
+}
+
+.module-list,
+.cafeteria-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.module-card {
+  width: 100%;
+  min-height: 86px;
+  display: grid;
+  grid-template-columns: 2.6rem 1fr auto;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 1rem;
+  text-align: left;
+  border-radius: 18px;
+}
+
+.module-card > span:first-child {
+  font-size: 1.8rem;
+}
+
+.module-card > span:nth-child(2),
+.diner-list > div > span:last-child,
+.role-user {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.module-card small,
+.diner-list small,
+.role-user small,
+.account-line small {
+  color: #67817c;
+}
+
+.module-card i {
+  font-size: 1.5rem;
+  font-style: normal;
+}
+
+.system-empty,
+.cafeteria-state,
+.cafeteria-empty {
+  margin-top: 1.5rem;
+  text-align: center;
+}
+
+.system-empty > span,
+.cafeteria-empty > span {
+  font-size: 2rem;
+}
+
+.system-note {
+  color: #67817c;
+  text-align: center;
+  margin-top: 1.25rem;
+}
+
+.cafeteria-header > div {
+  flex: 1;
+}
+
+.cafeteria-role-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.9rem 0;
+}
+
+.cafeteria-role-picker select {
+  width: auto;
+  min-height: 44px;
+}
+
+.meal-card > small {
+  display: block;
+  color: #67817c;
+  margin-bottom: 0.65rem;
+}
+
+.meal-card > div + div {
+  border-top: 1px solid #e0ebe7;
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+}
+
+.diner-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.diner-list > div {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 52px;
+  padding-block: 0.4rem;
+}
+
+.account-line,
+.settings-summary p {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid #e0ebe7;
+  padding-top: 0.8rem;
+}
+
+.admin-counts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.55rem;
+}
+
+.admin-counts article {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.85rem 0.6rem;
+  text-align: center;
+}
+
+.admin-counts b {
+  font-size: 1.5rem;
+}
+
+.admin-counts span {
+  color: #67817c;
+  font-size: 0.78rem;
+}
+
+.cafeteria-nav {
+  grid-template-columns: repeat(var(--cafeteria-nav-count, 5), 1fr);
+}
+
+.cafeteria-nav button {
+  min-width: 0;
+}
+
+.cafeteria-nav span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (min-width: 760px) {
+  .system-app,
+  .cafeteria-app {
+    max-width: 680px;
+  }
+
+  .module-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .plan-state h2, .plan-state p { margin: 0; }
 .plan-state p { color: #67817c; overflow-wrap: anywhere; }
 .plan-state button, .plan-stale-error button {

@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
-import App from './App'
+import SystemApp from './system/SystemApp'
 import './styles.css'
 
 registerSW({
@@ -12,4 +12,4 @@ registerSW({
     window.setInterval(() => void registration.update(), 60 * 60 * 1000)
   },
 })
-createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)
+createRoot(document.getElementById('root')!).render(<StrictMode><SystemApp /></StrictMode>)

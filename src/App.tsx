@@ -141,7 +141,7 @@ function useHistoryLayer(active: boolean, layer: string, onDismiss: () => void) 
   }, []);
 }
 
-export default function App() {
+export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } = {}) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -1106,6 +1106,7 @@ export default function App() {
               >
                 Upravit profil
               </button>
+              {onOpenLauncher && <button onClick={onOpenLauncher}>Zpět na moduly</button>}
               <button onClick={() => schoolRepository.signOut()}>Odhlásit se</button>
             </div>
           )}

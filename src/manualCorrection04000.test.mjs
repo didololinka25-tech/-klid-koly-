@@ -12,9 +12,12 @@ const migration04000 = readFileSync(
 );
 
 function gitBlobSha(buffer) {
+  // Git stores this text migration with LF. Windows checkouts may expose CRLF,
+  // so hash the canonical Git text rather than the platform checkout bytes.
+  const canonical = Buffer.from(buffer.toString("utf8").replace(/\r\n/g, "\n"));
   return createHash("sha1")
-    .update(`blob ${buffer.length}\0`)
-    .update(buffer)
+    .update(`blob ${canonical.length}\0`)
+    .update(canonical)
     .digest("hex");
 }
 
