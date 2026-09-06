@@ -17,4 +17,6 @@ Až po vyřešení nejasností lze spustit explicitní zápis:
 pnpm import:cafeteria-orders -- --file 'C:\bezpecna\cesta\obed.xlsx' --apply
 ```
 
-Všechny řádky označené `CREATE` se vloží v jedné transakci. Existující kombinace strávník/jídelní den se hlásí jako `SKIP_ALREADY_EXISTS`, takže opakovaný běh nevytváří duplicity. Audit objednávek vytváří stávající databázový trigger.
+Všechny řádky označené `CREATE` se vloží v jedné transakci. Existující kombinace strávník/jídelní den se hlásí jako `SKIP_ALREADY_EXISTS`, takže opakovaný běh nevytváří duplicity. Audit objednávek vytváří stávající databázový trigger a zachovává `actor_source = system`.
+
+Pokud při APPLY již proběhla uzávěrka daného jídelního dne, importer posune právě vytvořený auditní event na jednu sekundu před `cutoff_at`. Jde o syntetický legacy cutoff snapshot, díky kterému se stará objednávka správně započítá do stavu při uzávěrce; tento čas nepředstavuje skutečný historický okamžik, kdy člověk objednávku v původní tabulce zadal. U dní před uzávěrkou zůstává triggerem zapsaný čas beze změny.

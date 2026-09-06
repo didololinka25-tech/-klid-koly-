@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import ExcelJS from 'exceljs'
+import { insertLegacyOrder, legacyApplySql } from '../scripts/lib/cafeteriaLegacyApply.mjs'
 import {
   extractMenuColors, extractOrderCells, IMPORT_STATUSES, matchDiner, matchVariant, normalizeFontColor, parseLegacyQuantity, planImport,
 } from '../scripts/lib/cafeteriaLegacyImport.mjs'
@@ -95,6 +96,39 @@ test('importer je defaultně dry-run a apply je explicitní transakce', async ()
   assert.match(cli, /await client\.query\('rollback'\)/)
   assert.match(cli, /await client\.query\('commit'\)/)
   assert.match(cli, /SKIP_ALREADY_EXISTS/)
+})
+
+function legacyApplyClient({ cutoffPassed }) {
+  const queries = []
+  return {
+    queries,
+    async query(sql, values) {
+      queries.push({ sql, values })
+      if (/insert into public\.cafeteria_orders/i.test(sql)) return { rows: [{ id: 'imported-order-1' }] }
+      return { rows: [{ event_id: 'event-1', actor_source: 'system', cutoff_passed: cutoffPassed, snapshot_adjusted: cutoffPassed }] }
+    },
+  }
+}
+
+test('APPLY po cutoffu přesune právě vytvořený system event do syntetického cutoff snapshotu', async () => {
+  const client = legacyApplyClient({ cutoffPassed: true })
+  const result = await insertLegacyOrder(client, { diner, mealDay: day, variant: variants[0], quantity: 2 })
+
+  assert.deepEqual(result, { orderId: 'imported-order-1', cutoffPassed: true, snapshotAdjusted: true })
+  assert.deepEqual(client.queries[1].values, ['imported-order-1'])
+  assert.match(legacyApplySql.snapshotEvent, /e\.order_id = \$1 and e\.event_type = 'ordered'/i)
+  assert.match(legacyApplySql.snapshotEvent, /actor_source = 'system'/i)
+  assert.match(legacyApplySql.snapshotEvent, /cutoff_at <= now\(\)/i)
+  assert.match(legacyApplySql.snapshotEvent, /occurred_at = imported_event\.cutoff_at - interval '1 second'/i)
+})
+
+test('APPLY před cutoffem ponechá čas právě vytvořeného eventu beze změny', async () => {
+  const client = legacyApplyClient({ cutoffPassed: false })
+  const result = await insertLegacyOrder(client, { diner, mealDay: day, variant: variants[0], quantity: 1 })
+
+  assert.deepEqual(result, { orderId: 'imported-order-1', cutoffPassed: false, snapshotAdjusted: false })
+  assert.match(legacyApplySql.snapshotEvent, /and imported_event\.cutoff_passed/i)
+  assert.doesNotMatch(legacyApplySql.snapshotEvent, /set actor_source/i)
 })
 
 test('hardening migrace je synchronizována pod produkční verzí', async () => {

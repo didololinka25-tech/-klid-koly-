@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import ExcelJS from 'exceljs'
 import pg from 'pg'
+import { insertLegacyOrder } from './lib/cafeteriaLegacyApply.mjs'
 import { extractMenuColors, extractOrderCells, IMPORT_STATUSES, planImport } from './lib/cafeteriaLegacyImport.mjs'
 
 const MENU_SHEET = 'JÍDELNÍČEK 26/27'
@@ -32,11 +33,7 @@ async function run() {
     printReport(plan, database.diners.length, apply)
     if (apply) {
       for (const item of plan.filter((row) => row.status === IMPORT_STATUSES.CREATE)) {
-        await client.query(
-          `insert into public.cafeteria_orders (diner_id, meal_day_id, meal_variant_id, quantity, status)
-           values ($1, $2, $3, $4, 'ordered')`,
-          [item.diner.id, item.mealDay.id, item.variant.id, item.quantity],
-        )
+        await insertLegacyOrder(client, item)
       }
       await client.query('commit')
       console.log(`Zapsáno ${plan.filter((row) => row.status === IMPORT_STATUSES.CREATE).length} objednávek v jedné transakci.`)
