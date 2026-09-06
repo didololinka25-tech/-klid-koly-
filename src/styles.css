@@ -289,6 +289,208 @@ h1 {
   text-overflow: ellipsis;
 }
 
+.cafeteria-ordering {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.diner-chips {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 0.2rem 0 0.35rem;
+  scrollbar-width: none;
+}
+
+.diner-chips button,
+.this-week-button {
+  width: auto;
+  min-height: 44px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 0.55rem 0.9rem;
+  background: #fff;
+  color: #165e56;
+  border: 1px solid #bcd5cf;
+}
+
+.diner-chips button.active {
+  background: #165e56;
+  color: #fff;
+  border-color: #165e56;
+}
+
+.ordering-diner {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.ordering-diner small {
+  color: #67817c;
+  text-align: right;
+}
+
+.week-picker {
+  display: grid;
+  grid-template-columns: 48px 1fr 48px;
+  align-items: center;
+  gap: 0.45rem;
+  text-align: center;
+}
+
+.week-picker button {
+  min-height: 48px;
+  padding: 0;
+  border-radius: 14px;
+  font-size: 1.7rem;
+  background: #fff;
+  color: #165e56;
+  border: 1px solid #d4e5e0;
+}
+
+.this-week-button {
+  justify-self: center;
+}
+
+.ordering-loading {
+  min-height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  color: #67817c;
+}
+
+.bulk-order-button {
+  min-height: 50px;
+  border-radius: 14px;
+  font-weight: 800;
+}
+
+.bulk-summary {
+  padding: 0.7rem 0.85rem;
+  border-radius: 12px;
+  background: #eef7f4;
+  color: #315f57;
+}
+
+.bulk-summary p {
+  margin: 0.25rem 0;
+}
+
+.meal-week-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.ordering-day {
+  padding: 1rem;
+}
+
+.ordering-day h2 {
+  margin: 0 0 0.8rem;
+  font-size: 1.05rem;
+}
+
+.ordering-day.no-menu {
+  color: #67817c;
+  box-shadow: none;
+}
+
+.ordering-day.no-menu p,
+.single-meal p,
+.ordering-day .hint {
+  margin-bottom: 0;
+}
+
+.meal-variants {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0;
+  border: 0;
+}
+
+.meal-variants legend {
+  margin-bottom: 0.35rem;
+  color: #67817c;
+  font-size: 0.84rem;
+}
+
+.meal-variants label {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #dce9e5;
+  border-radius: 12px;
+}
+
+.meal-variants input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+
+.meal-variants span {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.meal-variants small {
+  color: #67817c;
+}
+
+.meal-price {
+  margin: 0.85rem 0 0.35rem;
+  font-weight: 800;
+  color: #165e56;
+}
+
+.order-status,
+.cutoff-status,
+.late-result,
+.day-operation-message {
+  margin: 0.45rem 0;
+}
+
+.late-result,
+.day-operation-message {
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  background: #eef7f4;
+}
+
+.late-result.pending {
+  background: #fff5dd;
+  color: #725416;
+}
+
+.order-actions {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+
+.order-actions button {
+  min-height: 46px;
+  border-radius: 12px;
+  font-weight: 800;
+}
+
+.order-actions button.secondary {
+  background: #eef5f3;
+  color: #165e56;
+}
+
+.order-actions button.danger {
+  color: #9a3d32;
+  border-color: #efd3cf;
+}
+
 @media (min-width: 760px) {
   .system-app,
   .cafeteria-app {

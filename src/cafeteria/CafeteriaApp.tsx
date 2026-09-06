@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Profile } from '../schoolRepository'
 import type { CafeteriaRole } from '../system/access'
+import { CafeteriaOrdering } from './CafeteriaOrdering'
 import { cafeteriaRepository } from './cafeteriaRepository'
 import type { CafeteriaData, MealDay } from './types'
 
-const emptyData: CafeteriaData = { meals: [], families: [], diners: [], accounts: [], roleUsers: [], settings: null }
+const emptyData: CafeteriaData = {
+  meals: [], families: [], diners: [], orderingDiners: [], accounts: [],
+  ownFamilies: [], ownDiners: [], ownAccounts: [], roleUsers: [], settings: null,
+}
 const roleLabels: Record<CafeteriaRole, string> = { parent: 'Rodič', diner: 'Strávník', kitchen: 'Kuchyně', admin: 'Správa' }
 
 export function CafeteriaApp({ profile, roles, onOpenLauncher, onSignOut }: { profile: Profile; roles: CafeteriaRole[]; onOpenLauncher: () => void; onSignOut: () => Promise<void> }) {
-  const [role, setRole] = useState<CafeteriaRole>(() => roles.includes('admin') ? 'admin' : roles[0])
+  const [role, setRole] = useState<CafeteriaRole>(() => roles.includes('parent') ? 'parent' : roles.includes('diner') ? 'diner' : roles.includes('admin') ? 'admin' : roles[0])
   const [section, setSection] = useState('')
   const [data, setData] = useState<CafeteriaData>(emptyData)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -18,12 +22,12 @@ export function CafeteriaApp({ profile, roles, onOpenLauncher, onSignOut }: { pr
 
   useEffect(() => {
     setStatus('loading')
-    cafeteriaRepository.load(roles).then((next) => { setData(next); setStatus('ready') }).catch((error) => {
+    cafeteriaRepository.load(roles, profile.id).then((next) => { setData(next); setStatus('ready') }).catch((error) => {
       console.error('Jídelnu se nepodařilo načíst:', error)
       setMessage(error instanceof Error ? error.message : 'Jídelnu se nepodařilo načíst.')
       setStatus('error')
     })
-  }, [roles.join('|')])
+  }, [profile.id, roles.join('|')])
 
   return (
     <main className="app cafeteria-app">
@@ -42,7 +46,8 @@ export function CafeteriaApp({ profile, roles, onOpenLauncher, onSignOut }: { pr
 }
 
 function CafeteriaContent({ role, section, data }: { role: CafeteriaRole; section: string; data: CafeteriaData }) {
-  if (['Obědy', 'Jídelníček'].includes(section)) return <MealList meals={data.meals} />
+  if ((role === 'parent' && section === 'Obědy') || (role === 'diner' && section === 'Jídelníček')) return <CafeteriaOrdering diners={data.orderingDiners} />
+  if (section === 'Jídelníček') return <MealList meals={data.meals} />
   if (role === 'kitchen' && section === 'Dnes') return <MealList meals={data.meals.filter((meal) => meal.mealDate === localDateKey())} today />
   if (section === 'Platby' || section === 'Finance') return <EmptyState icon="💰" text="Finanční přehled bude dostupný po aktivaci plateb." />
   if (section === 'Žádosti') return <EmptyState icon="🔔" text="Žádosti budou dostupné po aktivaci změn objednávek." />
@@ -60,8 +65,8 @@ function MealList({ meals, today = false }: { meals: MealDay[]; today?: boolean 
 }
 
 function FamilyView({ data }: { data: CafeteriaData }) {
-  if (!data.families.length) return <EmptyState icon="👨‍👩‍👧" text="Rodina zatím není propojena." />
-  return <section className="cafeteria-list">{data.families.map((family) => <article className="panel" key={family.id}><h2>{family.displayName}</h2><DinerList diners={data.diners.filter((diner) => diner.familyId === family.id)} empty="Rodina zatím nemá propojené strávníky." />{data.accounts.filter((account) => account.familyId === family.id).map((account) => <p className="account-line" key={account.id}><b>{account.label}</b>{account.variableSymbol && <small>VS {account.variableSymbol}</small>}</p>)}</article>)}</section>
+  if (!data.ownFamilies.length) return <EmptyState icon="👨‍👩‍👧" text="Rodina zatím není propojena." />
+  return <section className="cafeteria-list">{data.ownFamilies.map((family) => <article className="panel" key={family.id}><h2>{family.displayName}</h2><DinerList diners={data.ownDiners.filter((diner) => diner.familyId === family.id)} empty="Rodina zatím nemá propojené strávníky." />{data.ownAccounts.filter((account) => account.familyId === family.id).map((account) => <p className="account-line" key={account.id}><b>{account.label}</b>{account.variableSymbol && <small>VS {account.variableSymbol}</small>}</p>)}</article>)}</section>
 }
 
 function DinerList({ diners, empty }: { diners: CafeteriaData['diners']; empty: string }) {

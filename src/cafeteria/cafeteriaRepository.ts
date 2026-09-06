@@ -1,113 +1,364 @@
 import { supabase } from '../supabase'
 import { isMissingCafeteriaSchema, type CafeteriaRole } from '../system/access'
-import type { CafeteriaAccount, CafeteriaData, CafeteriaDiner, CafeteriaFamily, CafeteriaRoleUser, CafeteriaSettings, MealDay } from './types'
+import { buildMealWeek, bulkDayDecision, pragueDateKey } from './orderingModel'
+import type {
+  BulkWeekResult,
+  CafeteriaAccount,
+  CafeteriaData,
+  CafeteriaDiner,
+  CafeteriaFamily,
+  CafeteriaLateChangeRequest,
+  CafeteriaLateRequestType,
+  CafeteriaMealWeek,
+  CafeteriaOrder,
+  CafeteriaPriceRule,
+  CafeteriaRoleUser,
+  CafeteriaSettings,
+  MealDay,
+  WeekRange,
+} from './types'
+
+type DbError = { code?: string; message?: string } | null
+type DinerRow = {
+  id: string
+  diner_type: 'child' | 'adult'
+  full_name: string
+  profile_id: string | null
+  family_id: string | null
+  account_id: string
+  portion_category_id: string
+  cafeteria_portion_categories: { name: string } | Array<{ name: string }> | null
+}
+type MealDayRow = { id: string; meal_date: string; cutoff_at: string; note: string | null; status: string }
+type MealVariantRow = { id: string; meal_day_id: string; name: string; note: string | null; sort_order: number }
+type OrderRow = {
+  id: string
+  diner_id: string
+  meal_day_id: string
+  meal_variant_id: string
+  account_id: string
+  portion_category_id: string
+  unit_price: number | string
+  status: 'ordered' | 'cancelled'
+  ordered_at: string
+  cancelled_at: string | null
+}
+type PriceRuleRow = { id: string; portion_category_id: string; valid_from: string; valid_to: string | null; price: number | string; active: boolean }
+type LateRequestRow = {
+  id: string
+  order_id: string | null
+  diner_id: string
+  meal_day_id: string
+  request_type: CafeteriaLateRequestType
+  requested_variant_id: string | null
+  status: 'pending' | 'approved' | 'denied'
+  billing_outcome: 'charged' | 'not_charged' | 'not_applicable' | null
+  requested_at: string
+}
 
 function client() {
   if (!supabase) throw new Error('Supabase není nakonfigurovaný.')
   return supabase
 }
 
-const failIfError = (error: { code?: string; message?: string } | null) => {
-  if (isMissingCafeteriaSchema(error)) throw new Error('Jídelna zatím není aktivována.')
-  if (error) throw error
+const knownDatabaseMessages = [
+  'Pro tento den je nutné vybrat variantu jídla.',
+  'Pro tento den není aktivní žádná varianta jídla.',
+  'Vybraná varianta nepatří k tomuto jídelnímu dni.',
+  'Pro tuto porci není nastavená platná cena.',
+  'Strávník není aktivní.',
+  'Strávník není pro tento den aktivní.',
+  'Jídelní den není zveřejněný.',
+  'Uzávěrka ještě neproběhla; použijte běžnou změnu objednávky.',
+  'Není aktivní objednávka, kterou lze pozdě zrušit.',
+  'Není aktivní objednávka, u které lze změnit variantu.',
+  'Oběd už je objednaný.',
+  'Je nutné vybrat variantu jídla.',
+]
+
+export function cafeteriaErrorMessage(error: unknown): string {
+  const value = error && typeof error === 'object' ? error as { code?: string; message?: string } : null
+  if (isMissingCafeteriaSchema(value)) return 'Jídelna zatím není aktivována.'
+  const message = value?.message ?? (error instanceof Error ? error.message : '')
+  const known = knownDatabaseMessages.find((item) => message.includes(item))
+  if (known) return known
+  if (message.includes('Jídelna zatím není aktivována.')) return 'Jídelna zatím není aktivována.'
+  if (value?.code === '23505' || message.includes('cafeteria_late_change_one_pending')) return 'Žádost už čeká na potvrzení.'
+  return 'Operaci se nepodařilo dokončit. Zkuste to prosím znovu.'
 }
 
-async function loadMeals(includeUnpublished = false): Promise<MealDay[]> {
+const failIfError = (error: DbError) => {
+  if (error) throw new Error(cafeteriaErrorMessage(error))
+}
+
+const dinerSelect = 'id,diner_type,full_name,profile_id,family_id,account_id,portion_category_id,cafeteria_portion_categories(name)'
+const orderSelect = 'id,diner_id,meal_day_id,meal_variant_id,account_id,portion_category_id,unit_price,status,ordered_at,cancelled_at'
+const lateRequestSelect = 'id,order_id,diner_id,meal_day_id,request_type,requested_variant_id,status,billing_outcome,requested_at'
+
+const mapDiner = (row: DinerRow): CafeteriaDiner => {
+  const portion = Array.isArray(row.cafeteria_portion_categories) ? row.cafeteria_portion_categories[0] : row.cafeteria_portion_categories
+  return {
+    id: row.id,
+    dinerType: row.diner_type,
+    fullName: row.full_name,
+    profileId: row.profile_id,
+    familyId: row.family_id,
+    accountId: row.account_id,
+    portionCategoryId: row.portion_category_id,
+    portionName: portion?.name ?? null,
+  }
+}
+
+const mapOrder = (row: OrderRow): CafeteriaOrder => ({
+  id: row.id,
+  dinerId: row.diner_id,
+  mealDayId: row.meal_day_id,
+  mealVariantId: row.meal_variant_id,
+  accountId: row.account_id,
+  portionCategoryId: row.portion_category_id,
+  unitPrice: Number(row.unit_price),
+  status: row.status,
+  orderedAt: row.ordered_at,
+  cancelledAt: row.cancelled_at,
+})
+
+const mapLateRequest = (row: LateRequestRow): CafeteriaLateChangeRequest => ({
+  id: row.id,
+  orderId: row.order_id,
+  dinerId: row.diner_id,
+  mealDayId: row.meal_day_id,
+  requestType: row.request_type,
+  requestedVariantId: row.requested_variant_id,
+  status: row.status,
+  billingOutcome: row.billing_outcome,
+  requestedAt: row.requested_at,
+})
+
+async function loadMeals(includeUnpublished = false, week?: WeekRange): Promise<MealDay[]> {
   const db = client()
   let dayQuery = db.from('cafeteria_meal_days').select('id,meal_date,cutoff_at,note,status').order('meal_date')
   if (!includeUnpublished) dayQuery = dayQuery.eq('status', 'published')
+  if (week) dayQuery = dayQuery.gte('meal_date', week.start).lte('meal_date', week.end)
   const days = await dayQuery
   failIfError(days.error)
-  const ids = (days.data ?? []).map((row: any) => row.id)
+  const dayRows = (days.data ?? []) as unknown as MealDayRow[]
+  const ids = dayRows.map((row) => row.id)
   const variants = ids.length
     ? await db.from('cafeteria_meal_variants').select('id,meal_day_id,name,note,sort_order').in('meal_day_id', ids).eq('active', true).order('sort_order')
     : { data: [], error: null }
   failIfError(variants.error)
-  return (days.data ?? []).map((row: any) => ({
+  const variantRows = (variants.data ?? []) as unknown as MealVariantRow[]
+  return dayRows.map((row) => ({
     id: row.id,
     mealDate: row.meal_date,
     cutoffAt: row.cutoff_at,
     note: row.note ?? null,
-    variants: (variants.data ?? []).filter((variant: any) => variant.meal_day_id === row.id).map((variant: any) => ({
-      id: variant.id, mealDayId: variant.meal_day_id, name: variant.name, note: variant.note ?? null, sortOrder: Number(variant.sort_order),
+    variants: variantRows.filter((variant) => variant.meal_day_id === row.id).map((variant) => ({
+      id: variant.id,
+      mealDayId: variant.meal_day_id,
+      name: variant.name,
+      note: variant.note ?? null,
+      sortOrder: Number(variant.sort_order),
     })),
   }))
 }
 
-async function loadFamilies(): Promise<{ families: CafeteriaFamily[]; diners: CafeteriaDiner[]; accounts: CafeteriaAccount[] }> {
-  const db = client()
-  const links = await db.from('cafeteria_family_users').select('family_id').eq('active', true)
+async function familyIdsForUser(userId: string): Promise<string[]> {
+  const today = pragueDateKey()
+  const links = await client().from('cafeteria_family_users').select('family_id')
+    .eq('user_id', userId).eq('active', true).lte('valid_from', today).or(`valid_to.is.null,valid_to.gte.${today}`)
   failIfError(links.error)
-  const familyIds = [...new Set((links.data ?? []).map((row: any) => String(row.family_id)))]
+  return [...new Set((links.data ?? []).map((row) => String(row.family_id)))]
+}
+
+async function loadAvailableDiners(userId: string, roles: CafeteriaRole[]): Promise<CafeteriaDiner[]> {
+  const db = client()
+  const familyIds = roles.includes('parent') ? await familyIdsForUser(userId) : []
+  const requests = []
+  if (familyIds.length) requests.push(db.from('cafeteria_diners').select(dinerSelect).in('family_id', familyIds).eq('active', true).order('full_name'))
+  if (roles.includes('diner')) requests.push(db.from('cafeteria_diners').select(dinerSelect).eq('profile_id', userId).eq('active', true).order('full_name'))
+  if (!requests.length) return []
+  const results = await Promise.all(requests)
+  const diners = new Map<string, CafeteriaDiner>()
+  for (const result of results) {
+    failIfError(result.error)
+    for (const row of (result.data ?? []) as unknown as DinerRow[]) diners.set(row.id, mapDiner(row))
+  }
+  return [...diners.values()].sort((a, b) => a.fullName.localeCompare(b.fullName, 'cs'))
+}
+
+async function loadFamilies(userId: string): Promise<{ families: CafeteriaFamily[]; diners: CafeteriaDiner[]; accounts: CafeteriaAccount[] }> {
+  const db = client()
+  const familyIds = await familyIdsForUser(userId)
   if (!familyIds.length) return { families: [], diners: [], accounts: [] }
   const [families, diners, accounts] = await Promise.all([
     db.from('cafeteria_families').select('id,display_name').in('id', familyIds).eq('active', true).order('display_name'),
-    db.from('cafeteria_diners').select('id,diner_type,full_name,family_id,portion_category_id,cafeteria_portion_categories(name)').in('family_id', familyIds).eq('active', true).order('full_name'),
+    db.from('cafeteria_diners').select(dinerSelect).in('family_id', familyIds).eq('active', true).order('full_name'),
     db.from('cafeteria_accounts').select('id,family_id,label,variable_symbol').in('family_id', familyIds).eq('active', true).order('label'),
   ])
   failIfError(families.error); failIfError(diners.error); failIfError(accounts.error)
   return {
-    families: (families.data ?? []).map((row: any) => ({ id: row.id, displayName: row.display_name })),
-    diners: (diners.data ?? []).map(mapDiner),
-    accounts: (accounts.data ?? []).map(mapAccount),
+    families: ((families.data ?? []) as Array<{ id: string; display_name: string }>).map((row) => ({ id: row.id, displayName: row.display_name })),
+    diners: ((diners.data ?? []) as unknown as DinerRow[]).map(mapDiner),
+    accounts: ((accounts.data ?? []) as Array<{ id: string; family_id: string | null; label: string; variable_symbol: string | null }>).map(mapAccount),
   }
 }
 
-async function loadOwnDiners(): Promise<CafeteriaDiner[]> {
-  const result = await client().from('cafeteria_diners').select('id,diner_type,full_name,family_id,portion_category_id,cafeteria_portion_categories(name)').eq('active', true).order('full_name')
+async function loadOwnDiners(userId: string): Promise<CafeteriaDiner[]> {
+  const result = await client().from('cafeteria_diners').select(dinerSelect).eq('profile_id', userId).eq('active', true).order('full_name')
   failIfError(result.error)
-  return (result.data ?? []).map(mapDiner)
+  return ((result.data ?? []) as unknown as DinerRow[]).map(mapDiner)
 }
 
-const mapDiner = (row: any): CafeteriaDiner => ({
+const mapAccount = (row: { id: string; family_id: string | null; label: string; variable_symbol: string | null }): CafeteriaAccount => ({
   id: row.id,
-  dinerType: row.diner_type,
-  fullName: row.full_name,
   familyId: row.family_id ?? null,
-  portionName: Array.isArray(row.cafeteria_portion_categories) ? row.cafeteria_portion_categories[0]?.name ?? null : row.cafeteria_portion_categories?.name ?? null,
+  label: row.label,
+  variableSymbol: row.variable_symbol ?? null,
 })
-
-const mapAccount = (row: any): CafeteriaAccount => ({ id: row.id, familyId: row.family_id ?? null, label: row.label, variableSymbol: row.variable_symbol ?? null })
 
 async function loadAdminData(): Promise<{ families: CafeteriaFamily[]; diners: CafeteriaDiner[]; accounts: CafeteriaAccount[]; roleUsers: CafeteriaRoleUser[]; settings: CafeteriaSettings | null }> {
   const db = client()
   const [families, diners, accounts, roles, settings] = await Promise.all([
     db.from('cafeteria_families').select('id,display_name').order('display_name'),
-    db.from('cafeteria_diners').select('id,diner_type,full_name,family_id,portion_category_id,cafeteria_portion_categories(name)').order('full_name'),
+    db.from('cafeteria_diners').select(dinerSelect).order('full_name'),
     db.from('cafeteria_accounts').select('id,family_id,label,variable_symbol').order('label'),
     db.from('user_module_roles').select('user_id,role,profiles(full_name)').eq('module', 'cafeteria').order('user_id'),
     db.from('cafeteria_settings').select('cutoff_days_before,cutoff_time,payment_mode,allow_negative_balance,negative_balance_limit').eq('id', true).maybeSingle(),
   ])
   ;[families, diners, accounts, roles, settings].forEach((result) => failIfError(result.error))
   const roleUsers = new Map<string, CafeteriaRoleUser>()
-  for (const row of roles.data ?? []) {
-    const profile: any = Array.isArray((row as any).profiles) ? (row as any).profiles[0] : (row as any).profiles
-    const current: CafeteriaRoleUser = roleUsers.get((row as any).user_id) ?? { userId: (row as any).user_id, fullName: profile?.full_name ?? 'Uživatel', roles: [] }
-    current.roles.push((row as any).role)
+  for (const row of (roles.data ?? []) as unknown as Array<{ user_id: string; role: string; profiles: { full_name: string } | Array<{ full_name: string }> | null }>) {
+    const linkedProfile = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles
+    const current = roleUsers.get(row.user_id) ?? { userId: row.user_id, fullName: linkedProfile?.full_name ?? 'Uživatel', roles: [] }
+    current.roles.push(row.role)
     roleUsers.set(current.userId, current)
   }
-  const settingRow: any = settings.data
+  const settingRow = settings.data as null | { cutoff_days_before: number; cutoff_time: string; payment_mode: CafeteriaSettings['paymentMode']; allow_negative_balance: boolean; negative_balance_limit: number | string | null }
   return {
-    families: (families.data ?? []).map((row: any) => ({ id: row.id, displayName: row.display_name })),
-    diners: (diners.data ?? []).map(mapDiner),
-    accounts: (accounts.data ?? []).map(mapAccount),
+    families: ((families.data ?? []) as Array<{ id: string; display_name: string }>).map((row) => ({ id: row.id, displayName: row.display_name })),
+    diners: ((diners.data ?? []) as unknown as DinerRow[]).map(mapDiner),
+    accounts: ((accounts.data ?? []) as Array<{ id: string; family_id: string | null; label: string; variable_symbol: string | null }>).map(mapAccount),
     roleUsers: [...roleUsers.values()],
     settings: settingRow ? {
-      cutoffDaysBefore: Number(settingRow.cutoff_days_before), cutoffTime: String(settingRow.cutoff_time).slice(0, 5), paymentMode: settingRow.payment_mode,
-      allowNegativeBalance: Boolean(settingRow.allow_negative_balance), negativeBalanceLimit: settingRow.negative_balance_limit == null ? null : Number(settingRow.negative_balance_limit),
+      cutoffDaysBefore: Number(settingRow.cutoff_days_before),
+      cutoffTime: String(settingRow.cutoff_time).slice(0, 5),
+      paymentMode: settingRow.payment_mode,
+      allowNegativeBalance: Boolean(settingRow.allow_negative_balance),
+      negativeBalanceLimit: settingRow.negative_balance_limit == null ? null : Number(settingRow.negative_balance_limit),
     } : null,
   }
 }
 
-export const cafeteriaRepository = {
-  load: async (roles: CafeteriaRole[]): Promise<CafeteriaData> => {
-    const meals = await loadMeals(roles.includes('admin'))
-    let data: CafeteriaData = { meals, families: [], diners: [], accounts: [], roleUsers: [], settings: null }
-    if (roles.includes('admin')) data = { ...data, ...(await loadAdminData()) }
-    else {
-      if (roles.includes('parent')) data = { ...data, ...(await loadFamilies()) }
-      if (roles.includes('diner')) data.diners = [...new Map([...data.diners, ...(await loadOwnDiners())].map((item) => [item.id, item])).values()]
+async function loadMealWeek(diner: CafeteriaDiner, week: WeekRange): Promise<CafeteriaMealWeek> {
+  const db = client()
+  const meals = await loadMeals(false, week)
+  const mealDayIds = meals.map((meal) => meal.id)
+  const [ordersResult, lateResult, pricesResult] = await Promise.all([
+    mealDayIds.length
+      ? db.from('cafeteria_orders').select(orderSelect).eq('diner_id', diner.id).in('meal_day_id', mealDayIds)
+      : Promise.resolve({ data: [], error: null }),
+    mealDayIds.length
+      ? db.from('cafeteria_late_change_requests').select(lateRequestSelect).eq('diner_id', diner.id).in('meal_day_id', mealDayIds).order('requested_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    db.from('cafeteria_price_rules').select('id,portion_category_id,valid_from,valid_to,price,active')
+      .eq('portion_category_id', diner.portionCategoryId).eq('active', true).lte('valid_from', week.end).or(`valid_to.is.null,valid_to.gte.${week.start}`),
+  ])
+  failIfError(ordersResult.error); failIfError(lateResult.error); failIfError(pricesResult.error)
+  const orders = ((ordersResult.data ?? []) as unknown as OrderRow[]).map(mapOrder)
+  const lateRequests = ((lateResult.data ?? []) as unknown as LateRequestRow[]).map(mapLateRequest)
+  const priceRules: CafeteriaPriceRule[] = ((pricesResult.data ?? []) as unknown as PriceRuleRow[]).map((row) => ({
+    id: row.id,
+    portionCategoryId: row.portion_category_id,
+    validFrom: row.valid_from,
+    validTo: row.valid_to,
+    price: Number(row.price),
+    active: row.active,
+  }))
+  return { week, diner, days: buildMealWeek({ week, portionCategoryId: diner.portionCategoryId, meals, orders, priceRules, lateRequests }) }
+}
+
+async function createOrder(dinerId: string, mealDayId: string, mealVariantId: string): Promise<CafeteriaOrder> {
+  const result = await client().from('cafeteria_orders').insert({ diner_id: dinerId, meal_day_id: mealDayId, meal_variant_id: mealVariantId, status: 'ordered' }).select(orderSelect).single()
+  failIfError(result.error)
+  return mapOrder(result.data as unknown as OrderRow)
+}
+
+async function updateOrder(orderId: string, values: { status?: 'ordered' | 'cancelled'; meal_variant_id?: string }): Promise<CafeteriaOrder> {
+  const result = await client().from('cafeteria_orders').update(values).eq('id', orderId).select(orderSelect).single()
+  failIfError(result.error)
+  return mapOrder(result.data as unknown as OrderRow)
+}
+
+async function createLateRequest(input: { dinerId: string; mealDayId: string; requestType: CafeteriaLateRequestType; requestedVariantId?: string | null }): Promise<{ created: boolean; request: CafeteriaLateChangeRequest }> {
+  const db = client()
+  const pending = await db.from('cafeteria_late_change_requests').select(lateRequestSelect)
+    .eq('diner_id', input.dinerId).eq('meal_day_id', input.mealDayId).eq('status', 'pending').maybeSingle()
+  failIfError(pending.error)
+  if (pending.data) return { created: false, request: mapLateRequest(pending.data as unknown as LateRequestRow) }
+  const result = await db.from('cafeteria_late_change_requests').insert({
+    diner_id: input.dinerId,
+    meal_day_id: input.mealDayId,
+    request_type: input.requestType,
+    requested_variant_id: input.requestedVariantId ?? null,
+  }).select(lateRequestSelect).single()
+  failIfError(result.error)
+  return { created: true, request: mapLateRequest(result.data as unknown as LateRequestRow) }
+}
+
+async function bulkOrderWeek(week: CafeteriaMealWeek, now = new Date()): Promise<BulkWeekResult> {
+  const result: BulkWeekResult = { ordered: 0, needsVariant: [], closed: [], missingPrice: [], failed: [] }
+  for (const day of week.days) {
+    const decision = bulkDayDecision(day, now)
+    if (decision === 'needs_variant') result.needsVariant.push(day.mealDate)
+    else if (decision === 'closed') result.closed.push(day.mealDate)
+    else if (decision === 'missing_price') result.missingPrice.push(day.mealDate)
+    else if (decision === 'order' || decision === 'reorder') {
+      try {
+        const variantId = day.meal?.variants[0]?.id
+        if (!variantId) continue
+        if (decision === 'reorder' && day.order) await updateOrder(day.order.id, { status: 'ordered', meal_variant_id: variantId })
+        else if (day.meal) await createOrder(week.diner.id, day.meal.id, variantId)
+        result.ordered += 1
+      } catch (error) {
+        result.failed.push({ mealDate: day.mealDate, message: cafeteriaErrorMessage(error) })
+      }
     }
+  }
+  return result
+}
+
+const emptyData: CafeteriaData = {
+  meals: [], families: [], diners: [], orderingDiners: [], accounts: [],
+  ownFamilies: [], ownDiners: [], ownAccounts: [], roleUsers: [], settings: null,
+}
+
+export const cafeteriaRepository = {
+  loadAvailableDiners,
+  loadMealWeek,
+  createOrder,
+  cancelOrder: (orderId: string) => updateOrder(orderId, { status: 'cancelled' }),
+  reorderOrder: (orderId: string, mealVariantId: string) => updateOrder(orderId, { status: 'ordered', meal_variant_id: mealVariantId }),
+  changeOrderVariant: (orderId: string, mealVariantId: string) => updateOrder(orderId, { meal_variant_id: mealVariantId }),
+  createLateRequest,
+  bulkOrderWeek,
+  load: async (roles: CafeteriaRole[], userId: string): Promise<CafeteriaData> => {
+    const meals = roles.includes('admin') || roles.includes('kitchen') ? await loadMeals(roles.includes('admin')) : []
+    const ownFamilyData = roles.includes('parent') ? await loadFamilies(userId) : { families: [], diners: [], accounts: [] }
+    const ownDirectDiners = roles.includes('diner') ? await loadOwnDiners(userId) : []
+    const orderingDiners = [...new Map([...ownFamilyData.diners, ...ownDirectDiners].map((item) => [item.id, item])).values()]
+    let data: CafeteriaData = {
+      ...emptyData,
+      meals,
+      families: ownFamilyData.families,
+      diners: orderingDiners,
+      accounts: ownFamilyData.accounts,
+      orderingDiners,
+      ownFamilies: ownFamilyData.families,
+      ownDiners: ownFamilyData.diners,
+      ownAccounts: ownFamilyData.accounts,
+    }
+    if (roles.includes('admin')) data = { ...data, ...(await loadAdminData()), orderingDiners }
     return data
   },
 }
