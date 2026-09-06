@@ -1,5 +1,10 @@
 import type {
   CafeteriaLateChangeRequest,
+  CafeteriaFamilyMealWeek,
+  CafeteriaDraftChoice,
+  CafeteriaMealWeek,
+  CafeteriaOrderDraft,
+  CafeteriaOrderDraftChange,
   CafeteriaOrder,
   CafeteriaPriceRule,
   MealDay,
@@ -85,11 +90,115 @@ export function buildMealWeek(input: {
   })
 }
 
+export const orderDraftKey = (dinerId: string, mealDayId: string) => `${dinerId}:${mealDayId}`
+
+export function serverChoice(day: MealWeekDay): CafeteriaDraftChoice {
+  const ordered = day.order?.status === 'ordered'
+  return { ordered, variantId: ordered ? day.order?.mealVariantId ?? null : null }
+}
+
+export function effectiveChoice(day: MealWeekDay, dinerId: string, draft: CafeteriaOrderDraft): CafeteriaDraftChoice {
+  if (!day.meal) return { ordered: false, variantId: null }
+  return draft[orderDraftKey(dinerId, day.meal.id)] ?? serverChoice(day)
+}
+
+export function updateOrderDraft(
+  draft: CafeteriaOrderDraft,
+  dinerId: string,
+  day: MealWeekDay,
+  choice: CafeteriaDraftChoice,
+): CafeteriaOrderDraft {
+  if (!day.meal) return draft
+  const key = orderDraftKey(dinerId, day.meal.id)
+  const original = serverChoice(day)
+  const normalized = choice.ordered ? choice : { ordered: false, variantId: null }
+  const next = { ...draft }
+  if (normalized.ordered === original.ordered && normalized.variantId === original.variantId) delete next[key]
+  else next[key] = normalized
+  return next
+}
+
+export function toggleSingleVariant(
+  draft: CafeteriaOrderDraft,
+  dinerId: string,
+  day: MealWeekDay,
+): CafeteriaOrderDraft {
+  if (!day.meal || day.meal.status !== 'published' || day.meal.variants.length !== 1) return draft
+  const current = effectiveChoice(day, dinerId, draft)
+  return updateOrderDraft(draft, dinerId, day, {
+    ordered: !current.ordered,
+    variantId: current.ordered ? null : day.meal.variants[0].id,
+  })
+}
+
+export function chooseDraftVariant(
+  draft: CafeteriaOrderDraft,
+  dinerId: string,
+  day: MealWeekDay,
+  variantId: string | null,
+): CafeteriaOrderDraft {
+  if (!day.meal || day.meal.status !== 'published') return draft
+  if (variantId && !day.meal.variants.some((variant) => variant.id === variantId)) return draft
+  return updateOrderDraft(draft, dinerId, day, { ordered: Boolean(variantId), variantId })
+}
+
+export function draftAllForDiner(
+  familyWeek: CafeteriaFamilyMealWeek,
+  dinerId: string,
+  draft: CafeteriaOrderDraft,
+  now = new Date(),
+): CafeteriaOrderDraft {
+  const dinerWeek = familyWeek.dinerWeeks.find((item) => item.diner.id === dinerId)
+  if (!dinerWeek) return draft
+  return dinerWeek.days.reduce((next, day) => {
+    if (!day.meal || day.meal.status !== 'published' || !isBeforeCutoff(day, now) || day.meal.variants.length !== 1 || day.price == null) return next
+    if (effectiveChoice(day, dinerId, next).ordered) return next
+    return updateOrderDraft(next, dinerId, day, { ordered: true, variantId: day.meal.variants[0].id })
+  }, draft)
+}
+
+export function orderDraftChanges(familyWeek: CafeteriaFamilyMealWeek, draft: CafeteriaOrderDraft): CafeteriaOrderDraftChange[] {
+  const changes: CafeteriaOrderDraftChange[] = []
+  for (const dinerWeek of familyWeek.dinerWeeks) {
+    for (const day of dinerWeek.days) {
+      if (!day.meal) continue
+      const key = orderDraftKey(dinerWeek.diner.id, day.meal.id)
+      const choice = draft[key]
+      if (!choice) continue
+      const original = serverChoice(day)
+      const action = original.ordered
+        ? choice.ordered ? 'change_variant' : 'cancel'
+        : choice.ordered ? day.order?.status === 'cancelled' ? 'reorder' : 'create' : null
+      if (!action) continue
+      changes.push({
+        key,
+        dinerId: dinerWeek.diner.id,
+        dinerName: dinerWeek.diner.fullName,
+        mealDate: day.mealDate,
+        mealDayId: day.meal.id,
+        orderId: day.order?.id ?? null,
+        action,
+        variantId: choice.variantId,
+      })
+    }
+  }
+  return changes
+}
+
+export function dinerWeekOrderCount(dinerWeek: CafeteriaMealWeek, draft: CafeteriaOrderDraft): number {
+  return dinerWeek.days.filter((day) => effectiveChoice(day, dinerWeek.diner.id, draft).ordered).length
+}
+
+export function dinerWeekHeaderPrice(dinerWeek: CafeteriaMealWeek): number | null {
+  const prices = [...new Set(dinerWeek.days.filter((day) => day.meal?.status === 'published' && day.price != null).map((day) => day.price as number))]
+  return prices.length === 1 ? prices[0] : null
+}
+
 export const isBeforeCutoff = (day: MealWeekDay, now = new Date()): boolean =>
   Boolean(day.meal && now.getTime() < new Date(day.meal.cutoffAt).getTime())
 
 export function normalOrderVariant(day: MealWeekDay, selectedVariantId: string | null): string | null {
-  if (!day.meal) return null
+  if (!day.meal || day.meal.status !== 'published') return null
   if (day.meal.variants.length === 1) return day.meal.variants[0].id
   return selectedVariantId && day.meal.variants.some((variant) => variant.id === selectedVariantId) ? selectedVariantId : null
 }
@@ -97,7 +206,7 @@ export function normalOrderVariant(day: MealWeekDay, selectedVariantId: string |
 export type BulkDayDecision = 'order' | 'reorder' | 'already_ordered' | 'needs_variant' | 'closed' | 'missing_price' | 'no_menu'
 
 export function bulkDayDecision(day: MealWeekDay, now = new Date()): BulkDayDecision {
-  if (!day.meal || day.meal.variants.length === 0) return 'no_menu'
+  if (!day.meal || day.meal.status !== 'published' || day.meal.variants.length === 0) return 'no_menu'
   if (day.order?.status === 'ordered') return 'already_ordered'
   if (!isBeforeCutoff(day, now)) return 'closed'
   if (day.meal.variants.length !== 1) return 'needs_variant'

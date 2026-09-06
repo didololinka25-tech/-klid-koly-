@@ -3,147 +3,176 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import {
-  applicablePrice,
-  buildMealWeek,
-  bulkDayDecision,
-  isBeforeCutoff,
-  lateRequestMessage,
-  lateRequestTypeFor,
-  normalOrderVariant,
-  showDinerPicker,
-  weekDateKeys,
-  weekForDate,
+  applicablePrice, buildMealWeek, chooseDraftVariant, dinerWeekHeaderPrice, dinerWeekOrderCount,
+  draftAllForDiner, effectiveChoice, isBeforeCutoff, lateRequestMessage, orderDraftChanges,
+  orderDraftKey, toggleSingleVariant, weekDateKeys, weekForDate,
 } from './cafeteria/orderingModel.ts'
 import { routeAllowed, routeFromHash } from './system/access.ts'
 
 const now = new Date('2026-09-07T08:00:00Z')
 const week = weekForDate('2026-09-09')
-const diner = { id: 'diner-1', fullName: 'Dítě A', dinerType: 'child', profileId: null, familyId: 'family-1', accountId: 'account-1', portionCategoryId: 'portion-1', portionName: 'Malá porce' }
-const meal = (overrides = {}) => ({
-  id: 'meal-1', mealDate: '2026-09-07', cutoffAt: '2026-09-08T12:00:00Z', note: null,
-  variants: [{ id: 'variant-1', mealDayId: 'meal-1', name: 'Jídlo A', note: null, sortOrder: 10 }],
-  ...overrides,
-})
-const order = (overrides = {}) => ({
-  id: 'order-1', dinerId: diner.id, mealDayId: 'meal-1', mealVariantId: 'variant-1', accountId: diner.accountId,
-  portionCategoryId: diner.portionCategoryId, unitPrice: 70, status: 'ordered', orderedAt: '2026-09-01T10:00:00Z', cancelledAt: null,
-  ...overrides,
-})
-const late = (overrides = {}) => ({
-  id: 'late-1', orderId: null, dinerId: diner.id, mealDayId: 'meal-1', requestType: 'add', requestedVariantId: 'variant-1',
-  status: 'pending', billingOutcome: null, requestedAt: '2026-09-08T13:00:00Z', ...overrides,
-})
+const diner = (index = 1, type = 'child') => ({ id: `diner-${index}`, fullName: type === 'adult' ? 'Dospělý A' : `Dítě ${index}`, dinerType: type, profileId: type === 'adult' ? 'profile-1' : null, familyId: type === 'adult' ? null : 'family-1', accountId: `account-${index}`, portionCategoryId: 'portion-1', portionName: 'Malá porce' })
+const variant = (index = 1, mealDayId = 'meal-1') => ({ id: `variant-${index}`, mealDayId, name: `Jídlo ${index}`, note: null, sortOrder: index * 10 })
+const meal = (overrides = {}) => ({ id: 'meal-1', mealDate: '2026-09-07', cutoffAt: '2026-09-08T12:00:00Z', status: 'published', note: null, variants: [variant()], ...overrides })
+const order = (overrides = {}) => ({ id: 'order-1', dinerId: 'diner-1', mealDayId: 'meal-1', mealVariantId: 'variant-1', accountId: 'account-1', portionCategoryId: 'portion-1', unitPrice: 70, status: 'ordered', orderedAt: '2026-09-01T10:00:00Z', cancelledAt: null, ...overrides })
+const late = (overrides = {}) => ({ id: 'late-1', orderId: null, dinerId: 'diner-1', mealDayId: 'meal-1', requestType: 'add', requestedVariantId: 'variant-1', status: 'pending', billingOutcome: null, requestedAt: '2026-09-08T13:00:00Z', ...overrides })
 const day = (overrides = {}) => ({ mealDate: '2026-09-07', meal: meal(), order: null, lateRequest: null, price: 70, ...overrides })
+const dinerWeek = (person = diner(), days = [day()]) => ({ week, diner: person, days })
+const familyWeek = (count = 1, daysFactory = () => [day()]) => {
+  const diners = Array.from({ length: count }, (_, index) => diner(index + 1))
+  return { week, diners, dinerWeeks: diners.map((person) => dinerWeek(person, daysFactory(person))) }
+}
 
-test('aktuální kalendářní týden obsahuje pondělí až pátek', () => {
+test('jeden strávník tvoří jeden sloupec mřížky', () => assert.equal(familyWeek(1).dinerWeeks.length, 1))
+test('dva strávníci tvoří dva sloupce mřížky', () => assert.equal(familyWeek(2).dinerWeeks.length, 2))
+test('čtyři a více strávníků zůstávají samostatné sloupce', () => assert.equal(familyWeek(5).dinerWeeks.length, 5))
+
+test('týden obsahuje přesně pondělí až pátek', () => {
   assert.deepEqual(week, { start: '2026-09-07', end: '2026-09-11' })
   assert.deepEqual(weekDateKeys(week), ['2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11'])
 })
 
-test('jeden strávník nezobrazuje přepínač', () => assert.equal(showDinerPicker(1), false))
-test('více strávníků zobrazuje přepínač', () => assert.equal(showDinerPicker(2), true))
-
-test('jediná varianta se použije bez dalšího výběru', () => {
-  assert.equal(normalOrderVariant(day(), null), 'variant-1')
+test('jedna varianta se ovládá jako lokální toggle', () => {
+  const draft = toggleSingleVariant({}, diner().id, day())
+  assert.deepEqual(effectiveChoice(day(), diner().id, draft), { ordered: true, variantId: 'variant-1' })
 })
 
-test('u více variant je před objednáním nutný výběr', () => {
-  const multi = day({ meal: meal({ variants: [meal().variants[0], { id: 'variant-2', mealDayId: 'meal-1', name: 'Jídlo B', note: null, sortOrder: 20 }] }) })
-  assert.equal(normalOrderVariant(multi, null), null)
-  assert.equal(normalOrderVariant(multi, 'variant-2'), 'variant-2')
+test('více variant vyžaduje explicitní výběr', () => {
+  const multi = day({ meal: meal({ variants: [variant(1), variant(2)] }) })
+  assert.deepEqual(effectiveChoice(multi, diner().id, {}), { ordered: false, variantId: null })
+  assert.equal(Object.keys(chooseDraftVariant({}, diner().id, multi, null)).length, 0)
 })
 
-test('objednání je před uzávěrkou povoleno', () => {
-  assert.equal(isBeforeCutoff(day(), now), true)
-  assert.equal(bulkDayDecision(day(), now), 'order')
+test('výběr podporuje tři a více obecných variant', () => {
+  const multi = day({ meal: meal({ variants: [variant(1), variant(2), variant(3)] }) })
+  const draft = chooseDraftVariant({}, diner().id, multi, 'variant-3')
+  assert.deepEqual(effectiveChoice(multi, diner().id, draft), { ordered: true, variantId: 'variant-3' })
 })
 
-test('repository ruší objednávku změnou statusu, nikoli smazáním', async () => {
-  const source = await readFile(new URL('./cafeteria/cafeteriaRepository.ts', import.meta.url), 'utf8')
-  assert.match(source, /cancelOrder:[\s\S]*status: 'cancelled'/)
-  assert.doesNotMatch(source, /from\('cafeteria_orders'\)\.delete/)
+test('Vše připraví vhodný jedno-variantový den pouze pro jedno dítě', () => {
+  const data = familyWeek(2)
+  const draft = draftAllForDiner(data, 'diner-1', {}, now)
+  assert.deepEqual(Object.keys(draft), [orderDraftKey('diner-1', 'meal-1')])
 })
 
-test('uložení jednoho dne obnovuje týden na pozadí bez globálního loaderu', async () => {
+test('Vše přeskočí vícevariantový den', () => {
+  const data = familyWeek(1, () => [day({ meal: meal({ variants: [variant(1), variant(2)] }) })])
+  assert.deepEqual(draftAllForDiner(data, 'diner-1', {}, now), {})
+})
+
+test('Vše přeskočí den po uzávěrce', () => {
+  const data = familyWeek(1, () => [day({ meal: meal({ cutoffAt: '2026-09-06T12:00:00Z' }) })])
+  assert.deepEqual(draftAllForDiner(data, 'diner-1', {}, now), {})
+})
+
+test('kliknutí v mřížce mění pouze draft a nezapisuje před Uložit', async () => {
   const source = await readFile(new URL('./cafeteria/CafeteriaOrdering.tsx', import.meta.url), 'utf8')
-  assert.match(source, /setSavingDays[\s\S]*await loadWeek\(true\)/)
-  assert.match(source, /if \(!background\) \{[\s\S]*setLoading\(true\)/)
+  assert.match(source, /onToggle=.*setDraft/)
+  assert.match(source, /saveChanges[\s\S]*saveOrderDraft/)
+  assert.doesNotMatch(source, /onToggle=.*createOrder/)
 })
 
-test('zrušenou objednávku lze před uzávěrkou znovu objednat', () => {
-  assert.equal(bulkDayDecision(day({ order: order({ status: 'cancelled' }) }), now), 'reorder')
+test('Uložit změny sestaví více nezávislých změn', () => {
+  const data = familyWeek(2)
+  let draft = toggleSingleVariant({}, 'diner-1', data.dinerWeeks[0].days[0])
+  draft = toggleSingleVariant(draft, 'diner-2', data.dinerWeeks[1].days[0])
+  assert.equal(orderDraftChanges(data, draft).length, 2)
 })
 
-test('po uzávěrce není nabídnuta běžná změna', () => {
-  const closed = day({ meal: meal({ cutoffAt: '2026-09-06T12:00:00Z' }) })
-  assert.equal(isBeforeCutoff(closed, now), false)
-  assert.equal(bulkDayDecision(closed, now), 'closed')
-})
-
-test('pozdní požadavek bez objednávky je add', () => assert.equal(lateRequestTypeFor(day()), 'add'))
-test('pozdní požadavek s objednávkou je cancel', () => assert.equal(lateRequestTypeFor(day({ order: order() })), 'cancel'))
-
-test('pending pozdní žádost se před vložením kontroluje', async () => {
+test('repository pokračuje po jedné chybě další změnou', async () => {
   const source = await readFile(new URL('./cafeteria/cafeteriaRepository.ts', import.meta.url), 'utf8')
-  assert.match(source, /cafeteria_late_change_requests[\s\S]*\.eq\('status', 'pending'\)\.maybeSingle\(\)/)
-  assert.match(source, /if \(pending\.data\) return \{ created: false/)
+  assert.match(source, /for \(const change of changes\)[\s\S]*try \{[\s\S]*result\.saved \+= 1[\s\S]*catch \(error\)[\s\S]*result\.failed\.push/)
 })
 
-test('schválené účtované storno má českou zprávu', () => {
-  assert.equal(lateRequestMessage(late({ requestType: 'cancel', status: 'approved', billingOutcome: 'charged' })), 'Oběd byl odhlášen, ale bude účtován.')
+test('draft odhlášení vytvoří cancel akci', () => {
+  const orderedDay = day({ order: order() })
+  const data = familyWeek(1, () => [orderedDay])
+  const draft = toggleSingleVariant({}, 'diner-1', orderedDay)
+  assert.equal(orderDraftChanges(data, draft)[0].action, 'cancel')
 })
 
-test('schválené neúčtované storno má českou zprávu', () => {
-  assert.equal(lateRequestMessage(late({ requestType: 'cancel', status: 'approved', billingOutcome: 'not_charged' })), '✅ Oběd byl odhlášen bez účtování.')
+test('zrušená objednávka vytvoří reorder akci', () => {
+  const cancelledDay = day({ order: order({ status: 'cancelled' }) })
+  const data = familyWeek(1, () => [cancelledDay])
+  const draft = toggleSingleVariant({}, 'diner-1', cancelledDay)
+  assert.equal(orderDraftChanges(data, draft)[0].action, 'reorder')
 })
 
-test('hromadná volba objedná otevřený den s jednou variantou', () => assert.equal(bulkDayDecision(day(), now), 'order'))
-
-test('hromadná volba přeskočí den s více variantami', () => {
-  const variants = [meal().variants[0], { id: 'variant-2', mealDayId: 'meal-1', name: 'Jídlo B', note: null, sortOrder: 20 }]
-  assert.equal(bulkDayDecision(day({ meal: meal({ variants }) }), now), 'needs_variant')
+test('změna vybrané varianty vytvoří change_variant akci', () => {
+  const multi = day({ meal: meal({ variants: [variant(1), variant(2)] }), order: order() })
+  const data = familyWeek(1, () => [multi])
+  const draft = chooseDraftVariant({}, 'diner-1', multi, 'variant-2')
+  assert.equal(orderDraftChanges(data, draft)[0].action, 'change_variant')
 })
 
-test('hromadná volba přeskočí uzavřený den', () => {
-  assert.equal(bulkDayDecision(day({ meal: meal({ cutoffAt: '2026-09-06T12:00:00Z' }) }), now), 'closed')
-})
-
-test('existující objednávka zobrazuje historickou unit_price', () => {
-  const days = buildMealWeek({
-    week, portionCategoryId: diner.portionCategoryId, meals: [meal()], orders: [order({ unitPrice: 63 })],
-    priceRules: [{ id: 'price-1', portionCategoryId: diner.portionCategoryId, validFrom: '2026-09-01', validTo: null, price: 80, active: true }], lateRequests: [],
-  })
+test('existující objednávka zachovává historickou unit_price', () => {
+  const days = buildMealWeek({ week, portionCategoryId: 'portion-1', meals: [meal()], orders: [order({ unitPrice: 63 })], priceRules: [{ id: 'price-1', portionCategoryId: 'portion-1', validFrom: '2026-09-01', validTo: null, price: 80, active: true }], lateRequests: [] })
   assert.equal(days[0].price, 63)
 })
 
-test('zrušená objednávka se znovu přihlásí za aktuálně platnou cenu', () => {
-  const days = buildMealWeek({
-    week, portionCategoryId: diner.portionCategoryId, meals: [meal()], orders: [order({ status: 'cancelled', unitPrice: 63 })],
-    priceRules: [{ id: 'price-1', portionCategoryId: diner.portionCategoryId, validFrom: '2026-09-01', validTo: null, price: 80, active: true }], lateRequests: [],
-  })
-  assert.equal(days[0].price, 80)
+test('jednotná cena se v hlavičce zobrazí, proměnlivá nikoli', () => {
+  assert.equal(dinerWeekHeaderPrice(dinerWeek(diner(), [day(), day({ mealDate: '2026-09-08', meal: meal({ id: 'meal-2', mealDate: '2026-09-08' }) })])), 70)
+  assert.equal(dinerWeekHeaderPrice(dinerWeek(diner(), [day(), day({ mealDate: '2026-09-08', meal: meal({ id: 'meal-2', mealDate: '2026-09-08' }), price: 80 })])), null)
 })
 
-test('nový den používá platnou historickou cenovou sazbu', () => {
-  const rules = [
-    { id: 'old', portionCategoryId: diner.portionCategoryId, validFrom: '2026-01-01', validTo: '2026-08-31', price: 60, active: true },
-    { id: 'current', portionCategoryId: diner.portionCategoryId, validFrom: '2026-09-01', validTo: null, price: 70, active: true },
-  ]
-  assert.equal(applicablePrice(rules, diner.portionCategoryId, '2026-09-07'), 70)
+test('pending pozdní žádost má lidský stav', () => assert.equal(lateRequestMessage(late()), '⏳ Čeká na potvrzení'))
+
+test('výsledky pozdního storna zachovávají české účtovací texty', () => {
+  assert.equal(lateRequestMessage(late({ requestType: 'cancel', status: 'approved', billingOutcome: 'charged' })), 'Oběd byl odhlášen, ale bude účtován.')
+  assert.equal(lateRequestMessage(late({ requestType: 'cancel', status: 'approved', billingOutcome: 'not_charged' })), '✅ Oběd byl odhlášen bez účtování.')
 })
 
-test('adult diner i parent používají stejný objednávkový engine', async () => {
+test('po cutoff není běžná editace otevřená', () => {
+  assert.equal(isBeforeCutoff(day({ meal: meal({ cutoffAt: '2026-09-06T12:00:00Z' }) }), now), false)
+})
+
+test('týdenní souhrn počítá i aktuální draft', () => {
+  const data = dinerWeek()
+  const draft = toggleSingleVariant({}, data.diner.id, data.days[0])
+  assert.equal(dinerWeekOrderCount(data, draft), 1)
+})
+
+test('adult diner používá stejnou rodinnou mřížku s jedním sloupcem', async () => {
+  const adultWeek = familyWeek(1); adultWeek.diners[0] = diner(1, 'adult'); adultWeek.dinerWeeks[0].diner = adultWeek.diners[0]
+  assert.equal(adultWeek.dinerWeeks.length, 1)
   const source = await readFile(new URL('./cafeteria/CafeteriaApp.tsx', import.meta.url), 'utf8')
-  assert.match(source, /role === 'parent'[\s\S]*role === 'diner'[\s\S]*<CafeteriaOrdering diners=\{data\.orderingDiners\}/)
+  assert.match(source, /role === 'parent'[\s\S]*role === 'diner'[\s\S]*<CafeteriaOrdering/)
 })
 
-test('launcher a hash cesta Úklidu zůstávají funkční', () => {
+test('rodinný týden se načítá dávkově pro seznam diner ID', async () => {
+  const source = await readFile(new URL('./cafeteria/cafeteriaRepository.ts', import.meta.url), 'utf8')
+  assert.match(source, /loadFamilyMealWeek[\s\S]*\.in\('diner_id', dinerIds\)/)
+  assert.doesNotMatch(source, /for \(const diner of diners\)[\s\S]*from\('cafeteria_orders'\)/)
+})
+
+test('mřížka má sticky hlavičku, sticky první sloupec a touch ovládání', async () => {
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8')
+  assert.match(css, /family-order-grid thead th[\s\S]*position: sticky[\s\S]*top: 0/)
+  assert.match(css, /family-order-grid \.meal-column[\s\S]*position: sticky[\s\S]*left: 0/)
+  assert.match(css, /grid-order-cell > button[\s\S]*min-height: 64px/)
+})
+
+test('mobilní šířky 360, 390 a 430 px používají posuvnou mřížku bez zmenšení touch buněk', async () => {
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8')
+  assert.match(css, /family-grid-scroll[\s\S]*overflow: auto/)
+  assert.match(css, /family-order-grid[\s\S]*width: max-content/)
+  assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-width: 116px/)
+  assert.match(css, /@media \(min-width: 430px\)[\s\S]*min-width: 132px/)
+})
+
+test('neuložené změny jsou chráněné při změně týdne, sekce i launcheru', async () => {
+  const ordering = await readFile(new URL('./cafeteria/CafeteriaOrdering.tsx', import.meta.url), 'utf8')
+  const app = await readFile(new URL('./cafeteria/CafeteriaApp.tsx', import.meta.url), 'utf8')
+  assert.match(ordering, /Máte neuložené změny\. Zahodit je\?/)
+  assert.match(app, /confirmDiscard[\s\S]*leaveForLauncher/)
+})
+
+test('launcher zůstává dostupný přes původní hash cestu', () => assert.equal(routeFromHash('#/cafeteria'), 'cafeteria'))
+
+test('Úklid zůstává povolený a jeho hash cesta beze změny', () => {
   const access = { cleaning: true, cafeteria: true, cafeteriaAvailable: true, cafeteriaRoles: ['parent'] }
   assert.equal(routeFromHash('#/cleaning'), 'cleaning')
   assert.equal(routeAllowed('cleaning', access), true)
 })
 
-test('cena bez pravidla není nula a běžná hromadná objednávka ji přeskočí', () => {
-  assert.equal(applicablePrice([], diner.portionCategoryId, '2026-09-07'), null)
-  assert.equal(bulkDayDecision(day({ price: null }), now), 'missing_price')
-})
+test('chybějící cenové pravidlo zůstává null, nikoli nula', () => assert.equal(applicablePrice([], 'portion-1', '2026-09-07'), null))

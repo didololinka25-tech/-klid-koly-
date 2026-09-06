@@ -1,5 +1,6 @@
 export type MealVariant = { id: string; mealDayId: string; name: string; note: string | null; sortOrder: number }
-export type MealDay = { id: string; mealDate: string; cutoffAt: string; note: string | null; variants: MealVariant[] }
+export type CafeteriaMealDayStatus = 'draft' | 'published' | 'cancelled'
+export type MealDay = { id: string; mealDate: string; cutoffAt: string; status: CafeteriaMealDayStatus; note: string | null; variants: MealVariant[] }
 export type CafeteriaFamily = { id: string; displayName: string }
 export type CafeteriaDiner = {
   id: string
@@ -58,6 +59,24 @@ export type MealWeekDay = {
   price: number | null
 }
 export type CafeteriaMealWeek = { week: WeekRange; diner: CafeteriaDiner; days: MealWeekDay[] }
+export type CafeteriaFamilyMealWeek = { week: WeekRange; diners: CafeteriaDiner[]; dinerWeeks: CafeteriaMealWeek[] }
+export type CafeteriaDraftChoice = { ordered: boolean; variantId: string | null }
+export type CafeteriaOrderDraft = Record<string, CafeteriaDraftChoice>
+export type CafeteriaOrderDraftAction = 'create' | 'cancel' | 'reorder' | 'change_variant'
+export type CafeteriaOrderDraftChange = {
+  key: string
+  dinerId: string
+  dinerName: string
+  mealDate: string
+  mealDayId: string
+  orderId: string | null
+  action: CafeteriaOrderDraftAction
+  variantId: string | null
+}
+export type CafeteriaDraftSaveResult = {
+  saved: number
+  failed: Array<{ change: CafeteriaOrderDraftChange; message: string }>
+}
 export type BulkWeekResult = {
   ordered: number
   needsVariant: string[]

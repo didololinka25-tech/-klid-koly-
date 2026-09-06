@@ -6,11 +6,14 @@ import type {
   CafeteriaAccount,
   CafeteriaData,
   CafeteriaDiner,
+  CafeteriaDraftSaveResult,
+  CafeteriaFamilyMealWeek,
   CafeteriaFamily,
   CafeteriaLateChangeRequest,
   CafeteriaLateRequestType,
   CafeteriaMealWeek,
   CafeteriaOrder,
+  CafeteriaOrderDraftChange,
   CafeteriaPriceRule,
   CafeteriaRoleUser,
   CafeteriaSettings,
@@ -29,7 +32,7 @@ type DinerRow = {
   portion_category_id: string
   cafeteria_portion_categories: { name: string } | Array<{ name: string }> | null
 }
-type MealDayRow = { id: string; meal_date: string; cutoff_at: string; note: string | null; status: string }
+type MealDayRow = { id: string; meal_date: string; cutoff_at: string; note: string | null; status: 'draft' | 'published' | 'cancelled' }
 type MealVariantRow = { id: string; meal_day_id: string; name: string; note: string | null; sort_order: number }
 type OrderRow = {
   id: string
@@ -74,6 +77,9 @@ const knownDatabaseMessages = [
   'Není aktivní objednávka, u které lze změnit variantu.',
   'Oběd už je objednaný.',
   'Je nutné vybrat variantu jídla.',
+  'Změnu už nelze uložit, protože proběhla uzávěrka nebo nemáte oprávnění.',
+  'Objednávka se mezitím změnila. Zkontrolujte aktuální stav.',
+  'Žádost už čeká na potvrzení.',
 ]
 
 export function cafeteriaErrorMessage(error: unknown): string {
@@ -83,7 +89,9 @@ export function cafeteriaErrorMessage(error: unknown): string {
   const known = knownDatabaseMessages.find((item) => message.includes(item))
   if (known) return known
   if (message.includes('Jídelna zatím není aktivována.')) return 'Jídelna zatím není aktivována.'
-  if (value?.code === '23505' || message.includes('cafeteria_late_change_one_pending')) return 'Žádost už čeká na potvrzení.'
+  if (message.includes('cafeteria_late_change_one_pending')) return 'Žádost už čeká na potvrzení.'
+  if (value?.code === '23505') return 'Objednávka se mezitím změnila. Zkontrolujte aktuální stav.'
+  if (value?.code === '42501' || value?.code === 'PGRST116') return 'Změnu už nelze uložit, protože proběhla uzávěrka nebo nemáte oprávnění.'
   return 'Operaci se nepodařilo dokončit. Zkuste to prosím znovu.'
 }
 
@@ -137,7 +145,7 @@ const mapLateRequest = (row: LateRequestRow): CafeteriaLateChangeRequest => ({
 async function loadMeals(includeUnpublished = false, week?: WeekRange): Promise<MealDay[]> {
   const db = client()
   let dayQuery = db.from('cafeteria_meal_days').select('id,meal_date,cutoff_at,note,status').order('meal_date')
-  if (!includeUnpublished) dayQuery = dayQuery.eq('status', 'published')
+  if (!includeUnpublished) dayQuery = dayQuery.in('status', ['published', 'cancelled'])
   if (week) dayQuery = dayQuery.gte('meal_date', week.start).lte('meal_date', week.end)
   const days = await dayQuery
   failIfError(days.error)
@@ -152,6 +160,7 @@ async function loadMeals(includeUnpublished = false, week?: WeekRange): Promise<
     id: row.id,
     mealDate: row.meal_date,
     cutoffAt: row.cutoff_at,
+    status: row.status,
     note: row.note ?? null,
     variants: variantRows.filter((variant) => variant.meal_day_id === row.id).map((variant) => ({
       id: variant.id,
@@ -278,6 +287,54 @@ async function loadMealWeek(diner: CafeteriaDiner, week: WeekRange): Promise<Caf
   return { week, diner, days: buildMealWeek({ week, portionCategoryId: diner.portionCategoryId, meals, orders, priceRules, lateRequests }) }
 }
 
+async function loadFamilyMealWeek(diners: CafeteriaDiner[], week: WeekRange): Promise<CafeteriaFamilyMealWeek> {
+  const db = client()
+  const meals = await loadMeals(false, week)
+  if (!diners.length) return { week, diners: [], dinerWeeks: [] }
+  const mealDayIds = meals.map((meal) => meal.id)
+  const dinerIds = diners.map((diner) => diner.id)
+  const portionCategoryIds = [...new Set(diners.map((diner) => diner.portionCategoryId))]
+  const [ordersResult, lateResult, pricesResult] = await Promise.all([
+    mealDayIds.length
+      ? db.from('cafeteria_orders').select(orderSelect).in('diner_id', dinerIds).in('meal_day_id', mealDayIds)
+      : Promise.resolve({ data: [], error: null }),
+    mealDayIds.length
+      ? db.from('cafeteria_late_change_requests').select(lateRequestSelect).in('diner_id', dinerIds).in('meal_day_id', mealDayIds).order('requested_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    mealDayIds.length
+      ? db.from('cafeteria_price_rules').select('id,portion_category_id,valid_from,valid_to,price,active')
+        .in('portion_category_id', portionCategoryIds).eq('active', true).lte('valid_from', week.end).or(`valid_to.is.null,valid_to.gte.${week.start}`)
+      : Promise.resolve({ data: [], error: null }),
+  ])
+  failIfError(ordersResult.error); failIfError(lateResult.error); failIfError(pricesResult.error)
+  const orders = ((ordersResult.data ?? []) as unknown as OrderRow[]).map(mapOrder)
+  const lateRequests = ((lateResult.data ?? []) as unknown as LateRequestRow[]).map(mapLateRequest)
+  const priceRules: CafeteriaPriceRule[] = ((pricesResult.data ?? []) as unknown as PriceRuleRow[]).map((row) => ({
+    id: row.id,
+    portionCategoryId: row.portion_category_id,
+    validFrom: row.valid_from,
+    validTo: row.valid_to,
+    price: Number(row.price),
+    active: row.active,
+  }))
+  return {
+    week,
+    diners,
+    dinerWeeks: diners.map((diner) => ({
+      week,
+      diner,
+      days: buildMealWeek({
+        week,
+        portionCategoryId: diner.portionCategoryId,
+        meals,
+        orders: orders.filter((order) => order.dinerId === diner.id),
+        priceRules,
+        lateRequests: lateRequests.filter((request) => request.dinerId === diner.id),
+      }),
+    })),
+  }
+}
+
 async function createOrder(dinerId: string, mealDayId: string, mealVariantId: string): Promise<CafeteriaOrder> {
   const result = await client().from('cafeteria_orders').insert({ diner_id: dinerId, meal_day_id: mealDayId, meal_variant_id: mealVariantId, status: 'ordered' }).select(orderSelect).single()
   failIfError(result.error)
@@ -328,6 +385,23 @@ async function bulkOrderWeek(week: CafeteriaMealWeek, now = new Date()): Promise
   return result
 }
 
+async function saveOrderDraft(changes: CafeteriaOrderDraftChange[]): Promise<CafeteriaDraftSaveResult> {
+  const result: CafeteriaDraftSaveResult = { saved: 0, failed: [] }
+  for (const change of changes) {
+    try {
+      if (change.action === 'create' && change.variantId) await createOrder(change.dinerId, change.mealDayId, change.variantId)
+      else if (change.action === 'cancel' && change.orderId) await updateOrder(change.orderId, { status: 'cancelled' })
+      else if (change.action === 'reorder' && change.orderId && change.variantId) await updateOrder(change.orderId, { status: 'ordered', meal_variant_id: change.variantId })
+      else if (change.action === 'change_variant' && change.orderId && change.variantId) await updateOrder(change.orderId, { meal_variant_id: change.variantId })
+      else throw new Error('Neúplná změna objednávky.')
+      result.saved += 1
+    } catch (error) {
+      result.failed.push({ change, message: cafeteriaErrorMessage(error) })
+    }
+  }
+  return result
+}
+
 const emptyData: CafeteriaData = {
   meals: [], families: [], diners: [], orderingDiners: [], accounts: [],
   ownFamilies: [], ownDiners: [], ownAccounts: [], roleUsers: [], settings: null,
@@ -336,12 +410,14 @@ const emptyData: CafeteriaData = {
 export const cafeteriaRepository = {
   loadAvailableDiners,
   loadMealWeek,
+  loadFamilyMealWeek,
   createOrder,
   cancelOrder: (orderId: string) => updateOrder(orderId, { status: 'cancelled' }),
   reorderOrder: (orderId: string, mealVariantId: string) => updateOrder(orderId, { status: 'ordered', meal_variant_id: mealVariantId }),
   changeOrderVariant: (orderId: string, mealVariantId: string) => updateOrder(orderId, { meal_variant_id: mealVariantId }),
   createLateRequest,
   bulkOrderWeek,
+  saveOrderDraft,
   load: async (roles: CafeteriaRole[], userId: string): Promise<CafeteriaData> => {
     const meals = roles.includes('admin') || roles.includes('kitchen') ? await loadMeals(roles.includes('admin')) : []
     const ownFamilyData = roles.includes('parent') ? await loadFamilies(userId) : { families: [], diners: [], accounts: [] }

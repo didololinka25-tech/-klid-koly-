@@ -294,43 +294,14 @@ h1 {
   gap: 0.8rem;
 }
 
-.diner-chips {
-  display: flex;
-  gap: 0.5rem;
-  overflow-x: auto;
-  padding: 0.2rem 0 0.35rem;
-  scrollbar-width: none;
-}
-
-.diner-chips button,
 .this-week-button {
   width: auto;
   min-height: 44px;
-  flex: 0 0 auto;
   border-radius: 999px;
   padding: 0.55rem 0.9rem;
   background: #fff;
   color: #165e56;
   border: 1px solid #bcd5cf;
-}
-
-.diner-chips button.active {
-  background: #165e56;
-  color: #fff;
-  border-color: #165e56;
-}
-
-.ordering-diner {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 0.75rem;
-  margin: 0;
-}
-
-.ordering-diner small {
-  color: #67817c;
-  text-align: right;
 }
 
 .week-picker {
@@ -364,131 +335,296 @@ h1 {
   color: #67817c;
 }
 
-.bulk-order-button {
-  min-height: 50px;
-  border-radius: 14px;
-  font-weight: 800;
+.family-grid-scroll {
+  max-height: min(64dvh, 650px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #d5e4e0;
+  border-radius: 16px;
+  background: #fff;
+  scrollbar-color: #9fbdb6 transparent;
 }
 
-.bulk-summary {
-  padding: 0.7rem 0.85rem;
-  border-radius: 12px;
-  background: #eef7f4;
-  color: #315f57;
+.family-grid-scroll:focus-visible {
+  outline: 3px solid #76aa9f;
+  outline-offset: 2px;
 }
 
-.bulk-summary p {
-  margin: 0.25rem 0;
+.family-order-grid {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
 }
 
-.meal-week-list {
-  display: grid;
-  gap: 0.75rem;
+.family-order-grid th,
+.family-order-grid td {
+  width: 124px;
+  min-width: 124px;
+  padding: 8px;
+  vertical-align: top;
+  border-right: 1px solid #e0ebe7;
+  border-bottom: 1px solid #e0ebe7;
+  background: #fff;
 }
 
-.ordering-day {
-  padding: 1rem;
+.family-order-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 108px;
+  text-align: center;
+  background: #f4f8f6;
 }
 
-.ordering-day h2 {
-  margin: 0 0 0.8rem;
-  font-size: 1.05rem;
+.family-order-grid thead th > b,
+.family-order-grid thead th > small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.ordering-day.no-menu {
+.family-order-grid thead th > b {
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.family-order-grid thead th > small {
+  min-height: 30px;
+  margin: 3px 0;
   color: #67817c;
-  box-shadow: none;
+  font-size: 11px;
+  line-height: 1.25;
 }
 
-.ordering-day.no-menu p,
-.single-meal p,
-.ordering-day .hint {
-  margin-bottom: 0;
-}
-
-.meal-variants {
-  display: grid;
-  gap: 0.45rem;
-  padding: 0;
-  border: 0;
-}
-
-.meal-variants legend {
-  margin-bottom: 0.35rem;
-  color: #67817c;
-  font-size: 0.84rem;
-}
-
-.meal-variants label {
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  padding: 0.55rem 0.7rem;
-  border: 1px solid #dce9e5;
-  border-radius: 12px;
-}
-
-.meal-variants input {
-  width: 20px;
-  height: 20px;
-  margin: 0;
-}
-
-.meal-variants span {
-  display: grid;
-  gap: 0.15rem;
-}
-
-.meal-variants small {
-  color: #67817c;
-}
-
-.meal-price {
-  margin: 0.85rem 0 0.35rem;
-  font-weight: 800;
+.family-order-grid thead th > button {
+  width: auto;
+  min-width: 54px;
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid #b7d2cb;
+  border-radius: 999px;
+  background: #fff;
   color: #165e56;
+  font-weight: 850;
 }
 
-.order-status,
-.cutoff-status,
-.late-result,
-.day-operation-message {
-  margin: 0.45rem 0;
+.family-order-grid .meal-column {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  width: 154px;
+  min-width: 154px;
+  text-align: left;
+  background: #f9fbfa;
+  box-shadow: 3px 0 7px rgb(16 62 54 / .07);
 }
 
-.late-result,
-.day-operation-message {
-  padding: 0.55rem 0.65rem;
+.family-order-grid thead .meal-column {
+  z-index: 5;
+  padding-top: 15px;
+}
+
+.family-order-grid tbody tr:last-child > * { border-bottom: 0; }
+.family-order-grid tr > *:last-child { border-right: 0; }
+
+.grid-meal {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.grid-meal > b {
+  color: #165e56;
+  font-size: 12px;
+  letter-spacing: .04em;
+}
+
+.grid-meal > span,
+.grid-meal > details,
+.grid-meal > small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.grid-meal > span + span,
+.grid-meal > span + details,
+.grid-meal > details + span,
+.grid-meal > details + details {
+  padding-top: 4px;
+  border-top: 1px dashed #dbe7e3;
+}
+
+.grid-meal details { display: block; }
+.grid-meal summary { cursor: pointer; color: #315f57; font-size: 12px; line-height: 1.3; }
+.grid-meal details > span { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 12px; line-height: 1.3; }
+
+.grid-meal .no-cooking {
+  color: #8b5b18;
+  font-weight: 850;
+}
+
+.grid-order-cell {
+  min-height: 92px;
+  display: grid;
+  place-items: stretch;
+  align-content: start;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 11px;
+}
+
+.grid-order-cell.draft-changed {
+  padding: 4px;
+  background: #e4f3ee;
+  box-shadow: inset 0 0 0 2px #6cae9f;
+}
+
+.grid-order-cell > button {
+  min-height: 64px;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid #c8ddd7;
   border-radius: 10px;
-  background: #eef7f4;
-}
-
-.late-result.pending {
-  background: #fff5dd;
-  color: #725416;
-}
-
-.order-actions {
-  display: grid;
-  gap: 0.5rem;
-  margin-top: 0.8rem;
-}
-
-.order-actions button {
-  min-height: 46px;
-  border-radius: 12px;
+  background: #fff;
+  color: #17483f;
   font-weight: 800;
 }
 
-.order-actions button.secondary {
-  background: #eef5f3;
-  color: #165e56;
+.grid-order-cell > button:focus-visible,
+.family-order-grid button:focus-visible,
+.cell-dialog button:focus-visible,
+.draft-save-bar button:focus-visible {
+  outline: 3px solid #3b8b7c;
+  outline-offset: 2px;
 }
 
-.order-actions button.danger {
-  color: #9a3d32;
-  border-color: #efd3cf;
+.single-choice,
+.variant-choice {
+  display: grid;
+  place-items: center;
+  gap: 3px;
+}
+
+.single-choice > span { font-size: 27px; line-height: 1; }
+.single-choice > small,
+.variant-choice > small { color: #617b75; font-size: 10px; }
+.variant-choice > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-mark { color: #236a5f; font-size: 10px; font-weight: 850; text-align: center; }
+.inactive-cell { min-height: 72px; display: grid; place-items: center; color: #94a49f; font-size: 20px; }
+
+.closed-cell {
+  text-align: center;
+  color: #536e68;
+}
+
+.closed-cell .cell-state {
+  min-height: 30px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.closed-cell > button { min-height: 44px; font-size: 11px; }
+.pending-cell { padding: 7px 4px; border-radius: 9px; background: #fff3d7; color: #765315; font-size: 11px; font-weight: 850; }
+.closed-cell > small,
+.cell-message { overflow-wrap: anywhere; color: #775444; font-size: 9px; line-height: 1.25; }
+
+.family-week-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.family-week-summary p {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: #edf5f2;
+  color: #315f57;
+  font-size: 12px;
+}
+
+.save-result {
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: #e5f4ef;
+  color: #215f54;
+  font-weight: 750;
+}
+
+.draft-save-bar {
+  position: sticky;
+  bottom: calc(68px + env(safe-area-inset-bottom));
+  z-index: 40;
+  margin: 2px -8px -2px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  border: 1px solid #b7d6ce;
+  border-radius: 14px;
+  background: rgb(255 255 255 / .97);
+  box-shadow: 0 -6px 24px rgb(21 77 67 / .14);
+  backdrop-filter: blur(8px);
+}
+
+.draft-save-bar > span { font-size: 12px; font-weight: 850; text-align: center; }
+.draft-save-bar > div { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 7px; }
+.draft-save-bar button { min-height: 46px; border-radius: 11px; font-weight: 850; }
+.draft-save-bar .discard-draft { border: 1px solid #c8dcd7; background: #fff; color: #526f69; }
+
+.cell-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  padding: max(12px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom));
+  display: grid;
+  align-items: end;
+  justify-items: center;
+  background: rgb(11 38 33 / .58);
+}
+
+.cell-dialog {
+  width: min(100%, 560px);
+  max-height: min(86dvh, 720px);
+  overflow-y: auto;
+  padding: 16px;
+  border-radius: 20px 20px 12px 12px;
+  background: #f7faf9;
+  box-shadow: 0 18px 50px rgb(18 59 52 / .3);
+}
+
+.cell-dialog-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.cell-dialog-head small { color: #67817c; }
+.cell-dialog-head h2 { margin: 2px 0 0; font-size: 20px; text-transform: capitalize; }
+.cell-dialog-head > button { width: 44px; height: 44px; flex: 0 0 auto; padding: 0; border: 1px solid #c7dcd6; border-radius: 50%; background: #fff; color: #165e56; font-size: 26px; }
+.cell-dialog > p { color: #536f69; }
+.full-variant-list { display: grid; gap: 8px; }
+.full-variant-list > button { min-height: 56px; padding: 10px 12px; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 8px; text-align: left; border: 1px solid #cbded9; border-radius: 12px; background: #fff; color: #173832; }
+.full-variant-list > button.selected { border-color: #2d8a78; background: #e8f5f1; }
+.full-variant-list > button > span:last-child { display: grid; gap: 3px; }
+.full-variant-list small { color: #67817c; }
+.dialog-cancel-order { width: 100%; min-height: 48px; margin-top: 12px; border: 1px solid #e0c7c3; border-radius: 11px; background: #fff; color: #983d32; font-weight: 850; }
+
+@media (max-width: 390px) {
+  .family-order-grid th,
+  .family-order-grid td { width: 116px; min-width: 116px; padding: 6px; }
+  .family-order-grid .meal-column { width: 142px; min-width: 142px; }
+}
+
+@media (min-width: 430px) {
+  .family-order-grid th,
+  .family-order-grid td { width: 132px; min-width: 132px; }
+  .family-order-grid .meal-column { width: 166px; min-width: 166px; }
 }
 
 @media (min-width: 760px) {

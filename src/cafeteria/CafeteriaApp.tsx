@@ -17,8 +17,11 @@ export function CafeteriaApp({ profile, roles, onOpenLauncher, onSignOut }: { pr
   const [data, setData] = useState<CafeteriaData>(emptyData)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState('')
+  const [orderingDirty, setOrderingDirty] = useState(false)
   const navigation = useMemo(() => role === 'parent' ? ['Obědy', 'Platby', 'Rodina'] : role === 'diner' ? ['Jídelníček', 'Profil'] : role === 'kitchen' ? ['Dnes', 'Jídelníček', 'Žádosti'] : ['Přehled', 'Jídelníček', 'Lidé', 'Finance', 'Více'], [role])
   const activeSection = navigation.includes(section) ? section : navigation[0]
+  const confirmDiscard = () => !orderingDirty || window.confirm('Máte neuložené změny. Zahodit je?')
+  const leaveForLauncher = () => { if (confirmDiscard()) { setOrderingDirty(false); onOpenLauncher() } }
 
   useEffect(() => {
     setStatus('loading')
@@ -32,21 +35,21 @@ export function CafeteriaApp({ profile, roles, onOpenLauncher, onSignOut }: { pr
   return (
     <main className="app cafeteria-app">
       <header className="cafeteria-header">
-        <button className="back-to-modules" type="button" onClick={onOpenLauncher} aria-label="Zpět na moduly">‹</button>
+        <button className="back-to-modules" type="button" onClick={leaveForLauncher} aria-label="Zpět na moduly">‹</button>
         <div><p className="eyebrow">JÍDELNA</p><h1>{activeSection}</h1></div>
-        <button className="avatar" type="button" title={profile.full_name} aria-label="Odhlásit se" onClick={() => { if (window.confirm('Odhlásit se?')) void onSignOut() }}>{profile.full_name[0]}</button>
+        <button className="avatar" type="button" title={profile.full_name} aria-label="Odhlásit se" onClick={() => { if (confirmDiscard() && window.confirm('Odhlásit se?')) void onSignOut() }}>{profile.full_name[0]}</button>
       </header>
-      {roles.length > 1 && <label className="cafeteria-role-picker">Zobrazení<select value={role} onChange={(event) => { setRole(event.target.value as CafeteriaRole); setSection('') }}>{roles.map((item) => <option value={item} key={item}>{roleLabels[item]}</option>)}</select></label>}
+      {roles.length > 1 && <label className="cafeteria-role-picker">Zobrazení<select value={role} onChange={(event) => { const next = event.target.value as CafeteriaRole; if (next !== role && confirmDiscard()) { setOrderingDirty(false); setRole(next); setSection('') } }}>{roles.map((item) => <option value={item} key={item}>{roleLabels[item]}</option>)}</select></label>}
       {status === 'loading' && <section className="panel cafeteria-state"><span className="loading-spinner" /><p>Načítám Jídelnu…</p></section>}
-      {status === 'error' && <section className="panel cafeteria-state"><h2>Jídelna není dostupná</h2><p>{message}</p><button onClick={onOpenLauncher}>Zpět na moduly</button></section>}
-      {status === 'ready' && <CafeteriaContent role={role} section={activeSection} data={data} />}
-      <nav className="cafeteria-nav" style={{ gridTemplateColumns: `repeat(${navigation.length}, minmax(0, 1fr))` }}>{navigation.map((item) => <button key={item} className={activeSection === item ? 'active' : ''} onClick={() => setSection(item)}><i>{navIcon(item)}</i><span>{item}</span></button>)}</nav>
+      {status === 'error' && <section className="panel cafeteria-state"><h2>Jídelna není dostupná</h2><p>{message}</p><button onClick={leaveForLauncher}>Zpět na moduly</button></section>}
+      {status === 'ready' && <CafeteriaContent role={role} section={activeSection} data={data} onOrderingDirtyChange={setOrderingDirty} />}
+      <nav className="cafeteria-nav" style={{ gridTemplateColumns: `repeat(${navigation.length}, minmax(0, 1fr))` }}>{navigation.map((item) => <button key={item} className={activeSection === item ? 'active' : ''} onClick={() => { if (item !== activeSection && confirmDiscard()) { setOrderingDirty(false); setSection(item) } }}><i>{navIcon(item)}</i><span>{item}</span></button>)}</nav>
     </main>
   )
 }
 
-function CafeteriaContent({ role, section, data }: { role: CafeteriaRole; section: string; data: CafeteriaData }) {
-  if ((role === 'parent' && section === 'Obědy') || (role === 'diner' && section === 'Jídelníček')) return <CafeteriaOrdering diners={data.orderingDiners} />
+function CafeteriaContent({ role, section, data, onOrderingDirtyChange }: { role: CafeteriaRole; section: string; data: CafeteriaData; onOrderingDirtyChange: (dirty: boolean) => void }) {
+  if ((role === 'parent' && section === 'Obědy') || (role === 'diner' && section === 'Jídelníček')) return <CafeteriaOrdering diners={data.orderingDiners} onDirtyChange={onOrderingDirtyChange} />
   if (section === 'Jídelníček') return <MealList meals={data.meals} />
   if (role === 'kitchen' && section === 'Dnes') return <MealList meals={data.meals.filter((meal) => meal.mealDate === localDateKey())} today />
   if (section === 'Platby' || section === 'Finance') return <EmptyState icon="💰" text="Finanční přehled bude dostupný po aktivaci plateb." />
