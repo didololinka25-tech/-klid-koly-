@@ -19,7 +19,7 @@ const count = (overrides = {}) => ({
 })
 const service = (overrides = {}) => ({
   orderId: 'order-1', dinerId: 'diner-1', dinerName: 'Anna Testovací', portionCode: 'small',
-  portionName: 'Malá porce', variantId: 'variant-1', variantName: 'Jídlo A', fulfillmentStatus: 'waiting',
+  portionName: 'Malá porce', quantity: 1, variantId: 'variant-1', variantName: 'Jídlo A', fulfillmentStatus: 'waiting',
   ...overrides,
 })
 

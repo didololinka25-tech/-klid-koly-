@@ -25,7 +25,7 @@ export function summarizeKitchenCounts(rows: CafeteriaKitchenCount[]): Cafeteria
 
 export function fulfillmentSummary(rows: CafeteriaKitchenServiceOrder[]) {
   return rows.reduce((total, row) => {
-    total[row.fulfillmentStatus] += 1
+    total[row.fulfillmentStatus] += row.quantity
     return total
   }, { waiting: 0, boxed: 0, issued: 0 })
 }
@@ -55,4 +55,3 @@ export function sortKitchenService(rows: CafeteriaKitchenServiceOrder[]) {
 }
 
 export const signedCount = (value: number) => value > 0 ? `+${value}` : value < 0 ? `−${Math.abs(value)}` : '0'
-

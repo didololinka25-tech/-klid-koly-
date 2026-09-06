@@ -10,3 +10,5 @@ vite.config.d.ts
 *.sql.enc
 *.tar.gz.enc
 supabase-backup-*/
+# Legacy cafeteria exports contain personal data and must stay outside Git.
+*.xlsx

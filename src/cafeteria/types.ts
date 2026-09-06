@@ -24,6 +24,7 @@ export type CafeteriaOrder = {
   accountId: string
   portionCategoryId: string
   unitPrice: number
+  quantity: number
   status: CafeteriaOrderStatus
   orderedAt: string
   cancelledAt: string | null
@@ -96,6 +97,7 @@ export type CafeteriaKitchenServiceOrder = {
   orderId: string
   dinerId: string
   dinerName: string
+  quantity: number
   portionCode: string
   portionName: string
   variantId: string

@@ -179,7 +179,7 @@ function KitchenService({ meals }: { meals: MealDay[] }) {
       {!orders.length && <KitchenEmpty text="Dnes není co vydávat." />}
       {!!orders.length && !visible.length && <KitchenEmpty text={filter === 'boxed' ? 'Žádné obědy nečekají v krabičce.' : 'Tomuto filtru nikdo neodpovídá.'} />}
       <div className="kitchen-service-list">{visible.map((order) => <article className={`panel kitchen-service-row status-${order.fulfillmentStatus}`} key={order.orderId}>
-        <div><h3>{order.dinerName}</h3><p>{shortPortion(order.portionName)} · {order.variantName}</p><span className="kitchen-status">{order.fulfillmentStatus === 'boxed' ? '📦 ' : order.fulfillmentStatus === 'issued' ? '✓ ' : ''}{fulfillmentLabels[order.fulfillmentStatus]}</span></div>
+        <div><h3>{order.dinerName}</h3><p>{order.quantity > 1 ? `${order.quantity}× · ` : ''}{shortPortion(order.portionName)} · {order.variantName}</p><span className="kitchen-status">{order.fulfillmentStatus === 'boxed' ? '📦 ' : order.fulfillmentStatus === 'issued' ? '✓ ' : ''}{fulfillmentLabels[order.fulfillmentStatus]}</span></div>
         <div className="kitchen-row-actions">
           {order.fulfillmentStatus !== 'waiting' && <button type="button" disabled={savingId === order.orderId} onClick={() => void changeStatus(order, 'waiting')} aria-label={`Vrátit na čeká: ${order.dinerName}`}>Čeká</button>}
           {order.fulfillmentStatus !== 'boxed' && <button type="button" disabled={savingId === order.orderId} onClick={() => void changeStatus(order, 'boxed')} aria-label={`Připravit krabičku pro ${order.dinerName}`}>📦 Krabička</button>}

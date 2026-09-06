@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "test": "node --experimental-strip-types --test src/*.test.mjs",
     "build": "vite build",
+    "import:cafeteria-orders": "node scripts/import-cafeteria-orders.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -23,6 +24,8 @@
   "devDependencies": {
     "typescript": "latest",
     "@types/react": "latest",
-    "@types/react-dom": "latest"
+    "@types/react-dom": "latest",
+    "exceljs": "4.4.0",
+    "pg": "8.23.0"
   }
 }

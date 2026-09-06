@@ -48,6 +48,7 @@ type OrderRow = {
   account_id: string
   portion_category_id: string
   unit_price: number | string
+  quantity: number | string
   status: 'ordered' | 'cancelled'
   ordered_at: string
   cancelled_at: string | null
@@ -71,7 +72,7 @@ type KitchenCountRow = {
 }
 type KitchenServiceRow = {
   order_id: string; diner_id: string; diner_name: string; portion_code: string; portion_name: string
-  variant_id: string; variant_name: string; fulfillment_status: CafeteriaFulfillmentStatus
+  quantity?: number | string; variant_id: string; variant_name: string; fulfillment_status: CafeteriaFulfillmentStatus
 }
 type KitchenDinerRow = {
   diner_id: string; diner_name: string; portion_category_id: string; portion_code: string; portion_name: string
@@ -135,7 +136,7 @@ const failIfError = (error: DbError) => {
 }
 
 const dinerSelect = 'id,diner_type,full_name,profile_id,family_id,account_id,portion_category_id,cafeteria_portion_categories(name)'
-const orderSelect = 'id,diner_id,meal_day_id,meal_variant_id,account_id,portion_category_id,unit_price,status,ordered_at,cancelled_at'
+const orderSelect = 'id,diner_id,meal_day_id,meal_variant_id,account_id,portion_category_id,unit_price,quantity,status,ordered_at,cancelled_at'
 const lateRequestSelect = 'id,order_id,diner_id,meal_day_id,request_type,requested_variant_id,status,billing_outcome,requested_at'
 
 const mapDiner = (row: DinerRow): CafeteriaDiner => {
@@ -160,6 +161,7 @@ const mapOrder = (row: OrderRow): CafeteriaOrder => ({
   accountId: row.account_id,
   portionCategoryId: row.portion_category_id,
   unitPrice: Number(row.unit_price),
+  quantity: Number(row.quantity),
   status: row.status,
   orderedAt: row.ordered_at,
   cancelledAt: row.cancelled_at,
@@ -472,6 +474,7 @@ async function loadKitchenService(targetDate: string): Promise<CafeteriaKitchenS
     orderId: row.order_id,
     dinerId: row.diner_id,
     dinerName: row.diner_name,
+    quantity: Number(row.quantity ?? 1),
     portionCode: row.portion_code,
     portionName: row.portion_name,
     variantId: row.variant_id,
