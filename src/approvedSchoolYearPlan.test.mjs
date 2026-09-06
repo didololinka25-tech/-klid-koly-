@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 
 const migration = readFileSync(new URL('../supabase/migrations/20260901003300_approved_school_year_plan_and_fourth_floor_rotation.sql', import.meta.url), 'utf8')
 const repository = readFileSync(new URL('./schoolRepository.ts', import.meta.url), 'utf8')
+const dynamicPlanLoader = readFileSync(new URL('./dynamicSchoolPlanLoader.ts', import.meta.url), 'utf8')
 const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 const todayBlocks = readFileSync(new URL('./todayWorkBlocks.ts', import.meta.url), 'utf8')
 
@@ -79,7 +80,7 @@ test('03300 sama obsahuje finální dvoučlennou rotaci a neponechává schody a
 test('Dnes i Kalendář čtou stejný serverový planner a Kalendář nezamění loading/chybu za starý plán', () => {
   assert.match(repository, /get_dynamic_school_cleaning_plan/)
   assert.match(repository, /dynamicSchoolPlan/)
-  assert.match(repository, /missingFunction\(result\.error\)[\s\S]*return null/)
+  assert.match(dynamicPlanLoader, /isMissingDynamicPlanner\(result\.error\)[\s\S]*return null/)
   assert.match(app, /schoolRepository\.dynamicSchoolPlan/)
   assert.match(app, /serverPlanForCalendarDate\(date, records, serverDynamicPlan\)/)
   assert.match(app, /outsideSourceDates[\s\S]*dynamicSchoolPlan\(sourceDate, sourceDate\)/)

@@ -3,7 +3,6 @@ import type { Attendance, Task } from './types'
 import { supabase } from './supabase'
 import {
   isTaskDueForCleaningDay,
-  dateRangeChunks,
   resolveCleaningDay,
   type CleaningDayContext,
   type CleaningDayException,
@@ -14,6 +13,9 @@ import { attendanceStartValues } from './buildingScope'
 import { inferredBulkCompletable, isBulkCompletableTask } from './cleaningBulk'
 import { workerPlanningSaveError, type CleaningRotationSlot, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from './workerPlanning'
 import { calendarInvokeFailure, parseSchoolCalendarResponse, type CalendarSchoolEvent, type SchoolCalendarEventsResult } from './schoolCalendarApi'
+import { loadDynamicSchoolPlan, type DynamicSchoolPlanItem } from './dynamicSchoolPlanLoader'
+
+export type { DynamicSchoolPlanItem } from './dynamicSchoolPlanLoader'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -49,15 +51,6 @@ export type BulkCompletionAction = {
   canUndo: boolean
 }
 export type TaskLoad = { dateKey: string; tasks: Task[]; bulkActions: BulkCompletionAction[]; cleaningDay: CleaningDayContext; cleaningDaysAvailable: boolean }
-export type DynamicSchoolPlanItem = {
-  taskId: string
-  scheduledDate: string
-  planReason: Task['plannerReason']
-  dueFrom: string | null
-  dueTo: string | null
-  assignedWorkerId: string | null
-  plannerPriority: number | null
-}
 export type CleaningDayRecord = CleaningDayException & {
   buildingId: string
   scopeType: 'whole_school'
@@ -348,31 +341,14 @@ export const schoolRepository = {
     // calendar can exceed that limit and silently lose later floors/extras.
     // Weekly chunks stay well below the cap while preserving one interval load
     // from the component and the server planner remains the only source of truth.
-    const results = await Promise.all(dateRangeChunks(from, to).map((chunk) =>
-      client().rpc('get_dynamic_school_cleaning_plan', { target_from: chunk.from, target_to: chunk.to })))
-    if (results.some((result) => missingFunction(result.error))) return null
-    const failed = results.find((result) => result.error)
-    if (failed?.error) throw failed.error
-    if (results.some((result) => (result.data?.length ?? 0) >= 1000)) {
-      throw new Error('Dynamický plán překročil bezpečný limit načtení. Zkuste načtení zopakovat.')
-    }
-    const byDate = new Map<string, Map<string, DynamicSchoolPlanItem>>()
-    for (const row of results.flatMap((result) => result.data ?? [])) {
-      const date = String((row as any).scheduled_date)
-      const items = byDate.get(date) ?? new Map<string, DynamicSchoolPlanItem>()
-      const item: DynamicSchoolPlanItem = {
-        taskId: String((row as any).task_id),
-        scheduledDate: date,
-        planReason: (row as any).plan_reason ?? null,
-        dueFrom: (row as any).due_from ?? null,
-        dueTo: (row as any).due_to ?? null,
-        assignedWorkerId: (row as any).assigned_worker_id ?? null,
-        plannerPriority: (row as any).planner_priority == null ? null : Number((row as any).planner_priority),
-      }
-      items.set(item.taskId, item)
-      byDate.set(date, items)
-    }
-    return byDate
+    return loadDynamicSchoolPlan({
+      from,
+      to,
+      loadChunk: async (chunkFrom, chunkTo) => {
+        const result = await client().rpc('get_dynamic_school_cleaning_plan', { target_from: chunkFrom, target_to: chunkTo })
+        return { data: result.data as Record<string, unknown>[] | null, error: result.error }
+      },
+    })
   },
   planOptions: async (buildingId?: string): Promise<PlanOptions> => {
     const db = client()
