@@ -568,6 +568,7 @@ const emptyData: CafeteriaData = {
 
 export const cafeteriaRepository = {
   loadAvailableDiners,
+  loadMenuWeek: (week: WeekRange) => loadMeals(false, week),
   loadMealWeek,
   loadFamilyMealWeek,
   createOrder,

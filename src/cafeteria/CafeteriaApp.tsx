@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Profile } from '../schoolRepository'
 import type { CafeteriaRole } from '../system/access'
+import { CafeteriaMenu } from './CafeteriaMenu'
 import { CafeteriaOrdering } from './CafeteriaOrdering'
 import { CafeteriaKitchen } from './CafeteriaKitchen'
 import { cafeteriaRepository } from './cafeteriaRepository'
@@ -20,7 +21,7 @@ export function CafeteriaApp({ profile, roles, onOpenLauncher, onSignOut }: { pr
   const [message, setMessage] = useState('')
   const [orderingDirty, setOrderingDirty] = useState(false)
   const [kitchenPendingCount, setKitchenPendingCount] = useState(0)
-  const navigation = useMemo(() => role === 'parent' ? ['Obědy', 'Platby', 'Rodina'] : role === 'diner' ? ['Jídelníček', 'Profil'] : role === 'kitchen' ? ['Dnes', 'Výdej', 'Jídelníček', 'Žádosti'] : ['Přehled', 'Jídelníček', 'Lidé', 'Finance', 'Více'], [role])
+  const navigation = useMemo(() => role === 'parent' ? ['Obědy', 'Jídelníček', 'Platby', 'Rodina'] : role === 'diner' ? ['Jídelníček', 'Profil'] : role === 'kitchen' ? ['Dnes', 'Výdej', 'Jídelníček', 'Žádosti'] : ['Přehled', 'Jídelníček', 'Lidé', 'Finance', 'Více'], [role])
   const activeSection = navigation.includes(section) ? section : navigation[0]
   const confirmDiscard = () => !orderingDirty || window.confirm('Máte neuložené změny. Zahodit je?')
   const leaveForLauncher = () => { if (confirmDiscard()) { setOrderingDirty(false); onOpenLauncher() } }
@@ -52,6 +53,7 @@ export function CafeteriaApp({ profile, roles, onOpenLauncher, onSignOut }: { pr
 
 function CafeteriaContent({ role, section, data, onOrderingDirtyChange, onKitchenPendingCountChange }: { role: CafeteriaRole; section: string; data: CafeteriaData; onOrderingDirtyChange: (dirty: boolean) => void; onKitchenPendingCountChange: (count: number) => void }) {
   if ((role === 'parent' && section === 'Obědy') || (role === 'diner' && section === 'Jídelníček')) return <CafeteriaOrdering diners={data.orderingDiners} onDirtyChange={onOrderingDirtyChange} />
+  if (role === 'parent' && section === 'Jídelníček') return <CafeteriaMenu />
   if (role === 'kitchen' && (section === 'Dnes' || section === 'Výdej' || section === 'Žádosti')) return <CafeteriaKitchen section={section} meals={data.meals} onPendingCountChange={onKitchenPendingCountChange} />
   if (section === 'Jídelníček') return <MealList meals={data.meals} />
   if (section === 'Platby' || section === 'Finance') return <EmptyState icon="💰" text="Finanční přehled bude dostupný po aktivaci plateb." />
