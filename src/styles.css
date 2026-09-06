@@ -615,6 +615,17 @@ h1 {
 .full-variant-list small { color: #67817c; }
 .dialog-cancel-order { width: 100%; min-height: 48px; margin-top: 12px; border: 1px solid #e0c7c3; border-radius: 11px; background: #fff; color: #983d32; font-weight: 850; }
 
+@media (max-width: 600px) {
+  .cafeteria-ordering.family-ordering {
+    padding-bottom: calc(80px + env(safe-area-inset-bottom));
+  }
+
+  .family-ordering .family-grid-scroll {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+    scroll-padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+}
+
 @media (max-width: 390px) {
   .family-order-grid th,
   .family-order-grid td { width: 116px; min-width: 116px; padding: 6px; }

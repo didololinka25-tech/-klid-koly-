@@ -160,6 +160,15 @@ test('mobilní šířky 360, 390 a 430 px používají posuvnou mřížku bez zm
   assert.match(css, /@media \(min-width: 430px\)[\s\S]*min-width: 132px/)
 })
 
+test('mobilní mřížka na 360, 390 a 430 px ponechá pátek nad fixed navigací i safe area', async () => {
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8')
+  const testedWidths = [360, 390, 430]
+
+  assert.equal(testedWidths.every((width) => width <= 600), true)
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.cafeteria-ordering\.family-ordering\s*\{[\s\S]*padding-bottom: calc\(80px \+ env\(safe-area-inset-bottom\)\)/)
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.family-ordering \.family-grid-scroll\s*\{[\s\S]*padding-bottom: calc\(72px \+ env\(safe-area-inset-bottom\)\)[\s\S]*scroll-padding-bottom: calc\(72px \+ env\(safe-area-inset-bottom\)\)/)
+})
+
 test('neuložené změny jsou chráněné při změně týdne, sekce i launcheru', async () => {
   const ordering = await readFile(new URL('./cafeteria/CafeteriaOrdering.tsx', import.meta.url), 'utf8')
   const app = await readFile(new URL('./cafeteria/CafeteriaApp.tsx', import.meta.url), 'utf8')
