@@ -49,7 +49,8 @@ import {
   isExtraCleaningTask,
   isStandardCleaningTask,
 } from "./cleaningPresentation";
-import { buildCalendarDaySummary, calendarDayCellScope, calendarDayPlanView, calendarPrintDay, calendarPrintWorkplaces, calendarWorkerOptions, filterCalendarExceptions, filterCalendarPlanning, filterCalendarTasks, projectDynamicSchoolPlan, type CalendarDaySummary, type CalendarPrintWorkplace } from "./cleaningCalendar";
+import { buildCalendarDaySummary, calendarDayCellScope, calendarDayPlanView, calendarPrintDay, calendarPrintWorkplaces, calendarWorkerOptions, filterCalendarExceptions, filterCalendarPlanning, filterCalendarTasks, filterSchoolCalendarEvents, projectDynamicSchoolPlan, type CalendarDaySummary, type CalendarPrintWorkplace } from "./cleaningCalendar";
+import type { CalendarSchoolEvent } from "./schoolCalendarApi";
 import { assignmentOverlapsMonth, scheduleExceptionsConflict, weekMonday, weeklyResponsibilitiesForDate, workAssignmentsConflict, workerPlanningSaveError, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
 import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
 import { appHistoryState, refreshAreasForRealtimeTable, shouldReloadIdentity, shouldRunResumeRefresh, withAppHistoryState } from "./appStability";
@@ -4025,6 +4026,7 @@ function CalendarDayCell({ summary, month, selected, onSelect }: { summary: Cale
     ...summary.extraordinary.map((title) => `Mimořádně: ${title}`),
     ...summary.rescheduled.map((title) => `Přesunuto: ${title}`),
     ...summary.cancelledWorkplaces.map((item) => `${item.buildingName}: úklid zrušen`),
+    ...summary.schoolEvents.map((event) => `Školní akce: ${event.title}`),
     ...(fourthFloorWorkerName || fourthFloorFallback ? [`4. patro: ${fourthFloorWorkerName ?? fourthFloorFallback}`] : []),
   ].join(", ");
   return <button
@@ -4041,7 +4043,8 @@ function CalendarDayCell({ summary, month, selected, onSelect }: { summary: Cale
       {scope.hasFourthFloor && <b>+4F</b>}
       {scope.extraCount > 0 && <b>+{scope.extraCount} extra</b>}
     </span>}
-    {(summary.extraordinary.length > 0 || summary.rescheduled.length > 0 || summary.cancelledExceptions.length > 0 || summary.movedTo || view.extras.length > 0 || view.hasFourthFloor) && <span className="calendar-specials">
+    {(summary.schoolEvents.length > 0 || summary.extraordinary.length > 0 || summary.rescheduled.length > 0 || summary.cancelledExceptions.length > 0 || summary.movedTo || view.extras.length > 0 || view.hasFourthFloor) && <span className="calendar-specials">
+      {summary.schoolEvents.length > 0 && <em className="calendar-school-event-badge">AKCE{summary.schoolEvents.length > 1 ? ` · ${summary.schoolEvents.length}` : ""}</em>}
       {summary.extraordinary.length > 0 && <em>Mimořádně</em>}
       {summary.rescheduled.length > 0 && <em>Přesunuto</em>}
       {summary.cancelledWorkplaces.map((item) => <em className="calendar-cancelled-badge" key={item.id}>{item.buildingName} · ZRUŠENO</em>)}
@@ -4054,7 +4057,7 @@ function CalendarDayCell({ summary, month, selected, onSelect }: { summary: Cale
 }
 
 function CalendarLegend() {
-  return <details className="calendar-legend"><summary>Legenda</summary><div><span>Iniciály = pracovníci</span><span>OK = okna</span><span>DV = dveře</span><span>SCH = schodiště</span><span>PR = praní</span><small>Kalendář ukazuje jen pracovní rozdělení a práci navíc.</small></div></details>;
+  return <details className="calendar-legend"><summary>Legenda</summary><div><span>Iniciály = pracovníci</span><span>AKCE = školní událost</span><span>OK = okna</span><span>DV = dveře</span><span>SCH = schodiště</span><span>PR = praní</span><small>Školní akce jsou pouze informace a úklid samy nemění.</small></div></details>;
 }
 
 type CalendarPlannerStatus = "loading" | "ready" | "unavailable" | "error";
@@ -4070,6 +4073,7 @@ function CalendarDayDetail({ summary, plannerStatus, onRetry }: { summary: Calen
       {summary.rescheduled.map((title) => <p className="calendar-rescheduled" key={title}><b>PŘESUNUTÝ ÚKLID</b><span>{title}</span></p>)}
       {summary.cancelledWorkplaces.map((item) => <p className="calendar-cancelled" key={item.id}><b>{item.buildingName} · ÚKLID ZRUŠEN</b>{item.note && <span>{item.note}</span>}</p>)}
       {summary.movedTo && <p className="calendar-rescheduled"><b>ÚKLID PŘESUNUT</b><span>Nový termín: {formatDate(summary.movedTo)}</span></p>}
+      {summary.schoolEvents.length > 0 && <section className="calendar-school-events"><b className="calendar-detail-label">ŠKOLNÍ AKCE</b>{summary.schoolEvents.map((event) => <article key={event.id}><strong>{event.title}</strong>{event.description && <p>{event.description}</p>}<small>Informace · úklid se automaticky nemění</small></article>)}</section>}
       <section className="calendar-day-summary"><b className="calendar-detail-label">KDO PRACUJE · {summary.workers.length}</b>{summary.workers.length > 0 ? <div className="calendar-worker-list">{summary.workers.map((worker) => <span key={`${worker.workerId}|${worker.buildingId}`}><i className={`worker-color-${worker.colorIndex}`}>{worker.initials}</i><b>{worker.workerName}</b><small>{worker.buildingName} · {worker.areaLabel}{worker.exception ? " · výjimečně" : ""}</small></span>)}</div> : <p className="hint">Nikdo není podle rozvrhu naplánovaný.</p>}</section>
       {plannerStatus === "loading" && <section className="calendar-plan-state" role="status">Načítám plán dne…</section>}
       {plannerStatus === "error" && <section className="calendar-plan-state error" role="alert"><b>Plán dne se nepodařilo načíst.</b><button onClick={onRetry}>Zkusit znovu</button></section>}
@@ -4287,6 +4291,9 @@ function CleaningCalendar({
   const [plannerReload, setPlannerReload] = useState(0);
   const retryPlanner = useCallback(() => setPlannerReload((value) => value + 1), []);
   const [dayDetailOpen, setDayDetailOpen] = useState(false);
+  const [schoolEvents, setSchoolEvents] = useState<CalendarSchoolEvent[]>([]);
+  const [schoolEventsError, setSchoolEventsError] = useState(false);
+  const [schoolEventsReload, setSchoolEventsReload] = useState(0);
   const closeDayDetail = useHistoryLayer(dayDetailOpen, "calendar-day-detail", () => setDayDetailOpen(false));
   const closeCleaningDayEditor = useHistoryLayer(Boolean(editing), "cleaning-day-editor", () => setEditing(null));
   const [printMode, setPrintMode] = useState<CalendarPrintMode | null>(null);
@@ -4340,6 +4347,14 @@ function CleaningCalendar({
       .catch((error) => { console.error("Plán úklidu v kalendáři se nepodařilo načíst:", error); if (active) { setServerDynamicPlan(null); setPlannerStatus("error"); } });
     return () => { active = false; };
   }, [gridDates, records, plannerReload]);
+  useEffect(() => {
+    let active = true;
+    if (!gridDates.length) return;
+    schoolRepository.schoolInformationEvents({ from: gridDates[0], to: gridDates[gridDates.length - 1] })
+      .then((events) => { if (active) { setSchoolEvents(events); setSchoolEventsError(false); } })
+      .catch((error) => { console.error("Školní akce se nepodařilo načíst:", error); if (active) setSchoolEventsError(true); });
+    return () => { active = false; };
+  }, [gridDates, schoolEventsReload]);
   const resolvedCalendarDays = useMemo(() => gridDates.map((date) => ({
     date,
     tasks: plannerStatus === "ready" ? plannedTasksForDate(planTasks, records, date, serverPlanForCalendarDate(date, records, serverDynamicPlan)) : [],
@@ -4351,12 +4366,13 @@ function CleaningCalendar({
       buildingName: buildings.find((building) => building.id === record.buildingId)?.name ?? "Pracoviště",
     }));
     const scopedPlanning = filterCalendarPlanning(planning, workplaceId);
+    const scopedSchoolEvents = filterSchoolCalendarEvents(schoolEvents, workplaceId);
     return resolvedCalendarDays.map((item) => {
       const scopedTasks = filterCalendarTasks(item.tasks, workplaceId);
       const context = calendarContextForDate(scopedTasks, scopedRecords, item.date);
-      return buildCalendarDaySummary({ date: item.date, today, tasks: scopedTasks, context, exceptions: scopedExceptions, planning: scopedPlanning, workerId: workerFilter });
+      return buildCalendarDaySummary({ date: item.date, today, tasks: scopedTasks, context, exceptions: scopedExceptions, planning: scopedPlanning, workerId: workerFilter, schoolEvents: scopedSchoolEvents });
     });
-  }, [records, buildings, planning, resolvedCalendarDays, today, workerFilter]);
+  }, [records, buildings, planning, resolvedCalendarDays, today, workerFilter, schoolEvents]);
   const calendarDays = useMemo(() => buildScopedDays(buildingFilter), [buildScopedDays, buildingFilter]);
   const schoolBuildingId = buildings.find((building) => building.name === "Škola")?.id ?? null;
   const defaultPrintBuildingFilter = buildingFilter !== "all" ? buildingFilter : schoolBuildingId ?? "all";
@@ -4370,7 +4386,7 @@ function CleaningCalendar({
   const selected = calendarDays.find((item) => item.date === selectedDate)
     ?? (() => {
       const due = filterCalendarTasks(plannerStatus === "ready" ? plannedTasksForDate(planTasks, records, selectedDate, serverPlanForCalendarDate(selectedDate, records, serverDynamicPlan)) : [], buildingFilter);
-      return buildCalendarDaySummary({ date: selectedDate, today, tasks: due, context: calendarContextForDate(due, visibleRecords, selectedDate), exceptions: visibleExceptionRecords, planning: visiblePlanning, workerId: workerFilter });
+      return buildCalendarDaySummary({ date: selectedDate, today, tasks: due, context: calendarContextForDate(due, visibleRecords, selectedDate), exceptions: visibleExceptionRecords, planning: visiblePlanning, workerId: workerFilter, schoolEvents: filterSchoolCalendarEvents(schoolEvents, buildingFilter) });
     })();
   const moveMonth = (amount: number) => {
     const [year, monthNumber] = month.split("-").map(Number);
@@ -4402,6 +4418,7 @@ function CleaningCalendar({
         <small>Plán se automaticky přepočítá podle skutečně naplánovaných pracovníků. Rutinní mikroúkoly kalendář nezaplňují.</small>
       </section>
       {!planning.available && <div className="notice">Pracovní rozdělení teď není dostupné. Práce navíc zůstává dostupná.</div>}
+      {schoolEventsError && <div className="notice calendar-events-error">Školní akce se nepodařilo načíst. Úklidový plán funguje dál.<button type="button" onClick={() => setSchoolEventsReload((value) => value + 1)}>Zkusit znovu</button></div>}
       <div className="calendar-filter" role="group" aria-label="Filtrovat pracoviště"><button className={buildingFilter === "all" ? "active" : ""} onClick={() => setBuildingFilter("all")}>Vše</button>{buildings.map((building) => <button className={buildingFilter === building.id ? "active" : ""} key={building.id} onClick={() => setBuildingFilter(building.id)}>{building.name}</button>)}</div>
       <label className="calendar-worker-filter">Pracovník<select value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)}><option value="all">Všichni</option>{workerOptions.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></label>
       <details className="calendar-print-menu" onToggle={(event) => {

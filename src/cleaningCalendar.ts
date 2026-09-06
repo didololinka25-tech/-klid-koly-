@@ -3,7 +3,7 @@ import type { CleaningDayContext } from './scheduling'
 import { isExtraCleaningTask, summarizeCleaningDay } from './cleaningPresentation.ts'
 import { cleaningRotationForOccurrence, workersForDate, type PlannedWorker, type RotationForDate, type WorkerPlanningData } from './workerPlanning.ts'
 import { buildTodayWorkBlocks, type TodayBuildingWork } from './todayWorkBlocks.ts'
-import type { SchoolCalendarEvent } from './schoolCalendarApi.ts'
+import type { CalendarSchoolEvent } from './schoolCalendarApi.ts'
 
 export type CalendarExceptionInput = {
   id?: string
@@ -70,9 +70,8 @@ export type CalendarDaySummary = {
   workBlocks: TodayBuildingWork[]
   fourthFloorRotation: RotationForDate | null
   fourthFloorAssignedWorker: { workerId: string; workerName: string } | null
-  // Sekundární read-only vrstva; zatím se nenačítá ani nevykresluje a
-  // nijak nevstupuje do planneru.
-  schoolEvents: SchoolCalendarEvent[]
+  // Sekundární read-only informační vrstva; nijak nevstupuje do planneru.
+  schoolEvents: CalendarSchoolEvent[]
 }
 
 const extraCategoryMeta: Record<CalendarExtraCategory['key'], Pick<CalendarExtraCategory, 'symbol' | 'label'>> = {
@@ -127,6 +126,7 @@ export function buildCalendarDaySummary({
   exceptions = [],
   planning = { assignments: [], exceptions: [], rotationDefinitions: [], rotationSlots: [], available: false },
   workerId = 'all',
+  schoolEvents = [],
 }: {
   date: string
   today: string
@@ -135,6 +135,7 @@ export function buildCalendarDaySummary({
   exceptions?: CalendarExceptionInput[]
   planning?: WorkerPlanningData
   workerId?: string
+  schoolEvents?: CalendarSchoolEvent[]
 }): CalendarDaySummary {
   const allWorkers = workersForDate(date, planning)
   const hasFourthFloor = tasks.some((task) => task.floor === '4. patro')
@@ -227,8 +228,24 @@ export function buildCalendarDaySummary({
       workerId: assignedFourthFloorWorkerId,
       workerName: assignedFourthFloorWorkerName ?? 'Přiřazený pracovník',
     } : null,
-    schoolEvents: [],
+    schoolEvents: schoolEvents.filter((event) => schoolCalendarEventOccursOn(event, date)),
   }
+}
+
+export function schoolCalendarEventOccursOn(event: CalendarSchoolEvent, date: string) {
+  if (event.allDay) return event.start.slice(0, 10) <= date && date < event.end.slice(0, 10)
+  const dateKeyInPrague = (instant: number) => new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Prague', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(instant))
+  const start = Date.parse(event.start)
+  const end = Date.parse(event.end)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return false
+  return dateKeyInPrague(start) <= date && date <= dateKeyInPrague(end - 1)
+}
+
+export function filterSchoolCalendarEvents(events: CalendarSchoolEvent[], buildingId: string) {
+  if (buildingId === 'all') return events
+  return events.filter((event) => !event.affectedBuildingId || event.affectedBuildingId === buildingId)
 }
 
 /**

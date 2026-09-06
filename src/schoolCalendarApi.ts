@@ -4,6 +4,12 @@ import type {
   SchoolCalendarEventsResult,
 } from '../supabase/functions/_shared/schoolCalendarTypes'
 
+export type InformationalSchoolCalendarEvent = Omit<SchoolCalendarEvent, 'source'> & {
+  source: 'school-information'
+}
+
+export type CalendarSchoolEvent = SchoolCalendarEvent | InformationalSchoolCalendarEvent
+
 const knownErrorCodes = new Set<SchoolCalendarErrorCode>([
   'unauthenticated', 'forbidden', 'invalid_range', 'secret_missing',
   'remote_unavailable', 'timeout', 'invalid_ics', 'parser_error',

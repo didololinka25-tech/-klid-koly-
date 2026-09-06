@@ -246,7 +246,7 @@ test('UI má 7 sloupců, today/selected/outside stavy, kompaktní legendu a žá
   assert.match(app, /outside \? " outside"/)
   assert.match(app, /className="calendar-today-button"/)
   assert.match(app, /function CalendarLegend/)
-  assert.match(model, /schoolEvents: \[\]/)
+  assert.match(model, /schoolEvents: schoolEvents\.filter/)
   assert.doesNotMatch(app.slice(app.indexOf('function CalendarDayCell'), app.indexOf('function CalendarLegend')), /tasks\.length|úkolů/)
   assert.doesNotMatch(app.slice(app.indexOf('function CalendarDayCell'), app.indexOf('function CalendarLegend')), /summary\.sections|summary\.workplaces/)
 })

@@ -298,12 +298,13 @@ test('produkční Edge entrypoint ověřuje Supabase usera a can_view_school_dat
   assert.doesNotMatch(source, /SERVICE_ROLE|provider_token|provider_refresh_token|calendar\.google/)
 })
 
-test('frontend repository volá izolovanou Edge Function a placeholder zůstává mimo planner', async () => {
+test('frontend repository drží budoucí ICS Edge Function oddělenou od planneru', async () => {
   const repository = await readFile(new URL('./schoolRepository.ts', import.meta.url), 'utf8')
   const calendarModel = await readFile(new URL('./cleaningCalendar.ts', import.meta.url), 'utf8')
   const method = repository.match(/getSchoolCalendarEvents:[\s\S]*?\n  },/)?.[0] ?? ''
   assert.match(method, /functions\.invoke\('school-calendar-events'/)
   assert.match(method, /body:\s*\{ from, to \}/)
   assert.doesNotMatch(method, /\bload\(|planner|cleaning_tasks|completion/i)
-  assert.match(calendarModel, /schoolEvents:\s*\[\]/)
+  assert.match(calendarModel, /schoolEvents: schoolEvents\.filter/)
+  assert.doesNotMatch(calendarModel, /getSchoolCalendarEvents/)
 })

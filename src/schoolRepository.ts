@@ -13,7 +13,7 @@ import { pragueDateKey, validateAttendanceInterval } from './attendanceTime'
 import { attendanceStartValues } from './buildingScope'
 import { inferredBulkCompletable, isBulkCompletableTask } from './cleaningBulk'
 import { workerPlanningSaveError, type CleaningRotationSlot, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from './workerPlanning'
-import { calendarInvokeFailure, parseSchoolCalendarResponse, type SchoolCalendarEventsResult } from './schoolCalendarApi'
+import { calendarInvokeFailure, parseSchoolCalendarResponse, type CalendarSchoolEvent, type SchoolCalendarEventsResult } from './schoolCalendarApi'
 
 export type AccessRole = 'pending' | 'cleaning_team' | 'admin' | 'visitor'
 export type LegacyRole = 'cleaner' | 'caretaker'
@@ -131,6 +131,11 @@ const mapRotationSlot = (row: any): CleaningRotationSlot => ({
 })
 
 const localToday = () => pragueDateKey(new Date())
+const nextDateKey = (date: string) => {
+  const [year, month, day] = date.split('-').map(Number)
+  const next = new Date(Date.UTC(year, month - 1, day + 1))
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`
+}
 const missingRelation = (error: { code?: string; message?: string } | null) =>
   Boolean(error && ['42P01', 'PGRST205'].includes(error.code ?? ''))
 const missingColumn = (error: { code?: string; message?: string } | null) =>
@@ -192,6 +197,35 @@ export const schoolRepository = {
     })
     if (error) return calendarInvokeFailure(error)
     return parseSchoolCalendarResponse(data)
+  },
+  schoolInformationEvents: async ({ from, to }: { from: string; to: string }): Promise<CalendarSchoolEvent[]> => {
+    const { data, error } = await client()
+      .from('school_calendar_events')
+      .select('id,event_key,title,note,starts_on,ends_on,building_id,updated_at')
+      .eq('active', true)
+      .lte('starts_on', to)
+      .gte('ends_on', from)
+      .order('starts_on')
+      .order('title')
+    // Frontend může být nasazený dřív než ručně schválená migrace. Školní
+    // akce jsou vedlejší informační vrstva a jejich absence nesmí rozbít plán.
+    if (missingRelation(error)) return []
+    if (error) throw error
+    return (data ?? []).map((row: any) => ({
+      id: row.id,
+      externalId: row.event_key,
+      title: row.title,
+      description: row.note || undefined,
+      start: row.starts_on,
+      // Normalizovaný model používá pro celodenní události koncové datum
+      // exkluzivně, stejně jako ICS. V DB zůstává lidsky čitelný rozsah včetně.
+      end: nextDateKey(row.ends_on),
+      allDay: true,
+      updatedAt: row.updated_at,
+      source: 'school-information' as const,
+      affectedBuildingId: row.building_id || undefined,
+      collisionKind: 'none' as const,
+    }))
   },
   profile: async (id: string): Promise<Profile | null> => {
     const extended = await client().from('profiles').select('id,full_name,role,access_role,active,is_owner,email,created_at,first_signed_in_at,last_signed_in_at').eq('id', id).maybeSingle()
