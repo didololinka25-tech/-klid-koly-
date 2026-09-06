@@ -77,6 +77,54 @@ export type CafeteriaDraftSaveResult = {
   saved: number
   failed: Array<{ change: CafeteriaOrderDraftChange; message: string }>
 }
+export type CafeteriaFulfillmentStatus = 'waiting' | 'boxed' | 'issued'
+export type CafeteriaKitchenCount = {
+  mealDayId: string
+  mealDate: string
+  cutoffAt: string
+  mealVariantId: string
+  mealVariantName: string
+  portionCategoryId: string
+  portionCode: string
+  portionName: string
+  cutoffCount: number
+  currentCount: number
+  lateDelta: number
+}
+export type CafeteriaKitchenPortion = { id: string; code: string; name: string; sortOrder: number }
+export type CafeteriaKitchenServiceOrder = {
+  orderId: string
+  dinerId: string
+  dinerName: string
+  portionCode: string
+  portionName: string
+  variantId: string
+  variantName: string
+  fulfillmentStatus: CafeteriaFulfillmentStatus
+}
+export type CafeteriaKitchenDiner = {
+  dinerId: string
+  dinerName: string
+  portionCategoryId: string
+  portionCode: string
+  portionName: string
+}
+export type CafeteriaKitchenLateRequest = {
+  requestId: string
+  requestType: CafeteriaLateRequestType
+  requestedAt: string
+  mealDayId: string
+  mealDate: string
+  dinerId: string
+  dinerName: string
+  portionName: string
+  orderId: string | null
+  currentVariantId: string | null
+  currentVariantName: string | null
+  requestedVariantId: string | null
+  requestedVariantName: string | null
+}
+export type CafeteriaKitchenTotals = { cutoff: number; late: number; current: number; small: number; large: number }
 export type BulkWeekResult = {
   ordered: number
   needsVariant: string[]

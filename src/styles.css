@@ -2333,6 +2333,79 @@ nav .active {
   .calendar-grid { gap: 6px; }
 }
 
+.kitchen-page { display: grid; gap: 14px; padding-bottom: 92px; }
+.kitchen-title-row { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+.kitchen-title-row h2 { margin: 2px 0 0; font-size: clamp(21px, 6vw, 28px); text-transform: capitalize; }
+.kitchen-add { min-height: 46px; flex: 0 0 auto; padding-inline: 14px; }
+.kitchen-menu { display: grid; gap: 7px; padding: 16px; }
+.kitchen-menu small { color: #67817c; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.kitchen-menu b { font-size: 16px; line-height: 1.3; }
+.kitchen-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.kitchen-metric { min-width: 0; min-height: 112px; padding: 12px 9px; display: flex; flex-direction: column; justify-content: space-between; text-align: center; }
+.kitchen-metric small { color: #67817c; font-size: 11px; font-weight: 800; line-height: 1.25; }
+.kitchen-metric b { font-size: clamp(27px, 9vw, 38px); line-height: 1; }
+.kitchen-metric.strong { background: #165e56; color: #fff; border-color: transparent; }
+.kitchen-metric.strong small { color: rgba(255,255,255,.82); }
+.kitchen-metric.accent b { color: #165e56; }
+.kitchen-variant-list, .kitchen-service-list, .kitchen-request-list { display: grid; gap: 10px; }
+.kitchen-variant-card { padding: 15px; }
+.kitchen-variant-card h3 { margin: 0 0 13px; font-size: 17px; line-height: 1.3; }
+.kitchen-portion-counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); gap: 8px; }
+.kitchen-portion-counts span { min-height: 66px; display: grid; place-items: center; padding: 7px; border-radius: 12px; background: #f2f7f5; }
+.kitchen-portion-counts small { color: #67817c; font-weight: 750; text-transform: lowercase; }
+.kitchen-portion-counts b { font-size: 24px; }
+.kitchen-portion-counts .total { background: #e5f3ef; }
+.kitchen-inline-state { min-height: 100px; display: flex; align-items: center; justify-content: center; gap: 10px; color: #67817c; }
+.kitchen-empty { padding: 20px 16px; text-align: center; }
+.kitchen-empty p { margin: 0; }
+.kitchen-empty button { min-height: 44px; margin-top: 12px; }
+.kitchen-service-totals { display: flex; flex-wrap: wrap; gap: 7px; }
+.kitchen-service-totals b { padding: 9px 11px; border-radius: 999px; background: #f2f7f5; font-size: 13px; }
+.kitchen-search input, .kitchen-diner-search input { width: 100%; min-height: 48px; box-sizing: border-box; font-size: 16px; }
+.kitchen-filter-row { display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; }
+.kitchen-filter-row button { min-height: 44px; flex: 0 0 auto; padding: 0 14px; border-radius: 999px; }
+.kitchen-filter-row button.active { background: #165e56; border-color: #165e56; color: #fff; }
+.kitchen-variant-filter { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; font-size: 13px; font-weight: 800; }
+.kitchen-variant-filter select { min-height: 46px; min-width: 0; }
+.kitchen-service-row { display: grid; gap: 13px; padding: 15px; border-left: 5px solid #d8e6e2; }
+.kitchen-service-row.status-boxed { border-left-color: #ca8a04; }
+.kitchen-service-row.status-issued { border-left-color: #16a34a; opacity: .82; }
+.kitchen-service-row h3, .kitchen-service-row p { margin: 0; }
+.kitchen-service-row p { margin-top: 3px; color: #67817c; font-size: 13px; line-height: 1.35; }
+.kitchen-status { display: inline-flex; margin-top: 9px; padding: 5px 9px; border-radius: 999px; background: #f2f7f5; font-size: 12px; font-weight: 850; }
+.kitchen-row-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(94px, 1fr)); gap: 8px; }
+.kitchen-row-actions button { min-height: 48px; padding: 7px 10px; font-size: 13px; }
+.kitchen-request-card { display: grid; gap: 13px; padding: 16px; }
+.kitchen-request-card p, .kitchen-request-card h3 { margin: 0; }
+.kitchen-request-heading { display: flex; justify-content: space-between; gap: 10px; }
+.kitchen-request-heading p { margin-top: 3px; color: #67817c; font-size: 13px; }
+.kitchen-request-heading > span { align-self: start; padding: 5px 8px; border-radius: 999px; background: #e5f3ef; font-size: 11px; font-weight: 850; white-space: nowrap; }
+.kitchen-request-actions { display: grid; gap: 8px; }
+.kitchen-request-actions button { min-height: 48px; }
+.danger-text { color: #b42318; }
+.success-banner { position: sticky; bottom: 76px; z-index: 12; margin: 0; padding: 12px 14px; border-radius: 12px; background: #dcfce7; color: #166534; box-shadow: 0 6px 22px rgba(0,0,0,.12); font-weight: 800; }
+.error-banner { position: sticky; bottom: 76px; z-index: 12; margin: 0; padding: 12px 14px; border-radius: 12px; background: #fee2e2; color: #991b1b; box-shadow: 0 6px 22px rgba(0,0,0,.12); font-weight: 800; }
+.kitchen-manual-dialog { max-height: min(88vh, 720px); overflow-y: auto; }
+.kitchen-diner-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+.kitchen-diner-search label { display: grid; gap: 6px; font-size: 13px; font-weight: 800; }
+.kitchen-diner-search button { min-height: 48px; }
+.kitchen-search-results { display: grid; gap: 7px; max-height: 210px; overflow-y: auto; }
+.kitchen-search-results button { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; text-align: left; }
+.kitchen-search-results button.selected { border-color: #165e56; background: #e5f3ef; }
+.kitchen-search-results small { color: #67817c; }
+.kitchen-variant-choice { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
+.kitchen-variant-choice legend { margin-bottom: 6px; font-weight: 850; }
+.kitchen-variant-choice label { min-height: 50px; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid #d8e6e2; border-radius: 12px; }
+.kitchen-variant-choice input { width: 20px; height: 20px; }
+.kitchen-single-meal { display: grid; gap: 4px; margin: 0; }
+.kitchen-single-meal small { color: #67817c; }
+.kitchen-page button:focus-visible, .kitchen-page input:focus-visible, .kitchen-page select:focus-visible { outline: 3px solid var(--focus, #2563eb); outline-offset: 2px; }
+
+@media (min-width: 700px) {
+  .kitchen-service-row { grid-template-columns: minmax(0, 1fr) minmax(280px, auto); align-items: center; }
+  .kitchen-request-actions { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+}
+
 @page calendar-week-plan { size: A4 portrait; margin: 10mm; }
 @page calendar-month-plan { size: A4 landscape; margin: 9mm; }
 

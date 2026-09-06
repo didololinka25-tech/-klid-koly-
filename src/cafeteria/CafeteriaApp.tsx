@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Profile } from '../schoolRepository'
 import type { CafeteriaRole } from '../system/access'
 import { CafeteriaOrdering } from './CafeteriaOrdering'
+import { CafeteriaKitchen } from './CafeteriaKitchen'
 import { cafeteriaRepository } from './cafeteriaRepository'
 import type { CafeteriaData, MealDay } from './types'
 
@@ -18,7 +19,8 @@ export function CafeteriaApp({ profile, roles, onOpenLauncher, onSignOut }: { pr
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState('')
   const [orderingDirty, setOrderingDirty] = useState(false)
-  const navigation = useMemo(() => role === 'parent' ? ['Obědy', 'Platby', 'Rodina'] : role === 'diner' ? ['Jídelníček', 'Profil'] : role === 'kitchen' ? ['Dnes', 'Jídelníček', 'Žádosti'] : ['Přehled', 'Jídelníček', 'Lidé', 'Finance', 'Více'], [role])
+  const [kitchenPendingCount, setKitchenPendingCount] = useState(0)
+  const navigation = useMemo(() => role === 'parent' ? ['Obědy', 'Platby', 'Rodina'] : role === 'diner' ? ['Jídelníček', 'Profil'] : role === 'kitchen' ? ['Dnes', 'Výdej', 'Jídelníček', 'Žádosti'] : ['Přehled', 'Jídelníček', 'Lidé', 'Finance', 'Více'], [role])
   const activeSection = navigation.includes(section) ? section : navigation[0]
   const confirmDiscard = () => !orderingDirty || window.confirm('Máte neuložené změny. Zahodit je?')
   const leaveForLauncher = () => { if (confirmDiscard()) { setOrderingDirty(false); onOpenLauncher() } }
@@ -42,18 +44,17 @@ export function CafeteriaApp({ profile, roles, onOpenLauncher, onSignOut }: { pr
       {roles.length > 1 && <label className="cafeteria-role-picker">Zobrazení<select value={role} onChange={(event) => { const next = event.target.value as CafeteriaRole; if (next !== role && confirmDiscard()) { setOrderingDirty(false); setRole(next); setSection('') } }}>{roles.map((item) => <option value={item} key={item}>{roleLabels[item]}</option>)}</select></label>}
       {status === 'loading' && <section className="panel cafeteria-state"><span className="loading-spinner" /><p>Načítám Jídelnu…</p></section>}
       {status === 'error' && <section className="panel cafeteria-state"><h2>Jídelna není dostupná</h2><p>{message}</p><button onClick={leaveForLauncher}>Zpět na moduly</button></section>}
-      {status === 'ready' && <CafeteriaContent role={role} section={activeSection} data={data} onOrderingDirtyChange={setOrderingDirty} />}
-      <nav className="cafeteria-nav" style={{ gridTemplateColumns: `repeat(${navigation.length}, minmax(0, 1fr))` }}>{navigation.map((item) => <button key={item} className={activeSection === item ? 'active' : ''} onClick={() => { if (item !== activeSection && confirmDiscard()) { setOrderingDirty(false); setSection(item) } }}><i>{navIcon(item)}</i><span>{item}</span></button>)}</nav>
+      {status === 'ready' && <CafeteriaContent role={role} section={activeSection} data={data} onOrderingDirtyChange={setOrderingDirty} onKitchenPendingCountChange={setKitchenPendingCount} />}
+      <nav className="cafeteria-nav" style={{ gridTemplateColumns: `repeat(${navigation.length}, minmax(0, 1fr))` }}>{navigation.map((item) => <button key={item} className={activeSection === item ? 'active' : ''} onClick={() => { if (item !== activeSection && confirmDiscard()) { setOrderingDirty(false); setSection(item) } }}><i>{navIcon(item)}</i><span>{item}{item === 'Žádosti' && role === 'kitchen' && kitchenPendingCount > 0 ? ` ${kitchenPendingCount}` : ''}</span></button>)}</nav>
     </main>
   )
 }
 
-function CafeteriaContent({ role, section, data, onOrderingDirtyChange }: { role: CafeteriaRole; section: string; data: CafeteriaData; onOrderingDirtyChange: (dirty: boolean) => void }) {
+function CafeteriaContent({ role, section, data, onOrderingDirtyChange, onKitchenPendingCountChange }: { role: CafeteriaRole; section: string; data: CafeteriaData; onOrderingDirtyChange: (dirty: boolean) => void; onKitchenPendingCountChange: (count: number) => void }) {
   if ((role === 'parent' && section === 'Obědy') || (role === 'diner' && section === 'Jídelníček')) return <CafeteriaOrdering diners={data.orderingDiners} onDirtyChange={onOrderingDirtyChange} />
+  if (role === 'kitchen' && (section === 'Dnes' || section === 'Výdej' || section === 'Žádosti')) return <CafeteriaKitchen section={section} meals={data.meals} onPendingCountChange={onKitchenPendingCountChange} />
   if (section === 'Jídelníček') return <MealList meals={data.meals} />
-  if (role === 'kitchen' && section === 'Dnes') return <MealList meals={data.meals.filter((meal) => meal.mealDate === localDateKey())} today />
   if (section === 'Platby' || section === 'Finance') return <EmptyState icon="💰" text="Finanční přehled bude dostupný po aktivaci plateb." />
-  if (section === 'Žádosti') return <EmptyState icon="🔔" text="Žádosti budou dostupné po aktivaci změn objednávek." />
   if (section === 'Rodina') return <FamilyView data={data} />
   if (role === 'diner' && section === 'Profil') return <DinerList diners={data.diners} empty="Profil strávníka zatím není propojen." />
   if (role === 'admin' && section === 'Přehled') return <AdminOverview data={data} />
@@ -95,6 +96,5 @@ function EmptyState({ icon, text }: { icon: string; text: string }) {
   return <section className="empty cafeteria-empty"><span>{icon}</span><p>{text}</p></section>
 }
 
-const localDateKey = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(new Date())
 const formatDate = (date: string) => new Intl.DateTimeFormat('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`))
-const navIcon = (item: string) => ({ Obědy: '🍽️', Platby: '💰', Rodina: '👨‍👩‍👧', Jídelníček: '📅', Profil: '👤', Dnes: '🍳', Žádosti: '🔔', Přehled: '⌂', Lidé: '👥', Finance: '💰', Více: '•••' }[item] ?? '•')
+const navIcon = (item: string) => ({ Obědy: '🍽️', Platby: '💰', Rodina: '👨‍👩‍👧', Jídelníček: '📅', Profil: '👤', Dnes: '🍳', Výdej: '✓', Žádosti: '🔔', Přehled: '⌂', Lidé: '👥', Finance: '💰', Více: '•••' }[item] ?? '•')

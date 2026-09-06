@@ -9,6 +9,12 @@ import type {
   CafeteriaDraftSaveResult,
   CafeteriaFamilyMealWeek,
   CafeteriaFamily,
+  CafeteriaFulfillmentStatus,
+  CafeteriaKitchenCount,
+  CafeteriaKitchenDiner,
+  CafeteriaKitchenLateRequest,
+  CafeteriaKitchenPortion,
+  CafeteriaKitchenServiceOrder,
   CafeteriaLateChangeRequest,
   CafeteriaLateRequestType,
   CafeteriaMealWeek,
@@ -58,6 +64,24 @@ type LateRequestRow = {
   billing_outcome: 'charged' | 'not_charged' | 'not_applicable' | null
   requested_at: string
 }
+type KitchenCountRow = {
+  meal_day_id: string; meal_date: string; cutoff_at: string; meal_variant_id: string; meal_variant_name: string
+  portion_category_id: string; portion_code: string; portion_name: string
+  cutoff_count: number | string; current_count: number | string; late_delta: number | string
+}
+type KitchenServiceRow = {
+  order_id: string; diner_id: string; diner_name: string; portion_code: string; portion_name: string
+  variant_id: string; variant_name: string; fulfillment_status: CafeteriaFulfillmentStatus
+}
+type KitchenDinerRow = {
+  diner_id: string; diner_name: string; portion_category_id: string; portion_code: string; portion_name: string
+}
+type KitchenLateRequestRow = {
+  request_id: string; request_type: CafeteriaLateRequestType; requested_at: string
+  meal_day_id: string; meal_date: string; diner_id: string; diner_name: string; portion_name: string
+  order_id: string | null; current_variant_id: string | null; current_variant_name: string | null
+  requested_variant_id: string | null; requested_variant_name: string | null
+}
 
 function client() {
   if (!supabase) throw new Error('Supabase není nakonfigurovaný.')
@@ -80,6 +104,16 @@ const knownDatabaseMessages = [
   'Změnu už nelze uložit, protože proběhla uzávěrka nebo nemáte oprávnění.',
   'Objednávka se mezitím změnila. Zkontrolujte aktuální stav.',
   'Žádost už čeká na potvrzení.',
+  'Nemáte oprávnění pro výdej obědů.',
+  'Nemáte oprávnění hledat strávníky.',
+  'Nemáte oprávnění měnit stav výdeje.',
+  'Nemáte oprávnění číst pozdní žádosti.',
+  'Nemáte oprávnění rozhodovat pozdní změny.',
+  'Aktivní dnešní objednávka nebyla nalezena.',
+  'Neplatný stav výdeje.',
+  'O této žádosti už bylo rozhodnuto.',
+  'U pozdního zrušení je nutné určit, zda se oběd účtuje.',
+  'Kuchyňský provoz zatím není aktivovaný.',
 ]
 
 export function cafeteriaErrorMessage(error: unknown): string {
@@ -90,6 +124,7 @@ export function cafeteriaErrorMessage(error: unknown): string {
   if (known) return known
   if (message.includes('Jídelna zatím není aktivována.')) return 'Jídelna zatím není aktivována.'
   if (message.includes('cafeteria_late_change_one_pending')) return 'Žádost už čeká na potvrzení.'
+  if (value?.code === 'PGRST202') return 'Kuchyňský provoz zatím není aktivovaný.'
   if (value?.code === '23505') return 'Objednávka se mezitím změnila. Zkontrolujte aktuální stav.'
   if (value?.code === '42501' || value?.code === 'PGRST116') return 'Změnu už nelze uložit, protože proběhla uzávěrka nebo nemáte oprávnění.'
   return 'Operaci se nepodařilo dokončit. Zkuste to prosím znovu.'
@@ -402,6 +437,111 @@ async function saveOrderDraft(changes: CafeteriaOrderDraftChange[]): Promise<Caf
   return result
 }
 
+async function loadKitchenCounts(targetDate: string): Promise<CafeteriaKitchenCount[]> {
+  const result = await client().from('cafeteria_kitchen_order_counts').select(
+    'meal_day_id,meal_date,cutoff_at,meal_variant_id,meal_variant_name,portion_category_id,portion_code,portion_name,cutoff_count,current_count,late_delta',
+  ).eq('meal_date', targetDate)
+  failIfError(result.error)
+  return ((result.data ?? []) as unknown as KitchenCountRow[]).map((row) => ({
+    mealDayId: row.meal_day_id,
+    mealDate: row.meal_date,
+    cutoffAt: row.cutoff_at,
+    mealVariantId: row.meal_variant_id,
+    mealVariantName: row.meal_variant_name,
+    portionCategoryId: row.portion_category_id,
+    portionCode: row.portion_code,
+    portionName: row.portion_name,
+    cutoffCount: Number(row.cutoff_count),
+    currentCount: Number(row.current_count),
+    lateDelta: Number(row.late_delta),
+  }))
+}
+
+async function loadKitchenPortions(): Promise<CafeteriaKitchenPortion[]> {
+  const result = await client().from('cafeteria_portion_categories').select('id,code,name,sort_order').eq('active', true).order('sort_order')
+  failIfError(result.error)
+  return ((result.data ?? []) as Array<{ id: string; code: string; name: string; sort_order: number }>).map((row) => ({
+    id: row.id, code: row.code, name: row.name, sortOrder: Number(row.sort_order),
+  }))
+}
+
+async function loadKitchenService(targetDate: string): Promise<CafeteriaKitchenServiceOrder[]> {
+  const result = await client().rpc('cafeteria_kitchen_service', { target_date: targetDate })
+  failIfError(result.error)
+  return ((result.data ?? []) as unknown as KitchenServiceRow[]).map((row) => ({
+    orderId: row.order_id,
+    dinerId: row.diner_id,
+    dinerName: row.diner_name,
+    portionCode: row.portion_code,
+    portionName: row.portion_name,
+    variantId: row.variant_id,
+    variantName: row.variant_name,
+    fulfillmentStatus: row.fulfillment_status,
+  }))
+}
+
+async function searchKitchenDiners(searchText: string, targetDate: string): Promise<CafeteriaKitchenDiner[]> {
+  const result = await client().rpc('cafeteria_kitchen_search_diners', { search_text: searchText, target_date: targetDate })
+  failIfError(result.error)
+  return ((result.data ?? []) as unknown as KitchenDinerRow[]).map((row) => ({
+    dinerId: row.diner_id,
+    dinerName: row.diner_name,
+    portionCategoryId: row.portion_category_id,
+    portionCode: row.portion_code,
+    portionName: row.portion_name,
+  }))
+}
+
+async function setKitchenFulfillment(orderId: string, status: CafeteriaFulfillmentStatus): Promise<void> {
+  const result = await client().rpc('cafeteria_set_order_fulfillment', { target_order_id: orderId, target_status: status })
+  failIfError(result.error)
+}
+
+async function loadKitchenPendingRequests(): Promise<CafeteriaKitchenLateRequest[]> {
+  const result = await client().rpc('cafeteria_kitchen_pending_requests')
+  failIfError(result.error)
+  return ((result.data ?? []) as unknown as KitchenLateRequestRow[]).map((row) => ({
+    requestId: row.request_id,
+    requestType: row.request_type,
+    requestedAt: row.requested_at,
+    mealDayId: row.meal_day_id,
+    mealDate: row.meal_date,
+    dinerId: row.diner_id,
+    dinerName: row.diner_name,
+    portionName: row.portion_name,
+    orderId: row.order_id,
+    currentVariantId: row.current_variant_id,
+    currentVariantName: row.current_variant_name,
+    requestedVariantId: row.requested_variant_id,
+    requestedVariantName: row.requested_variant_name,
+  }))
+}
+
+async function decideKitchenLateRequest(
+  requestId: string,
+  decision: 'approved' | 'denied',
+  billingOutcome: 'charged' | 'not_charged' | null = null,
+): Promise<void> {
+  const result = await client().rpc('cafeteria_decide_late_change', {
+    target_request_id: requestId,
+    target_decision: decision,
+    target_billing_outcome: billingOutcome,
+    target_note: null,
+  })
+  failIfError(result.error)
+}
+
+async function addKitchenOrder(dinerId: string, mealDayId: string, mealVariantId: string): Promise<CafeteriaOrder> {
+  const db = client()
+  const existing = await db.from('cafeteria_orders').select(orderSelect)
+    .eq('diner_id', dinerId).eq('meal_day_id', mealDayId).maybeSingle()
+  failIfError(existing.error)
+  if (!existing.data) return createOrder(dinerId, mealDayId, mealVariantId)
+  const order = mapOrder(existing.data as unknown as OrderRow)
+  if (order.status === 'ordered') throw new Error('Oběd už je objednaný.')
+  return updateOrder(order.id, { status: 'ordered', meal_variant_id: mealVariantId })
+}
+
 const emptyData: CafeteriaData = {
   meals: [], families: [], diners: [], orderingDiners: [], accounts: [],
   ownFamilies: [], ownDiners: [], ownAccounts: [], roleUsers: [], settings: null,
@@ -418,6 +558,14 @@ export const cafeteriaRepository = {
   createLateRequest,
   bulkOrderWeek,
   saveOrderDraft,
+  loadKitchenCounts,
+  loadKitchenPortions,
+  loadKitchenService,
+  searchKitchenDiners,
+  setKitchenFulfillment,
+  loadKitchenPendingRequests,
+  decideKitchenLateRequest,
+  addKitchenOrder,
   load: async (roles: CafeteriaRole[], userId: string): Promise<CafeteriaData> => {
     const meals = roles.includes('admin') || roles.includes('kitchen') ? await loadMeals(roles.includes('admin')) : []
     const ownFamilyData = roles.includes('parent') ? await loadFamilies(userId) : { families: [], diners: [], accounts: [] }
