@@ -27,7 +27,8 @@ import type {
   WeekRange,
 } from './types'
 
-type DbError = { code?: string; message?: string } | null
+type DbError = { code?: string; message?: string; details?: string; hint?: string } | null
+type RepositoryError = Error & { supabaseError?: NonNullable<DbError> }
 type DinerRow = {
   id: string
   diner_type: 'child' | 'adult'
@@ -132,7 +133,22 @@ export function cafeteriaErrorMessage(error: unknown): string {
 }
 
 const failIfError = (error: DbError) => {
-  if (error) throw new Error(cafeteriaErrorMessage(error))
+  if (error) {
+    const repositoryError = new Error(cafeteriaErrorMessage(error)) as RepositoryError
+    repositoryError.supabaseError = error
+    throw repositoryError
+  }
+}
+
+const logCafeteriaLoadError = (error: unknown) => {
+  const repositoryError = error && typeof error === 'object' ? error as RepositoryError : null
+  const original = repositoryError?.supabaseError ?? repositoryError
+  console.error('cafeteriaRepository.load Supabase error:', {
+    code: original && 'code' in original ? original.code : undefined,
+    message: original && 'message' in original ? original.message : undefined,
+    details: original && 'details' in original ? original.details : undefined,
+    hint: original && 'hint' in original ? original.hint : undefined,
+  })
 }
 
 const dinerSelect = 'id,diner_type,full_name,profile_id,family_id,account_id,portion_category_id,cafeteria_portion_categories(name)'
@@ -269,7 +285,7 @@ async function loadAdminData(): Promise<{ families: CafeteriaFamily[]; diners: C
     db.from('cafeteria_families').select('id,display_name').order('display_name'),
     db.from('cafeteria_diners').select(dinerSelect).order('full_name'),
     db.from('cafeteria_accounts').select('id,family_id,label,variable_symbol').order('label'),
-    db.from('user_module_roles').select('user_id,role,profiles(full_name)').eq('module', 'cafeteria').order('user_id'),
+    db.from('user_module_roles').select('user_id,role,profiles!user_module_roles_user_id_fkey(full_name)').eq('module', 'cafeteria').order('user_id'),
     db.from('cafeteria_settings').select('cutoff_days_before,cutoff_time,payment_mode,allow_negative_balance,negative_balance_limit').eq('id', true).maybeSingle(),
   ])
   ;[families, diners, accounts, roles, settings].forEach((result) => failIfError(result.error))
@@ -570,22 +586,27 @@ export const cafeteriaRepository = {
   decideKitchenLateRequest,
   addKitchenOrder,
   load: async (roles: CafeteriaRole[], userId: string): Promise<CafeteriaData> => {
-    const meals = roles.includes('admin') || roles.includes('kitchen') ? await loadMeals(roles.includes('admin')) : []
-    const ownFamilyData = roles.includes('parent') ? await loadFamilies(userId) : { families: [], diners: [], accounts: [] }
-    const ownDirectDiners = roles.includes('diner') ? await loadOwnDiners(userId) : []
-    const orderingDiners = [...new Map([...ownFamilyData.diners, ...ownDirectDiners].map((item) => [item.id, item])).values()]
-    let data: CafeteriaData = {
-      ...emptyData,
-      meals,
-      families: ownFamilyData.families,
-      diners: orderingDiners,
-      accounts: ownFamilyData.accounts,
-      orderingDiners,
-      ownFamilies: ownFamilyData.families,
-      ownDiners: ownFamilyData.diners,
-      ownAccounts: ownFamilyData.accounts,
+    try {
+      const meals = roles.includes('admin') || roles.includes('kitchen') ? await loadMeals(roles.includes('admin')) : []
+      const ownFamilyData = roles.includes('parent') ? await loadFamilies(userId) : { families: [], diners: [], accounts: [] }
+      const ownDirectDiners = roles.includes('diner') ? await loadOwnDiners(userId) : []
+      const orderingDiners = [...new Map([...ownFamilyData.diners, ...ownDirectDiners].map((item) => [item.id, item])).values()]
+      let data: CafeteriaData = {
+        ...emptyData,
+        meals,
+        families: ownFamilyData.families,
+        diners: orderingDiners,
+        accounts: ownFamilyData.accounts,
+        orderingDiners,
+        ownFamilies: ownFamilyData.families,
+        ownDiners: ownFamilyData.diners,
+        ownAccounts: ownFamilyData.accounts,
+      }
+      if (roles.includes('admin')) data = { ...data, ...(await loadAdminData()), orderingDiners }
+      return data
+    } catch (error) {
+      logCafeteriaLoadError(error)
+      throw error
     }
-    if (roles.includes('admin')) data = { ...data, ...(await loadAdminData()), orderingDiners }
-    return data
   },
 }
