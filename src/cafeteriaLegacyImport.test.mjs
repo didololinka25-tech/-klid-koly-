@@ -39,6 +39,59 @@ test('XLSX čte datum z hlavičky, quantity a text color bez pevné pozice sloup
   assert.deepEqual(extractOrderCells(orders)[0], { mealDate: '2026-09-07', sourceParts: ['Testovací', 'Anna'], sourceName: 'Testovací Anna', value: 2, quantity: 2, quantityKind: 'order', color: '00AA00' })
 })
 
+test('svislý jídelníček čte datum z B a jednu variantu z C stejného řádku', () => {
+  const workbook = new ExcelJS.Workbook(); const menu = workbook.addWorksheet('JÍDELNÍČEK 26_27')
+  menu.getCell('B12').value = new Date(2026, 8, 7); menu.getCell('C12').value = '1 - Sushi'; menu.getCell('C12').font = { color: { argb: 'FF00AA00' } }
+  assert.deepEqual(extractMenuColors(menu).get('2026-09-07'), [{ name: 'Sushi', color: '00AA00' }])
+})
+
+test('svislý rich text rozdělí více variant podle jednoznačných barevných úseků', () => {
+  const workbook = new ExcelJS.Workbook(); const menu = workbook.addWorksheet('JÍDELNÍČEK 26_27')
+  menu.getCell('B12').value = new Date(2026, 8, 7)
+  menu.getCell('C12').value = { richText: [
+    { text: '1-Sushi', font: { color: { argb: 'FF00AA00' } } },
+    { text: ', 1-Rizoto', font: { color: { argb: 'FF000000' } } },
+  ] }
+  assert.deepEqual(extractMenuColors(menu).get('2026-09-07'), [
+    { name: 'Sushi', color: '00AA00' },
+    { name: 'Rizoto', color: '000000' },
+  ])
+  assert.equal(matchVariant(variants, extractMenuColors(menu).get('2026-09-07'), '00AA00').id, 'v1')
+})
+
+test('vodorovný jídelníček zůstává podporovaný', () => {
+  const workbook = new ExcelJS.Workbook(); const menu = workbook.addWorksheet('JÍDELNÍČEK 26_27')
+  menu.getCell('F2').value = new Date(2026, 8, 7); menu.getCell('G2').value = new Date(2026, 8, 8)
+  menu.getCell('F3').value = 'Sushi'; menu.getCell('F3').font = { color: { argb: 'FF00AA00' } }
+  menu.getCell('G3').value = 'Polévka'; menu.getCell('G3').font = { color: { argb: 'FF000000' } }
+  assert.deepEqual(extractMenuColors(menu).get('2026-09-07'), [{ name: 'Sushi', color: '00AA00' }])
+  assert.deepEqual(extractMenuColors(menu).get('2026-09-08'), [{ name: 'Polévka', color: '000000' }])
+})
+
+test('svislý vícevariantový den bez jednoznačné barevné hranice zůstane ambiguous', () => {
+  const workbook = new ExcelJS.Workbook(); const menu = workbook.addWorksheet('JÍDELNÍČEK 26_27')
+  menu.getCell('B12').value = new Date(2026, 8, 7)
+  menu.getCell('C12').value = { richText: [
+    { text: '1-Sushi, ', font: { color: { argb: 'FF00AA00' } } },
+    { text: '1-Rizoto', font: { color: { argb: 'FF00AA00' }, bold: true } },
+  ] }
+  const colors = extractMenuColors(menu)
+  assert.equal(colors.get('2026-09-07').length, 1)
+  assert.equal(planImport([source()], database, colors)[0].status, IMPORT_STATUSES.AMBIGUOUS_VARIANT)
+})
+
+test('různé odstíny barvy se neslučují a vyžadují přesnou shodu', () => {
+  const workbook = new ExcelJS.Workbook(); const menu = workbook.addWorksheet('JÍDELNÍČEK 26_27')
+  menu.getCell('B12').value = new Date(2026, 8, 7)
+  menu.getCell('C12').value = { richText: [
+    { text: '1-Sushi', font: { color: { argb: 'FF00AA00' } } },
+    { text: ', 1-Rizoto', font: { color: { argb: 'FF00AB00' } } },
+  ] }
+  const colors = extractMenuColors(menu).get('2026-09-07')
+  assert.deepEqual(colors.map((variant) => variant.color), ['00AA00', '00AB00'])
+  assert.equal(matchVariant(variants, colors, '00AA80'), null)
+})
+
 test('single variant lze přiřadit bez barvy', () => {
   assert.equal(matchVariant([variants[0]], [], null).id, 'v1')
 })

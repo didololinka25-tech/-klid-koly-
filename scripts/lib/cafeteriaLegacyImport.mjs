@@ -46,6 +46,35 @@ function cellFontColor(cell) {
   return colors.length === 1 ? colors[0] : null
 }
 
+function cleanVerticalVariantName(value) {
+  return String(value ?? '').trim().replace(/^[,;]\s*/, '').replace(/^1\s*[-–—]\s*/, '').trim()
+}
+
+function verticalMenuVariants(cell) {
+  const text = cellText(cell)
+  if (!text) return []
+  const richText = typeof cell.value === 'object' && cell.value && 'richText' in cell.value
+    ? cell.value.richText.filter((part) => String(part.text ?? '').length > 0)
+    : []
+  if (richText.length < 2) return [{ name: cleanVerticalVariantName(text), color: cellFontColor(cell) }]
+
+  const fallbackColor = normalizeFontColor(cell.font?.color) ?? '000000'
+  const groups = []
+  for (const part of richText) {
+    const color = normalizeFontColor(part.font?.color) ?? fallbackColor
+    const previous = groups.at(-1)
+    if (previous?.color === color) previous.text += part.text
+    else groups.push({ text: part.text, color })
+  }
+
+  // Rich text can be split for emphasis without denoting multiple meals. Only a
+  // real color boundary is a safe signal that the cell contains variants.
+  if (groups.length < 2) return [{ name: cleanVerticalVariantName(text), color: groups[0]?.color ?? fallbackColor }]
+  return groups
+    .map((group) => ({ name: cleanVerticalVariantName(group.text), color: group.color }))
+    .filter((variant) => variant.name)
+}
+
 export function findDateHeader(sheet) {
   let best = { row: 0, dates: new Map() }
   sheet.eachRow((row, rowNumber) => {
@@ -58,6 +87,23 @@ export function findDateHeader(sheet) {
 
 export function extractMenuColors(sheet) {
   const header = findDateHeader(sheet); const byDate = new Map()
+  const verticalRows = []
+  for (let row = 1; row <= sheet.rowCount; row += 1) {
+    const date = excelDateKey(sheet.getCell(row, 2).value)
+    if (date) verticalRows.push({ row, date, menuCell: sheet.getCell(row, 3) })
+  }
+  const verticalWithMenu = verticalRows.filter(({ menuCell }) => cellText(menuCell))
+  const singleVertical = verticalRows.length === 1
+    && verticalWithMenu.length === 1
+    && header.row === verticalRows[0].row
+    && header.dates.size === 1
+    && !cellText(sheet.getCell(verticalRows[0].row + 1, 2))
+  const isVertical = (verticalRows.length > 1 && verticalWithMenu.length > 0) || singleVertical
+  if (isVertical) {
+    for (const { date, menuCell } of verticalRows) byDate.set(date, verticalMenuVariants(menuCell))
+    return byDate
+  }
+
   for (const [column, date] of header.dates) {
     const variants = []
     for (let row = header.row + 1; row <= Math.min(sheet.rowCount, header.row + 12); row += 1) {
