@@ -27,6 +27,7 @@ import {
   type OperationsData,
   type PlanOptions,
   type Profile,
+  type SchoolCalendarMappingData,
   type StockItem,
   type UserProfile,
   type WorkerContract,
@@ -53,6 +54,7 @@ import {
 } from "./cleaningPresentation";
 import { buildCalendarDaySummary, calendarDayCellScope, calendarDayPlanView, calendarPrintDay, calendarPrintWorkplaces, calendarWorkerOptions, filterCalendarExceptions, filterCalendarPlanning, filterCalendarTasks, filterSchoolCalendarEvents, projectDynamicSchoolPlan, type CalendarDaySummary, type CalendarPrintWorkplace } from "./cleaningCalendar";
 import type { CalendarSchoolEvent } from "./schoolCalendarApi";
+import { applySchoolCalendarScope, detectCleaningEventCollision, mappingForSchoolEvent, recommendCollisionResolution, type SchoolCalendarScopeMapping, type SchoolCalendarScopeType } from "./schoolCalendarCollision";
 import { assignmentOverlapsMonth, scheduleExceptionsConflict, weekMonday, weeklyResponsibilitiesForDate, workAssignmentsConflict, workerPlanningSaveError, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
 import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
 import { appHistoryState, refreshAreasForRealtimeTable, shouldReloadIdentity, shouldRunResumeRefresh, withAppHistoryState } from "./appStability";
@@ -1227,6 +1229,7 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
           taskSelectionAvailable={cleaningTaskSelectionAvailable}
           canManage={canManageOperations(profile)}
           buildings={workplaces.filter((item) => item.active).map(({ id, name }) => ({ id, name }))}
+          options={planOptions}
           tasks={tasks}
           planning={workerPlanning}
           availableWorkers={attendanceWorkers}
@@ -4017,6 +4020,7 @@ function CalendarDayCell({ summary, month, selected, onSelect }: { summary: Cale
   const view = calendarDayPlanView(summary);
   const fourthFloorWorkerName = view.fourthFloorWorker;
   const fourthFloorFallback = summary.fourthFloorRotation ? `pozice ${summary.fourthFloorRotation.slotLabel} zatím není přiřazena` : null;
+  const hasSchoolEventCollision = summary.schoolEvents.some((event) => detectCleaningEventCollision({ event, tasks: summary.tasks }).kind !== "NO_CONFLICT");
   const aria = [
     formatDate(summary.date),
     ...summary.workers.map((worker) => `${worker.workerName}, ${worker.buildingName}`),
@@ -4042,7 +4046,7 @@ function CalendarDayCell({ summary, month, selected, onSelect }: { summary: Cale
       {scope.extraCount > 0 && <b>+{scope.extraCount} extra</b>}
     </span>}
     {(summary.schoolEvents.length > 0 || summary.extraordinary.length > 0 || summary.rescheduled.length > 0 || summary.cancelledExceptions.length > 0 || summary.movedTo || view.extras.length > 0 || view.hasFourthFloor) && <span className="calendar-specials">
-      {summary.schoolEvents.length > 0 && <em className="calendar-school-event-badge">AKCE{summary.schoolEvents.length > 1 ? ` · ${summary.schoolEvents.length}` : ""}</em>}
+      {summary.schoolEvents.length > 0 && <em className={`calendar-school-event-badge${hasSchoolEventCollision ? " conflict" : ""}`}>{hasSchoolEventCollision ? "KOLIZE" : "AKCE"}{summary.schoolEvents.length > 1 ? ` · ${summary.schoolEvents.length}` : ""}</em>}
       {summary.extraordinary.length > 0 && <em>Mimořádně</em>}
       {summary.rescheduled.length > 0 && <em>Přesunuto</em>}
       {summary.cancelledWorkplaces.map((item) => <em className="calendar-cancelled-badge" key={item.id}>{item.buildingName} · ZRUŠENO</em>)}
@@ -4055,14 +4059,57 @@ function CalendarDayCell({ summary, month, selected, onSelect }: { summary: Cale
 }
 
 function CalendarLegend() {
-  return <details className="calendar-legend"><summary>Legenda</summary><div><span>Iniciály = pracovníci</span><span>AKCE = školní událost</span><span>OK = okna</span><span>DV = dveře</span><span>SCH = schodiště</span><span>PR = praní</span><small>Školní akce jsou pouze informace a úklid samy nemění.</small></div></details>;
+  return <details className="calendar-legend"><summary>Legenda</summary><div><span>Iniciály = pracovníci</span><span>AKCE = školní událost</span><span>KOLIZE = akce může ovlivnit úklid</span><span>OK = okna</span><span>DV = dveře</span><span>SCH = schodiště</span><span>PR = praní</span><small>Školní akce jsou pouze informace a úklid samy nemění.</small></div></details>;
 }
 
 type CalendarPlannerStatus = "loading" | "ready" | "unavailable" | "error";
 
-function CalendarDayDetail({ summary, plannerStatus, onRetry }: { summary: CalendarDaySummary; plannerStatus: CalendarPlannerStatus; onRetry: () => void }) {
+function schoolEventTime(event: CalendarSchoolEvent) {
+  if (event.allDay) return "Celý den";
+  const format = new Intl.DateTimeFormat("cs-CZ", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Prague" });
+  return `${format.format(new Date(event.start))}–${format.format(new Date(event.end))}`;
+}
+
+function collisionLabel(kind: ReturnType<typeof detectCleaningEventCollision>["kind"]) {
+  if (kind === "ROOM_CONFLICT") return "Kolize v místnosti";
+  if (kind === "BUILDING_CONFLICT") return "Kolize v pracovišti";
+  if (kind === "TIME_CONFLICT") return "Časová kolize";
+  return "Možná kolize";
+}
+
+type CalendarEventMappingDraft = Parameters<typeof schoolRepository.saveSchoolCalendarEventMapping>[0] & { rememberLocationAlias?: string }
+
+function CalendarEventMappingEditor({ event, options, current, onCancel, onSave }: { event: CalendarSchoolEvent; options: PlanOptions; current?: SchoolCalendarScopeMapping; onCancel: () => void; onSave: (value: CalendarEventMappingDraft) => Promise<void> }) {
+  const [scopeType, setScopeType] = useState<SchoolCalendarScopeType>(current?.scopeType ?? "rooms");
+  const [buildingId, setBuildingId] = useState(current?.buildingId ?? options.buildings[0]?.id ?? "");
+  const [floorId, setFloorId] = useState(current?.floorId ?? "");
+  const [roomIds, setRoomIds] = useState<string[]>(current?.roomIds ?? []);
+  const [wholeSeries, setWholeSeries] = useState(Boolean(event.recurringEventId && current?.recurringEventId));
+  const [rememberLocation, setRememberLocation] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const floors = options.floors.filter((floor) => floor.buildingId === buildingId);
+  const rooms = options.rooms.filter((room) => room.active && room.buildingId === buildingId && (!floorId || room.floorId === floorId));
+  return <form className="calendar-event-mapping" onSubmit={async (submit) => {
+    submit.preventDefault(); setSaving(true);
+    try {
+      await onSave({ id: current?.id, externalEventId: wholeSeries ? undefined : event.externalId, recurringEventId: wholeSeries ? event.recurringEventId : undefined, scopeType, buildingId: scopeType === "unrestricted" ? undefined : buildingId, floorId: scopeType === "floor" ? floorId : undefined, roomIds: scopeType === "rooms" ? roomIds : [], rememberLocationAlias: rememberLocation ? event.location : undefined });
+      onCancel();
+    } finally { setSaving(false); }
+  }}>
+    <label>Rozsah<select value={scopeType} onChange={(change) => { setScopeType(change.target.value as SchoolCalendarScopeType); setRoomIds([]); }}><option value="rooms">Konkrétní místnosti</option><option value="floor">Patro</option><option value="building">Budova</option><option value="whole_school">Celá škola</option><option value="unrestricted">Bez omezení prostoru</option></select></label>
+    {scopeType !== "unrestricted" && <label>Pracoviště<select value={buildingId} onChange={(change) => { setBuildingId(change.target.value); setFloorId(""); setRoomIds([]); }}>{options.buildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label>}
+    {scopeType === "floor" && <label>Patro<select required value={floorId} onChange={(change) => setFloorId(change.target.value)}><option value="">Vyberte patro</option>{floors.map((floor) => <option key={floor.id} value={floor.id}>{floor.name}</option>)}</select></label>}
+    {scopeType === "rooms" && <fieldset><legend>Místnosti</legend>{rooms.map((room) => <label key={room.id}><input type="checkbox" checked={roomIds.includes(room.id)} onChange={() => setRoomIds((currentIds) => currentIds.includes(room.id) ? currentIds.filter((id) => id !== room.id) : [...currentIds, room.id])} />{room.floor} · {room.name}</label>)}</fieldset>}
+    {event.recurringEventId && <label className="calendar-series-choice"><input type="checkbox" checked={wholeSeries} onChange={(change) => setWholeSeries(change.target.checked)} />Použít pro celou opakující se sérii</label>}
+    {event.location && scopeType !== "unrestricted" && !(scopeType === "rooms" && roomIds.length !== 1) && <label className="calendar-series-choice"><input type="checkbox" checked={rememberLocation} onChange={(change) => setRememberLocation(change.target.checked)} />Pamatovat lokaci „{event.location}“ jako pravidlo</label>}
+    <div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving || (scopeType === "rooms" && !roomIds.length)}>{saving ? "Ukládám…" : "Uložit prostor"}</button></div>
+  </form>;
+}
+
+function CalendarDayDetail({ summary, plannerStatus, mappings, options, canManage, onSaveMapping, onRetry }: { summary: CalendarDaySummary; plannerStatus: CalendarPlannerStatus; mappings: SchoolCalendarMappingData; options: PlanOptions; canManage: boolean; onSaveMapping: (value: CalendarEventMappingDraft) => Promise<void>; onRetry: () => void }) {
   const { date, context } = summary;
   const view = calendarDayPlanView(summary);
+  const [mappingEventId, setMappingEventId] = useState<string | null>(null);
   return (
     <section className="calendar-day-detail">
       <header><small>{summary.extraordinary.length ? "MIMOŘÁDNÝ ÚKLID" : summary.rescheduled.length ? "PŘESUNUTÝ ÚKLID" : context.kind === "moved_away" ? "PŘESUNUTÝ TERMÍN" : "PLÁN DNE"}</small><h2>{todayLabel(date)}</h2></header>
@@ -4071,7 +4118,18 @@ function CalendarDayDetail({ summary, plannerStatus, onRetry }: { summary: Calen
       {summary.rescheduled.map((title) => <p className="calendar-rescheduled" key={title}><b>PŘESUNUTÝ ÚKLID</b><span>{title}</span></p>)}
       {summary.cancelledWorkplaces.map((item) => <p className="calendar-cancelled" key={item.id}><b>{item.buildingName} · ÚKLID ZRUŠEN</b>{item.note && <span>{item.note}</span>}</p>)}
       {summary.movedTo && <p className="calendar-rescheduled"><b>ÚKLID PŘESUNUT</b><span>Nový termín: {formatDate(summary.movedTo)}</span></p>}
-      {summary.schoolEvents.length > 0 && <section className="calendar-school-events"><b className="calendar-detail-label">ŠKOLNÍ AKCE</b>{summary.schoolEvents.map((event) => <article key={event.id}><strong>{event.title}</strong>{event.description && <p>{event.description}</p>}<small>Informace · úklid se automaticky nemění</small></article>)}</section>}
+      {summary.schoolEvents.length > 0 && <section className="calendar-school-events"><b className="calendar-detail-label">ŠKOLNÍ AKCE</b>{summary.schoolEvents.map((event) => {
+        const collision = detectCleaningEventCollision({ event, tasks: summary.tasks, mappings: mappings.mappings, aliases: mappings.aliases });
+        const recommendation = recommendCollisionResolution(collision);
+        const currentMapping = mappingForSchoolEvent(event, mappings.mappings, mappings.aliases);
+        return <article key={event.id} className={collision.kind === "NO_CONFLICT" ? "" : "calendar-event-conflict"}>
+          <strong>{event.title}</strong><span>{schoolEventTime(event)}{event.location ? ` · ${event.location}` : ""}</span>{event.description && <p>{event.description}</p>}
+          {collision.kind !== "NO_CONFLICT" && <div className="calendar-collision"><b>⚠ {collisionLabel(collision.kind)}</b><small>{collision.reason}</small>{collision.affectedTasks.length > 0 && <p>Dopad: {[...new Set(collision.affectedTasks.map((task) => task.room))].join(", ")} · {collision.affectedTasks.length} úkolů</p>}<p><b>Navržené řešení:</b> {recommendation.message}</p></div>}
+          <small>Informace · úklid se automaticky nemění</small>
+          {canManage && event.source === "google-calendar" && mappings.available && mappingEventId !== event.id && <button type="button" className="calendar-map-action" onClick={() => setMappingEventId(event.id)}>{currentMapping ? "Změnit prostor" : "Určit prostor"}</button>}
+          {mappingEventId === event.id && <CalendarEventMappingEditor event={event} options={options} current={currentMapping && "externalEventId" in currentMapping ? currentMapping as SchoolCalendarScopeMapping : undefined} onCancel={() => setMappingEventId(null)} onSave={onSaveMapping} />}
+        </article>;
+      })}</section>}
       <section className="calendar-day-summary"><b className="calendar-detail-label">KDO PRACUJE · {summary.workers.length}</b>{summary.workers.length > 0 ? <div className="calendar-worker-list">{summary.workers.map((worker) => <span key={`${worker.workerId}|${worker.buildingId}`}><i className={`worker-color-${worker.colorIndex}`}>{worker.initials}</i><b>{worker.workerName}</b><small>{worker.buildingName} · {worker.areaLabel}{worker.exception ? " · výjimečně" : ""}</small></span>)}</div> : <p className="hint">Nikdo není podle rozvrhu naplánovaný.</p>}</section>
       {plannerStatus === "loading" && <section className="calendar-plan-state" role="status">Načítám plán dne…</section>}
       {plannerStatus === "error" && <section className="calendar-plan-state error" role="alert"><b>Plán dne se nepodařilo načíst.</b><button onClick={onRetry}>Zkusit znovu</button></section>}
@@ -4084,7 +4142,8 @@ function CalendarDayDetail({ summary, plannerStatus, onRetry }: { summary: Calen
   );
 }
 
-function CalendarDayModal({ summary, plannerStatus, buildings, canManage, preferredBuildingId, onRetry, onCancelStandard, onRestoreCancellation, onClose }: { summary: CalendarDaySummary; plannerStatus: CalendarPlannerStatus; buildings: PlanOptions["buildings"]; canManage: boolean; preferredBuildingId: string | null; onRetry: () => void; onCancelStandard: (draft: CleaningDayDraft) => Promise<void>; onRestoreCancellation: (id: string) => Promise<void>; onClose: () => void }) {
+function CalendarDayModal({ summary, plannerStatus, options, mappings, canManage, preferredBuildingId, onSaveMapping, onRetry, onCancelStandard, onRestoreCancellation, onClose }: { summary: CalendarDaySummary; plannerStatus: CalendarPlannerStatus; options: PlanOptions; mappings: SchoolCalendarMappingData; canManage: boolean; preferredBuildingId: string | null; onSaveMapping: (value: CalendarEventMappingDraft) => Promise<void>; onRetry: () => void; onCancelStandard: (draft: CleaningDayDraft) => Promise<void>; onRestoreCancellation: (id: string) => Promise<void>; onClose: () => void }) {
+  const buildings = options.buildings;
   const cancelledIds = new Set(summary.cancelledWorkplaces.map((item) => item.buildingId));
   const availableBuildings = buildings.filter((building) => !cancelledIds.has(building.id));
   const [cancelling, setCancelling] = useState(false);
@@ -4094,7 +4153,7 @@ function CalendarDayModal({ summary, plannerStatus, buildings, canManage, prefer
   return <div className="calendar-day-modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="calendar-day-sheet" role="dialog" aria-modal="true" aria-label={`Plán dne ${formatDate(summary.date)}`}>
       <button className="calendar-day-close" onClick={onClose} aria-label="Zavřít plán dne">×</button>
-      <CalendarDayDetail summary={summary} plannerStatus={plannerStatus} onRetry={onRetry} />
+      <CalendarDayDetail summary={summary} plannerStatus={plannerStatus} mappings={mappings} options={options} canManage={canManage} onSaveMapping={onSaveMapping} onRetry={onRetry} />
       {canManage && <section className="calendar-cancellation-actions"><h3>Správa úklidu pracovišť</h3>{summary.cancelledWorkplaces.map((item) => <article key={item.id}><span><b>{item.buildingName} · ÚKLID ZRUŠEN</b>{item.note && <small>{item.note}</small>}</span><button disabled={saving} onClick={async () => { if (!window.confirm(`Obnovit běžný úklid pracoviště „${item.buildingName}“?`)) return; setSaving(true); try { await onRestoreCancellation(item.id); } finally { setSaving(false); } }}>Obnovit úklid</button></article>)}{availableBuildings.length > 0 && !cancelling && <button className="danger-link cancel-standard-button" onClick={() => setCancelling(true)}>Zrušit úklid na tomto pracovišti</button>}{cancelling && <form onSubmit={async (event) => { event.preventDefault(); if (!buildingId || !window.confirm("Opravdu chcete zrušit běžný úklid na tomto pracovišti?")) return; setSaving(true); try { await onCancelStandard({ buildingId, kind: "cancelled_standard", executionDate: summary.date, title: "Úklid zrušen", note }); setCancelling(false); setNote(""); } finally { setSaving(false); } }}><label>Pracoviště<select required value={buildingId} onChange={(event) => setBuildingId(event.target.value)}>{availableBuildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select></label><label>Důvod <small>(volitelné)</small><textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Škola se dnes neuklízí." /></label><div className="editor-actions"><button type="button" disabled={saving} onClick={() => setCancelling(false)}>Zrušit</button><button disabled={saving}>{saving ? "Ukládám…" : "Potvrdit zrušení"}</button></div></form>}</section>}
     </section>
   </div>;
@@ -4259,6 +4318,7 @@ function CleaningCalendar({
   taskSelectionAvailable,
   canManage,
   buildings,
+  options,
   tasks,
   planning,
   availableWorkers,
@@ -4271,6 +4331,7 @@ function CleaningCalendar({
   taskSelectionAvailable: boolean;
   canManage: boolean;
   buildings: PlanOptions["buildings"];
+  options: PlanOptions;
   tasks: Task[];
   planning: WorkerPlanningData;
   availableWorkers: AttendanceWorker[];
@@ -4292,6 +4353,7 @@ function CleaningCalendar({
   const [schoolEvents, setSchoolEvents] = useState<CalendarSchoolEvent[]>([]);
   const [schoolEventsError, setSchoolEventsError] = useState(false);
   const [schoolEventsReload, setSchoolEventsReload] = useState(0);
+  const [calendarMappings, setCalendarMappings] = useState<SchoolCalendarMappingData>({ mappings: [], aliases: [], available: false });
   const closeDayDetail = useHistoryLayer(dayDetailOpen, "calendar-day-detail", () => setDayDetailOpen(false));
   const closeCleaningDayEditor = useHistoryLayer(Boolean(editing), "cleaning-day-editor", () => setEditing(null));
   const [printMode, setPrintMode] = useState<CalendarPrintMode | null>(null);
@@ -4348,9 +4410,22 @@ function CleaningCalendar({
   useEffect(() => {
     let active = true;
     if (!gridDates.length) return;
-    schoolRepository.schoolInformationEvents({ from: gridDates[0], to: gridDates[gridDates.length - 1] })
-      .then((events) => { if (active) { setSchoolEvents(events); setSchoolEventsError(false); } })
-      .catch((error) => { console.error("Školní akce se nepodařilo načíst:", error); if (active) setSchoolEventsError(true); });
+    Promise.allSettled([
+      schoolRepository.schoolInformationEvents({ from: gridDates[0], to: gridDates[gridDates.length - 1] }),
+      schoolRepository.getSchoolCalendarEvents({ from: gridDates[0], to: gridDates[gridDates.length - 1] }),
+      schoolRepository.schoolCalendarMappings(),
+    ]).then(([information, google, mappingResult]) => {
+      if (!active) return;
+      const fixedEvents = information.status === "fulfilled" ? information.value : [];
+      const googleEvents = google.status === "fulfilled" && google.value.ok ? google.value.events : [];
+      const mappings = mappingResult.status === "fulfilled" ? mappingResult.value : { mappings: [], aliases: [], available: false };
+      setCalendarMappings(mappings);
+      setSchoolEvents([...fixedEvents, ...googleEvents].map((event) => applySchoolCalendarScope(event, mappings.mappings, mappings.aliases)));
+      setSchoolEventsError(information.status === "rejected" || google.status === "rejected" || (google.status === "fulfilled" && !google.value.ok));
+      if (information.status === "rejected") console.error("Informační školní akce se nepodařilo načíst:", information.reason);
+      if (google.status === "rejected") console.error("Google školní kalendář se nepodařilo načíst:", google.reason);
+      if (mappingResult.status === "rejected") console.error("Mapování školního kalendáře se nepodařilo načíst:", mappingResult.reason);
+    });
     return () => { active = false; };
   }, [gridDates, schoolEventsReload]);
   const resolvedCalendarDays = useMemo(() => gridDates.map((date) => ({
@@ -4451,7 +4526,13 @@ function CleaningCalendar({
         </div>
         <CalendarLegend />
       </section>
-      {dayDetailOpen && <CalendarDayModal summary={selected} plannerStatus={plannerStatus} buildings={buildings} canManage={canManage} preferredBuildingId={buildingFilter === "all" ? null : buildingFilter} onRetry={retryPlanner} onCancelStandard={onSave} onRestoreCancellation={onRestoreCancellation} onClose={closeDayDetail} />}
+      {dayDetailOpen && <CalendarDayModal summary={selected} plannerStatus={plannerStatus} options={options} mappings={calendarMappings} canManage={canManage} preferredBuildingId={buildingFilter === "all" ? null : buildingFilter} onSaveMapping={async ({ rememberLocationAlias, ...value }) => {
+        await schoolRepository.saveSchoolCalendarEventMapping(value);
+        if (rememberLocationAlias && value.scopeType !== "unrestricted" && value.buildingId) {
+          await schoolRepository.saveSchoolCalendarLocationAlias({ alias: rememberLocationAlias, scopeType: value.scopeType, buildingId: value.buildingId, floorId: value.floorId, roomId: value.roomIds?.[0] });
+        }
+        setSchoolEventsReload((reload) => reload + 1);
+      }} onRetry={retryPlanner} onCancelStandard={onSave} onRestoreCancellation={onRestoreCancellation} onClose={closeDayDetail} />}
       <section className="calendar-list">
         <h2>Plánované výjimky</h2>
         {future.map((item) => (

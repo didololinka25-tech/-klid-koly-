@@ -215,8 +215,20 @@ const authorizedRequest = (body = { from: '2026-09-01', to: '2026-09-30' }) => n
 
 const handlerDependencies = (overrides = {}) => ({
   authenticate: async () => 'allowed',
-  getSecret: () => 'https://calendar.google.com/calendar/ical/NOT-A-REAL-SECRET/basic.ics',
-  fetch: async () => new Response(timed, { status: 200, headers: { 'content-type': 'text/calendar' } }),
+  getSecret: (name) => ({
+    GOOGLE_CALENDAR_CLIENT_ID: 'test-client',
+    GOOGLE_CALENDAR_CLIENT_SECRET: 'test-secret',
+    GOOGLE_CALENDAR_REFRESH_TOKEN: 'test-refresh',
+    SCHOOL_GOOGLE_CALENDAR_ID: 'private-school@example.test',
+  })[name],
+  fetch: async (input) => String(input).includes('oauth2.googleapis.com')
+    ? Response.json({ access_token: 'short-lived-token', expires_in: 3600 })
+    : Response.json({ items: [{
+      id: 'event-1', recurringEventId: 'series-1', summary: 'Setkání rodičů',
+      description: '<b>Důležité</b><script>alert(1)</script>', location: 'Společenská místnost',
+      originalStartTime: { dateTime: '2026-09-07T15:00:00+02:00' },
+      start: { dateTime: '2026-09-07T15:00:00+02:00' }, end: { dateTime: '2026-09-07T16:30:00+02:00' },
+    }] }),
   ...overrides,
 })
 
@@ -259,8 +271,8 @@ test('Edge handler vrátí kontrolovanou chybu při chybějícím secretu', asyn
   })
 })
 
-test('Edge handler rozliší timeout, nedostupný zdroj a chybný ICS bez úniku URL', async () => {
-  const secret = 'https://calendar.google.com/calendar/ical/SUPER-SECRET/basic.ics'
+test('Edge handler rozliší timeout, nedostupný zdroj a Google auth chybu bez úniku secrets', async () => {
+  const secret = 'SUPER-SECRET'
   const cases = [
     {
       expected: 'timeout',
@@ -268,7 +280,7 @@ test('Edge handler rozliší timeout, nedostupný zdroj a chybný ICS bez úniku
       timeoutMs: 1,
     },
     { expected: 'remote_unavailable', fetch: async () => { throw new Error(secret) } },
-    { expected: 'invalid_ics', fetch: async () => new Response('not an ics file') },
+    { expected: 'upstream_auth_error', fetch: async () => Response.json({ error: 'invalid_grant' }, { status: 400 }) },
   ]
   for (const item of cases) {
     const result = await handleSchoolCalendarRequest(authorizedRequest(), handlerDependencies({
@@ -278,17 +290,43 @@ test('Edge handler rozliší timeout, nedostupný zdroj a chybný ICS bez úniku
     }))
     const text = await result.text()
     assert.equal(JSON.parse(text).error.code, item.expected)
-    assert.doesNotMatch(text, /SUPER-SECRET|calendar\.google\.com/)
+    assert.doesNotMatch(text, /SUPER-SECRET|oauth2\.googleapis\.com|private-school/)
   }
 })
 
-test('Edge handler vrátí normalizované události a nikdy zdrojovou URL', async () => {
+test('Edge handler vrátí normalizované Google occurrence a nikdy token ani calendar id', async () => {
   const result = await handleSchoolCalendarRequest(authorizedRequest({ from: '2026-09-07', to: '2026-09-07' }), handlerDependencies())
   const text = await result.text()
   const parsed = parseSchoolCalendarResponse(JSON.parse(text))
   assert.equal(parsed.ok, true)
   assert.equal(parsed.events.length, 1)
-  assert.doesNotMatch(text, /calendar\.google|NOT-A-REAL-SECRET|basic\.ics/)
+  assert.equal(parsed.events[0].source, 'google-calendar')
+  assert.equal(parsed.events[0].externalId, 'event-1')
+  assert.equal(parsed.events[0].recurringEventId, 'series-1')
+  assert.doesNotMatch(parsed.events[0].description, /<|>/)
+  assert.doesNotMatch(text, /short-lived-token|test-refresh|test-secret|private-school/)
+})
+
+test('Google API request používá read-only serverový events.list, rozbalené occurrence a pražské pásmo', async () => {
+  const requests = []
+  const result = await handleSchoolCalendarRequest(authorizedRequest({ from: '2026-10-24', to: '2026-10-26' }), handlerDependencies({
+    fetch: async (input, init) => {
+      requests.push({ url: String(input), authorization: init?.headers?.Authorization })
+      return String(input).includes('oauth2.googleapis.com')
+        ? Response.json({ access_token: 'short-lived-token' })
+        : Response.json({ items: [{ id: 'holiday', summary: 'Prázdniny', start: { date: '2026-10-25' }, end: { date: '2026-10-26' } }] })
+    },
+  }))
+  assert.equal(result.status, 200)
+  const api = new URL(requests[1].url)
+  assert.equal(api.searchParams.get('singleEvents'), 'true')
+  assert.equal(api.searchParams.get('showDeleted'), 'false')
+  assert.equal(api.searchParams.get('timeZone'), 'Europe/Prague')
+  assert.match(api.searchParams.get('fields'), /recurringEventId/)
+  assert.equal(requests[1].authorization, 'Bearer short-lived-token')
+  const body = await result.json()
+  assert.equal(body.events[0].allDay, true)
+  assert.equal(body.events[0].start, '2026-10-25')
 })
 
 test('produkční Edge entrypoint ověřuje Supabase usera a can_view_school_data bez service role', async () => {
@@ -298,7 +336,7 @@ test('produkční Edge entrypoint ověřuje Supabase usera a can_view_school_dat
   assert.doesNotMatch(source, /SERVICE_ROLE|provider_token|provider_refresh_token|calendar\.google/)
 })
 
-test('frontend repository drží budoucí ICS Edge Function oddělenou od planneru', async () => {
+test('frontend repository drží Google Edge Function oddělenou od planneru', async () => {
   const repository = await readFile(new URL('./schoolRepository.ts', import.meta.url), 'utf8')
   const calendarModel = await readFile(new URL('./cleaningCalendar.ts', import.meta.url), 'utf8')
   const method = repository.match(/getSchoolCalendarEvents:[\s\S]*?\n  },/)?.[0] ?? ''

@@ -47,7 +47,7 @@ test('Kalendář načítá informační akce jednou za interval a vykreslí je o
   assert.match(repository, /schoolInformationEvents:[\s\S]*from\('school_calendar_events'\)/)
   assert.match(repository, /\.lte\('starts_on', to\)[\s\S]*\.gte\('ends_on', from\)/)
   assert.match(app, /schoolRepository\.schoolInformationEvents\(\{ from: gridDates\[0\], to: gridDates\[gridDates\.length - 1\] \}\)/)
-  assert.match(app, /className="calendar-school-event-badge">AKCE/)
+  assert.match(app, /calendar-school-event-badge[\s\S]*KOLIZE[\s\S]*AKCE/)
   assert.match(app, /className="calendar-school-events"/)
   assert.match(app, /ŠKOLNÍ AKCE/)
   assert.match(app, /Informace · úklid se automaticky nemění/)

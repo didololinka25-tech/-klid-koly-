@@ -7,6 +7,11 @@ const migration = readFileSync(
   'utf8',
 )
 
+const laterAclMigrations = readFileSync(
+  new URL('../supabase/migrations/20260907120000_school_calendar_scope_mappings.sql', import.meta.url),
+  'utf8',
+)
+
 const frontendRpcNames = [
   ...readFileSync(new URL('./schoolRepository.ts', import.meta.url), 'utf8').matchAll(/\.rpc\(\s*['"]([a-z0-9_]+)['"]/g),
 ].map((match) => match[1])
@@ -47,10 +52,10 @@ test('04100 revokes inherited PUBLIC and direct anon table/function privileges',
   assert.match(migration, /aclexplode\([\s\S]*acl\.grantee = 0[\s\S]*acl\.privilege_type = 'EXECUTE'/i)
 })
 
-test('every literal frontend RPC remains in the authenticated allowlist', () => {
+test('every literal frontend RPC remains in an authenticated allowlist', () => {
   assert.ok(frontendRpcNames.length > 20)
   for (const rpcName of new Set(frontendRpcNames)) {
-    assert.match(migration, new RegExp(`public\\.${rpcName.replaceAll('_', '\\_')}\\(`))
+    assert.match(`${migration}\n${laterAclMigrations}`, new RegExp(`public\\.${rpcName.replaceAll('_', '\\_')}\\(`))
   }
 })
 

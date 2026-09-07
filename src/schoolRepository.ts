@@ -15,6 +15,7 @@ import { workerPlanningSaveError, type CleaningRotationSlot, type PlanningWorker
 import { calendarInvokeFailure, parseSchoolCalendarResponse, type CalendarSchoolEvent, type SchoolCalendarEventsResult } from './schoolCalendarApi'
 import { loadDynamicSchoolPlan, type DynamicSchoolPlanItem } from './dynamicSchoolPlanLoader'
 import { isAwaitingAccessApproval } from './system/access'
+import type { SchoolCalendarLocationAlias, SchoolCalendarScopeMapping, SchoolCalendarScopeType } from './schoolCalendarCollision'
 
 export type { DynamicSchoolPlanItem } from './dynamicSchoolPlanLoader'
 
@@ -104,6 +105,11 @@ export type PlanOptions = {
   buildings: { id: string; name: string }[]
   floors: { id: string; buildingId: string; name: string; sortOrder: number }[]
   rooms: { id: string; buildingId: string; floorId: string | null; name: string; floor: string; floorSort: number; building: string; active: boolean; sortOrder: number }[]
+}
+export type SchoolCalendarMappingData = {
+  mappings: SchoolCalendarScopeMapping[]
+  aliases: SchoolCalendarLocationAlias[]
+  available: boolean
 }
 
 const mapWorkAssignment = (row: any): WorkerWorkAssignment => ({
@@ -222,6 +228,86 @@ export const schoolRepository = {
       affectedBuildingId: row.building_id || undefined,
       collisionKind: 'none' as const,
     }))
+  },
+  schoolCalendarMappings: async (): Promise<SchoolCalendarMappingData> => {
+    const [mappingResult, roomResult, aliasResult] = await Promise.all([
+      client().from('school_calendar_event_scope_mappings').select('id,external_event_id,recurring_event_id,scope_type,building_id,floor_id').eq('active', true),
+      client().from('school_calendar_event_scope_rooms').select('mapping_id,room_id'),
+      client().from('school_calendar_location_aliases').select('id,alias,scope_type,building_id,floor_id,room_id').eq('active', true),
+    ])
+    if ([mappingResult.error, roomResult.error, aliasResult.error].some((error) => missingRelation(error))) {
+      return { mappings: [], aliases: [], available: false }
+    }
+    const error = mappingResult.error ?? roomResult.error ?? aliasResult.error
+    if (error) throw error
+    const roomsByMapping = new Map<string, string[]>()
+    ;(roomResult.data ?? []).forEach((row: any) => roomsByMapping.set(row.mapping_id, [...(roomsByMapping.get(row.mapping_id) ?? []), row.room_id]))
+    return {
+      mappings: (mappingResult.data ?? []).map((row: any) => ({
+        id: row.id,
+        externalEventId: row.external_event_id || undefined,
+        recurringEventId: row.recurring_event_id || undefined,
+        scopeType: row.scope_type as SchoolCalendarScopeType,
+        buildingId: row.building_id || undefined,
+        floorId: row.floor_id || undefined,
+        roomIds: roomsByMapping.get(row.id) ?? [],
+      })),
+      aliases: (aliasResult.data ?? []).map((row: any) => ({
+        id: row.id,
+        alias: row.alias,
+        scopeType: row.scope_type,
+        buildingId: row.building_id || undefined,
+        floorId: row.floor_id || undefined,
+        roomIds: row.room_id ? [row.room_id] : [],
+      })),
+      available: true,
+    }
+  },
+  saveSchoolCalendarEventMapping: async (value: {
+    id?: string
+    externalEventId?: string
+    recurringEventId?: string
+    scopeType: SchoolCalendarScopeType
+    buildingId?: string
+    floorId?: string
+    roomIds?: string[]
+    active?: boolean
+  }) => {
+    const { data, error } = await client().rpc('admin_save_school_calendar_event_mapping', {
+      p_id: value.id ?? null,
+      p_external_event_id: value.externalEventId ?? null,
+      p_recurring_event_id: value.recurringEventId ?? null,
+      p_scope_type: value.scopeType,
+      p_building_id: value.buildingId ?? null,
+      p_floor_id: value.floorId ?? null,
+      p_room_ids: value.roomIds ?? [],
+      p_active: value.active ?? true,
+    })
+    if (missingFunction(error)) throw new Error('Mapování školního kalendáře ještě není v databázi aktivní.')
+    if (error) throw error
+    return String(data)
+  },
+  saveSchoolCalendarLocationAlias: async (value: {
+    id?: string
+    alias: string
+    scopeType: Exclude<SchoolCalendarScopeType, 'unrestricted'>
+    buildingId: string
+    floorId?: string
+    roomId?: string
+    active?: boolean
+  }) => {
+    const { data, error } = await client().rpc('admin_save_school_calendar_location_alias', {
+      p_id: value.id ?? null,
+      p_alias: value.alias,
+      p_scope_type: value.scopeType,
+      p_building_id: value.buildingId,
+      p_floor_id: value.floorId ?? null,
+      p_room_id: value.roomId ?? null,
+      p_active: value.active ?? true,
+    })
+    if (missingFunction(error)) throw new Error('Pravidla míst školního kalendáře ještě nejsou v databázi aktivní.')
+    if (error) throw error
+    return String(data)
   },
   profile: async (id: string): Promise<Profile | null> => {
     const extended = await client().from('profiles').select('id,full_name,role,access_role,active,is_owner,email,created_at,first_signed_in_at,last_signed_in_at').eq('id', id).maybeSingle()

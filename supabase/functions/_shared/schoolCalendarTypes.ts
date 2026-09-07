@@ -1,6 +1,7 @@
 export type SchoolCalendarEvent = {
   id: string
   externalId: string
+  recurringEventId?: string
   title: string
   description?: string
   location?: string
@@ -8,10 +9,11 @@ export type SchoolCalendarEvent = {
   end: string
   allDay: boolean
   updatedAt?: string
-  source: 'google-ics'
+  source: 'google-ics' | 'google-calendar'
   affectedBuildingId?: string
   affectedFloorId?: string
   affectedRoomId?: string
+  affectedRoomIds?: string[]
   collisionKind: 'none' | 'possible' | 'confirmed'
   collisionReason?: string
 }
@@ -25,6 +27,7 @@ export type SchoolCalendarErrorCode =
   | 'timeout'
   | 'invalid_ics'
   | 'parser_error'
+  | 'upstream_auth_error'
 
 export type SchoolCalendarEventsResult =
   | { ok: true; events: SchoolCalendarEvent[] }

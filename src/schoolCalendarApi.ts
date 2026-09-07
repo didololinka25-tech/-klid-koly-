@@ -13,6 +13,7 @@ export type CalendarSchoolEvent = SchoolCalendarEvent | InformationalSchoolCalen
 const knownErrorCodes = new Set<SchoolCalendarErrorCode>([
   'unauthenticated', 'forbidden', 'invalid_range', 'secret_missing',
   'remote_unavailable', 'timeout', 'invalid_ics', 'parser_error',
+  'upstream_auth_error',
 ])
 
 function isEvent(value: unknown): value is SchoolCalendarEvent {
@@ -24,7 +25,7 @@ function isEvent(value: unknown): value is SchoolCalendarEvent {
     && typeof event.start === 'string'
     && typeof event.end === 'string'
     && typeof event.allDay === 'boolean'
-    && event.source === 'google-ics'
+    && ['google-ics', 'google-calendar'].includes(String(event.source))
     && ['none', 'possible', 'confirmed'].includes(String(event.collisionKind))
 }
 

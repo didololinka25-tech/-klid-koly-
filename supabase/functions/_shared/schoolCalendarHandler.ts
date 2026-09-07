@@ -1,19 +1,21 @@
-import { InvalidIcsError, parseSchoolCalendarIcs } from './schoolCalendarParser.ts'
+import {
+  GoogleCalendarAuthenticationError,
+  GoogleCalendarConfigurationError,
+  GoogleCalendarRemoteError,
+  loadGoogleCalendarEvents,
+} from './schoolCalendarGoogle.ts'
 import type { SchoolCalendarErrorCode, SchoolCalendarEventsResult } from './schoolCalendarTypes.ts'
 
 export const SCHOOL_CALENDAR_MAX_RANGE_DAYS = 62
 export const SCHOOL_CALENDAR_FETCH_TIMEOUT_MS = 8_000
-export const SCHOOL_CALENDAR_MAX_ICS_BYTES = 2 * 1024 * 1024
-const GOOGLE_CALENDAR_ICS_HOSTS = new Set(['calendar.google.com', 'www.google.com'])
 
 type AuthenticationResult = 'allowed' | 'unauthenticated' | 'forbidden'
 
 export type SchoolCalendarHandlerDependencies = {
   authenticate: (authorizationHeader: string) => Promise<AuthenticationResult>
-  getSecret: (name: 'SCHOOL_CALENDAR_ICS_URL') => string | undefined
+  getSecret: (name: 'GOOGLE_CALENDAR_CLIENT_ID' | 'GOOGLE_CALENDAR_CLIENT_SECRET' | 'GOOGLE_CALENDAR_REFRESH_TOKEN' | 'SCHOOL_GOOGLE_CALENDAR_ID') => string | undefined
   fetch: typeof fetch
   timeoutMs?: number
-  maxIcsBytes?: number
 }
 
 const corsHeaders = {
@@ -40,42 +42,6 @@ function parseDate(value: unknown) {
   const date = new Date(Date.UTC(year, month - 1, day))
   if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null
   return date
-}
-
-async function readLimitedText(remote: Response, maxBytes: number) {
-  const advertisedSize = Number(remote.headers.get('content-length'))
-  if (Number.isFinite(advertisedSize) && advertisedSize > maxBytes) throw new InvalidIcsError('Kalendář je příliš velký.')
-  if (!remote.body) return ''
-  const reader = remote.body.getReader()
-  const chunks: Uint8Array[] = []
-  let size = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    size += value.byteLength
-    if (size > maxBytes) {
-      await reader.cancel()
-      throw new InvalidIcsError('Kalendář je příliš velký.')
-    }
-    chunks.push(value)
-  }
-  const combined = new Uint8Array(size)
-  let offset = 0
-  for (const chunk of chunks) {
-    combined.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return new TextDecoder('utf-8', { fatal: true }).decode(combined)
-}
-
-function safeCalendarUrl(raw: string) {
-  try {
-    const url = new URL(raw)
-    if (url.protocol !== 'https:' || url.username || url.password || !GOOGLE_CALENDAR_ICS_HOSTS.has(url.hostname)) return null
-    return url
-  } catch {
-    return null
-  }
 }
 
 export async function handleSchoolCalendarRequest(
@@ -122,56 +88,30 @@ export async function handleSchoolCalendarRequest(
     return failure('invalid_range', `Kalendář lze načíst nejvýše na ${SCHOOL_CALENDAR_MAX_RANGE_DAYS} dní.`, 400)
   }
 
-  const secret = dependencies.getSecret('SCHOOL_CALENDAR_ICS_URL')?.trim()
-  if (!secret) return failure('secret_missing', 'Školní kalendář zatím není připojený.', 503)
-  const url = safeCalendarUrl(secret)
-  if (!url) return failure('secret_missing', 'Školní kalendář není bezpečně nakonfigurovaný.', 503)
-
   const controller = new AbortController()
   let timedOut = false
   const timeout = setTimeout(() => {
     timedOut = true
     controller.abort()
   }, dependencies.timeoutMs ?? SCHOOL_CALENDAR_FETCH_TIMEOUT_MS)
-  let remote: Response
   try {
-    remote = await dependencies.fetch(url, {
-      method: 'GET',
-      headers: { Accept: 'text/calendar, text/plain;q=0.9' },
-      redirect: 'error',
-      signal: controller.signal,
+    const guardedFetch: typeof fetch = (input, init = {}) => dependencies.fetch(input, { ...init, signal: controller.signal })
+    const events = await loadGoogleCalendarEvents({
+      from: record.from as string,
+      to: record.to as string,
+      getSecret: dependencies.getSecret,
+      fetch: guardedFetch,
     })
+    clearTimeout(timeout)
+    return response({ ok: true, events }, 200)
   } catch (error) {
     clearTimeout(timeout)
     if (timedOut || (error instanceof DOMException && error.name === 'AbortError')) {
       return failure('timeout', 'Školní kalendář nyní neodpovídá.', 504)
     }
+    if (error instanceof GoogleCalendarConfigurationError) return failure('secret_missing', 'Školní kalendář zatím není připojený.', 503)
+    if (error instanceof GoogleCalendarAuthenticationError) return failure('upstream_auth_error', 'Připojení ke školnímu kalendáři je potřeba obnovit.', 502)
+    if (error instanceof GoogleCalendarRemoteError) return failure('remote_unavailable', 'Školní kalendář nyní není dostupný.', 502)
     return failure('remote_unavailable', 'Školní kalendář nyní není dostupný.', 502)
-  }
-  if (!remote.ok) {
-    clearTimeout(timeout)
-    return failure('remote_unavailable', 'Školní kalendář nyní není dostupný.', 502)
-  }
-
-  let ics: string
-  try {
-    ics = await readLimitedText(remote, dependencies.maxIcsBytes ?? SCHOOL_CALENDAR_MAX_ICS_BYTES)
-  } catch (error) {
-    clearTimeout(timeout)
-    if (timedOut) return failure('timeout', 'Školní kalendář nyní neodpovídá.', 504)
-    if (error instanceof InvalidIcsError) return failure('invalid_ics', error.message, 502)
-    return failure('invalid_ics', 'Kalendář neposkytl čitelná data ICS.', 502)
-  }
-  clearTimeout(timeout)
-  if (!/^BEGIN:VCALENDAR(?:\r?\n|$)/i.test(ics.trimStart())) {
-    return failure('invalid_ics', 'Kalendář neposkytl platná data ICS.', 502)
-  }
-
-  try {
-    const events = await parseSchoolCalendarIcs(ics, record.from as string, record.to as string)
-    return response({ ok: true, events }, 200)
-  } catch (error) {
-    if (error instanceof InvalidIcsError) return failure('invalid_ics', error.message, 502)
-    return failure('parser_error', 'Události školního kalendáře se nepodařilo zpracovat.', 502)
   }
 }
