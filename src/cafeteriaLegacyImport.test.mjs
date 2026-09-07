@@ -39,6 +39,41 @@ test('XLSX čte datum z hlavičky, quantity a text color bez pevné pozice sloup
   assert.deepEqual(extractOrderCells(orders)[0], { mealDate: '2026-09-07', sourceParts: ['Testovací', 'Anna'], sourceName: 'Testovací Anna', value: 2, quantity: 2, quantityKind: 'order', color: '00AA00' })
 })
 
+test('měsíční list odvodí plná data z českého názvu a číselné hlavičky', () => {
+  for (const sheetName of ['ZÁŘÍ_2026', 'ZARI_2026', 'Září 2026']) {
+    const workbook = new ExcelJS.Workbook(); const orders = workbook.addWorksheet(sheetName)
+    orders.getCell('D4').value = 1; orders.getCell('E4').value = 2; orders.getCell('F4').value = 3
+    orders.getCell('A5').value = 'Testovací'; orders.getCell('B5').value = 'Anna'
+    orders.getCell('D5').value = 1; orders.getCell('E5').value = 2
+    orders.getCell('E5').font = { color: { argb: 'FF00AA00' } }
+
+    assert.deepEqual(extractOrderCells(orders).map((row) => ({ mealDate: row.mealDate, quantity: row.quantity, color: row.color })), [
+      { mealDate: '2026-09-01', quantity: 1, color: null },
+      { mealDate: '2026-09-02', quantity: 2, color: '00AA00' },
+    ])
+  }
+})
+
+test('číselná hlavička odmítne den, který v daném měsíci neexistuje', () => {
+  const workbook = new ExcelJS.Workbook(); const orders = workbook.addWorksheet('DUBEN_2026')
+  orders.getCell('D4').value = 1; orders.getCell('E4').value = 2; orders.getCell('F4').value = 31
+  assert.throws(() => extractOrderCells(orders), /Neplatný den 31/i)
+})
+
+test('číselná hlavička bez bezpečně rozpoznatelného měsíce a roku se odmítne', () => {
+  const workbook = new ExcelJS.Workbook(); const orders = workbook.addWorksheet('OBJEDNÁVKY')
+  orders.getCell('D4').value = 1; orders.getCell('E4').value = 2; orders.getCell('F4').value = 3
+  assert.throws(() => extractOrderCells(orders), /Měsíc a rok nelze bezpečně určit/i)
+})
+
+test('čísla mimo souvislou rostoucí hlavičku se nepovažují za datumové sloupce', () => {
+  const workbook = new ExcelJS.Workbook(); const orders = workbook.addWorksheet('ZÁŘÍ_2026')
+  orders.getCell('A2').value = 70; orders.getCell('D2').value = 1; orders.getCell('H2').value = 4; orders.getCell('L2').value = 9
+  orders.getCell('A4').value = 80; orders.getCell('D4').value = 1; orders.getCell('E4').value = 2; orders.getCell('F4').value = 3
+  orders.getCell('A5').value = 'Testovací'; orders.getCell('B5').value = 'Anna'; orders.getCell('D5').value = 1
+  assert.deepEqual(extractOrderCells(orders).map((row) => row.mealDate), ['2026-09-01'])
+})
+
 test('svislý jídelníček čte datum z B a jednu variantu z C stejného řádku', () => {
   const workbook = new ExcelJS.Workbook(); const menu = workbook.addWorksheet('JÍDELNÍČEK 26_27')
   menu.getCell('B12').value = new Date(2026, 8, 7); menu.getCell('C12').value = '1 - Sushi'; menu.getCell('C12').font = { color: { argb: 'FF00AA00' } }

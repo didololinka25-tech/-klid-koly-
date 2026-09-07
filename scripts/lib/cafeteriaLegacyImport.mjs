@@ -85,6 +85,78 @@ export function findDateHeader(sheet) {
   return best
 }
 
+const CZECH_MONTHS = new Map([
+  ['LEDEN', 1], ['UNOR', 2], ['BREZEN', 3], ['DUBEN', 4],
+  ['KVETEN', 5], ['CERVEN', 6], ['CERVENEC', 7], ['SRPEN', 8],
+  ['ZARI', 9], ['RIJEN', 10], ['LISTOPAD', 11], ['PROSINEC', 12],
+])
+
+function sheetMonthYear(sheetName) {
+  const tokens = String(sheetName ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleUpperCase('cs-CZ')
+    .split(/[^A-Z0-9]+/)
+    .filter(Boolean)
+  const months = tokens.filter((token) => CZECH_MONTHS.has(token))
+  const years = tokens.filter((token) => /^20\d{2}$/.test(token))
+  if (months.length !== 1 || years.length !== 1) return null
+  return { month: CZECH_MONTHS.get(months[0]), year: Number(years[0]) }
+}
+
+function numericDay(cell) {
+  const value = typeof cell.value === 'object' && cell.value && 'result' in cell.value
+    ? cell.value.result
+    : cell.value
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 31) return value
+  if (typeof value === 'string' && /^(?:[1-9]|[12]\d|3[01])$/.test(value.trim())) return Number(value.trim())
+  return null
+}
+
+function numericMonthHeader(sheet) {
+  const candidates = []
+  sheet.eachRow((row, rowNumber) => {
+    const days = []
+    row.eachCell((cell, column) => {
+      const day = numericDay(cell)
+      if (day !== null) days.push({ column, day, address: cell.address })
+    })
+    if (days.length < 3) return
+    if (!days.every((item, index) => index === 0 || item.day > days[index - 1].day)) return
+    const span = days.at(-1).column - days[0].column + 1
+    if (days.length / span < 0.5) return
+    candidates.push({ row: rowNumber, days })
+  })
+  if (!candidates.length) return null
+  candidates.sort((a, b) => b.days.length - a.days.length)
+  if (candidates[1]?.days.length === candidates[0].days.length) {
+    throw new Error('V měsíčním listu nebyla jednoznačně určena řádka s hlavičkou objednávkových dnů.')
+  }
+  return candidates[0]
+}
+
+function findOrderDateHeader(sheet) {
+  const fullDateHeader = findDateHeader(sheet)
+  if (fullDateHeader.row && fullDateHeader.dates.size) return fullDateHeader
+
+  const monthYear = sheetMonthYear(sheet.name)
+  if (!monthYear) {
+    throw new Error(`Měsíc a rok nelze bezpečně určit z názvu listu „${sheet.name}“.`)
+  }
+  const header = numericMonthHeader(sheet)
+  if (!header) return { row: 0, dates: new Map() }
+
+  const dates = new Map()
+  for (const item of header.days) {
+    const date = new Date(Date.UTC(monthYear.year, monthYear.month - 1, item.day))
+    if (date.getUTCFullYear() !== monthYear.year || date.getUTCMonth() + 1 !== monthYear.month || date.getUTCDate() !== item.day) {
+      throw new Error(`Neplatný den ${item.day} pro měsíc a rok z názvu listu „${sheet.name}“ (${item.address}).`)
+    }
+    dates.set(item.column, `${monthYear.year}-${String(monthYear.month).padStart(2, '0')}-${String(item.day).padStart(2, '0')}`)
+  }
+  return { row: header.row, dates }
+}
+
 export function extractMenuColors(sheet) {
   const header = findDateHeader(sheet); const byDate = new Map()
   const verticalRows = []
@@ -140,7 +212,7 @@ export function matchVariant(dbVariants, menuVariants, orderColor) {
 }
 
 export function extractOrderCells(sheet) {
-  const header = findDateHeader(sheet)
+  const header = findOrderDateHeader(sheet)
   if (!header.row || !header.dates.size) throw new Error('V měsíčním listu nebyla nalezena hlavička se skutečnými daty.')
   const firstDateColumn = Math.min(...header.dates.keys()); const rows = []
   for (let rowNumber = header.row + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
