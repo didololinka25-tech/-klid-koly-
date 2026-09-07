@@ -1938,6 +1938,28 @@ h2 {
 .cleaning-calendar { display: grid; gap: 12px; }
 .more-account-note { margin: 2px 4px; }
 .accounts-access-screen { display: grid; gap: 12px; }
+.approval-panel { display: grid; gap: 10px; }
+.approval-count { min-width: 32px; min-height: 32px; display: grid; place-items: center; border-radius: 999px; background: #146057; color: #fff; }
+.approval-empty { display: flex; align-items: center; gap: 10px; color: #51706a; }
+.approval-empty span { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: #e3f2ed; color: #146057; font-weight: 900; }
+.approval-empty p { margin: 0; }
+.approval-user-list { display: grid; gap: 9px; }
+.approval-user { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.approval-user > div { min-width: 0; display: grid; gap: 3px; }
+.approval-user small { color: #657b76; overflow-wrap: anywhere; }
+.approval-user > button { min-height: 44px; padding: 0 14px; }
+.approval-dialog-backdrop { position: fixed; z-index: 60; inset: 0; padding: max(14px, env(safe-area-inset-top)) 12px max(14px, env(safe-area-inset-bottom)); display: grid; align-items: end; background: #09231f66; }
+.approval-dialog { width: min(100%, 560px); max-height: calc(100dvh - 28px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); margin: 0 auto; overflow-y: auto; display: grid; gap: 12px; border-radius: 18px 18px 12px 12px; }
+.approval-dialog > header { display: flex; justify-content: space-between; align-items: start; gap: 10px; }
+.approval-close { width: 44px; min-width: 44px; min-height: 44px; padding: 0; border-radius: 50%; font-size: 24px; }
+.approval-assignments { display: grid; gap: 10px; }
+.approval-assignments fieldset { min-width: 0; margin: 0; padding: 12px; display: grid; gap: 10px; border: 1px solid #d4e4e0; border-radius: 12px; }
+.approval-assignments legend { padding: 0 5px; color: #51706a; font-size: 12px; font-weight: 900; }
+.approval-assignments label { display: grid; gap: 5px; font-size: 12px; font-weight: 800; }
+.approval-assignments select { width: 100%; min-height: 44px; border: 1px solid #bcd4ce; border-radius: 9px; background: #fff; padding: 8px; font: inherit; }
+.approval-add, .approval-remove { min-height: 44px; background: #edf5f3; color: #165e56; }
+.approval-remove { justify-self: start; }
+@media (max-width: 390px) { .approval-user { grid-template-columns: 1fr; } .approval-user > button { width: 100%; } }
 .spaces-workplaces { display: grid; gap: 9px; margin-bottom: 12px; }
 .admin-menu { display: grid; gap: 7px; }
 .admin-menu > button,

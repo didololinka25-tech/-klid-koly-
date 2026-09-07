@@ -15,6 +15,9 @@ export type ModuleAccess = {
   cafeteriaRoles: CafeteriaRole[]
 }
 
+export const isAwaitingAccessApproval = (user: { active: boolean; role: string; hasModuleAccess?: boolean }) =>
+  user.active && user.role === 'pending' && !user.hasModuleAccess
+
 export const isMissingCafeteriaSchema = (error: { code?: string } | null) =>
   Boolean(error && ['42P01', 'PGRST205'].includes(error.code ?? ''))
 

@@ -37,8 +37,8 @@ export function SystemLauncher({
       {!hasAccess && (
         <section className="panel system-empty">
           <span aria-hidden="true">⏳</span>
-          <h2>Účet čeká na oprávnění</h2>
-          <p>Účet je vytvořen a čeká na přidělení oprávnění.</p>
+          <h2>Přístup čeká na schválení</h2>
+          <p>Přístup čeká na schválení správcem.</p>
         </section>
       )}
       {!access.cafeteriaAvailable && access.cleaning && (

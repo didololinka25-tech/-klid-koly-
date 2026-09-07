@@ -14,6 +14,7 @@ import { inferredBulkCompletable, isBulkCompletableTask } from './cleaningBulk'
 import { workerPlanningSaveError, type CleaningRotationSlot, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from './workerPlanning'
 import { calendarInvokeFailure, parseSchoolCalendarResponse, type CalendarSchoolEvent, type SchoolCalendarEventsResult } from './schoolCalendarApi'
 import { loadDynamicSchoolPlan, type DynamicSchoolPlanItem } from './dynamicSchoolPlanLoader'
+import { isAwaitingAccessApproval } from './system/access'
 
 export type { DynamicSchoolPlanItem } from './dynamicSchoolPlanLoader'
 
@@ -40,6 +41,7 @@ export type UserProfile = {
   isOwner: boolean
   firstSignedInAt: string
   lastSignedInAt?: string
+  hasModuleAccess?: boolean
 }
 export type BulkCompletionAction = {
   id: string
@@ -164,6 +166,7 @@ function mappedProfile(row: any): UserProfile {
     isOwner: row.is_owner ?? false,
     firstSignedInAt: row.first_signed_in_at ?? row.created_at,
     lastSignedInAt: row.last_signed_in_at ?? undefined,
+    hasModuleAccess: Boolean(row.hasModuleAccess),
   }
 }
 
@@ -229,10 +232,15 @@ export const schoolRepository = {
     return legacy.data as Profile | null
   },
   users: async (): Promise<UserProfile[]> => {
-    const { data, error } = await client().from('profiles').select('id,full_name,email,role,access_role,active,is_owner,created_at,first_signed_in_at,last_signed_in_at').order('first_signed_in_at')
+    const [{ data, error }, moduleRoles] = await Promise.all([
+      client().from('profiles').select('id,full_name,email,role,access_role,active,is_owner,created_at,first_signed_in_at,last_signed_in_at').order('first_signed_in_at'),
+      client().from('user_module_roles').select('user_id'),
+    ])
     if (error) throw error
-    return (data ?? []).map(mappedProfile).sort((a, b) => {
-      const pendingOrder = Number(b.role === 'pending') - Number(a.role === 'pending')
+    if (moduleRoles.error && !missingRelation(moduleRoles.error)) throw moduleRoles.error
+    const moduleUserIds = new Set((moduleRoles.data ?? []).map((row) => row.user_id))
+    return (data ?? []).map((row) => mappedProfile({ ...row, hasModuleAccess: moduleUserIds.has(row.id) })).sort((a, b) => {
+      const pendingOrder = Number(isAwaitingAccessApproval(b)) - Number(isAwaitingAccessApproval(a))
       return pendingOrder || a.firstSignedInAt.localeCompare(b.firstSignedInAt)
     })
   },

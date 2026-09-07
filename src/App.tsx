@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { manualEntryMatchesSearch } from "./manualSearch";
+import { AccessApprovalPanel } from "./system/AccessApprovalPanel";
+import { isAwaitingAccessApproval } from "./system/access";
 import {
   accessRole,
   canManageOperations,
@@ -1048,7 +1050,7 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
     navigateToSection(view === "plan" ? "Plán úklidu" : "Prostory");
   };
   const pendingCount = profile.is_owner
-    ? users.filter((user) => user.active && user.role === "pending").length
+    ? users.filter(isAwaitingAccessApproval).length
     : 0;
   const visible = section === "Dnes"
     ? tasks.filter((task) => task.active && task.dueToday)
@@ -1193,7 +1195,7 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
         />
       )}
       {section === "Účty a přístupy" && profile.is_owner && (
-        <AccountsAccessScreen users={users} currentUserId={profile.id} onSave={saveUserAccess} />
+        <AccountsAccessScreen users={users} currentUserId={profile.id} onSave={saveUserAccess} onApproved={async () => setUsers(await schoolRepository.users())} />
       )}
       {section === "Docházka" && (
         <AttendanceDashboard
@@ -3106,9 +3108,10 @@ const roleLabel = (role: AccessRole) =>
     visitor: "návštěvník",
   })[role];
 
-function AccountsAccessScreen({ users, currentUserId, onSave }: { users: UserProfile[]; currentUserId: string; onSave: (id: string, role: AccessRole, active: boolean) => Promise<void> }) {
+function AccountsAccessScreen({ users, currentUserId, onSave, onApproved }: { users: UserProfile[]; currentUserId: string; onSave: (id: string, role: AccessRole, active: boolean) => Promise<void>; onApproved: () => Promise<void> }) {
   return <div className="accounts-access-screen">
     <section className="panel"><p className="eyebrow">ÚČTY A PŘÍSTUPY</p><h2>Uživatelé aplikace</h2><p className="hint">Zde schvalujete přihlášení a určujete, co člověk smí v aplikaci dělat. Pracovníci v rozpisu jsou samostatně v části Lidé a práce a účet mít nemusí.</p></section>
+    <AccessApprovalPanel onApproved={onApproved} />
     <UserManagement users={users} currentUserId={currentUserId} onSave={onSave} />
   </div>;
 }
@@ -3122,21 +3125,16 @@ function UserManagement({
   currentUserId: string;
   onSave: (id: string, role: AccessRole, active: boolean) => Promise<void>;
 }) {
-  const pendingCount = users.filter((user) => user.active && user.role === "pending").length;
+  const approvedUsers = users.filter((user) => !isAwaitingAccessApproval(user));
   return (
     <section className="user-management">
-      {pendingCount > 0 && (
-        <div className="pending-summary">
-          <b>{pendingCount === 1 ? "1 uživatel čeká na schválení" : `${pendingCount} uživatelé čekají na schválení`}</b>
-          <span>Čekající účty jsou zobrazené jako první.</span>
-        </div>
-      )}
+      <h2>Schválení uživatelé</h2>
       <p className="hint">
-        Nové účty čekají na schválení. Role ani hlavního správce nelze změnit
-        samotným uživatelem.
+        Zde lze dále upravit jejich přístup do Úklidu. Role ani hlavního správce
+        nelze změnit samotným uživatelem.
       </p>
       <div className="user-list">
-        {users.map((user) => (
+        {approvedUsers.map((user) => (
           <UserAccessCard
             key={user.id}
             user={user}
@@ -3145,8 +3143,8 @@ function UserManagement({
           />
         ))}
       </div>
-      {users.length === 0 && (
-        <p className="hint">Zatím nejsou dostupné žádné uživatelské profily.</p>
+      {approvedUsers.length === 0 && (
+        <p className="hint">Zatím nejsou žádní schválení uživatelé.</p>
       )}
     </section>
   );
@@ -3170,7 +3168,7 @@ function UserAccessCard({
   }, [user.role, user.active]);
   const locked = user.isOwner;
   return (
-    <article className={`user-card ${active ? "" : "inactive"} ${user.role === "pending" ? "pending" : ""}`}>
+    <article className={`user-card ${active ? "" : "inactive"} ${isAwaitingAccessApproval(user) ? "pending" : ""}`}>
       <header>
         <span>
           <b>{user.fullName}</b>
@@ -3185,13 +3183,13 @@ function UserAccessCard({
         </small>
       </div>
       <label>
-        Role
+        Přístup do Úklidu
         <select
           value={role}
           disabled={locked}
           onChange={(event) => setRole(event.target.value as AccessRole)}
         >
-          <option value="pending">Čeká na schválení</option>
+          <option value="pending">Bez přístupu do Úklidu</option>
           <option value="cleaning_team">Úklidový tým</option>
           <option value="visitor">Návštěvník</option>
           <option value="admin">Správce</option>
