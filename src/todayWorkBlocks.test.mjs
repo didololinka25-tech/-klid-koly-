@@ -4,11 +4,14 @@ import test from 'node:test'
 import {
   buildTodayWorkBlocks,
   incompleteWorkBlockTasksByRoom,
+  hasRegularCleaningDayForBuilding,
   mandatoryWorkBlockProgress,
+  todayWorkVisibility,
   undoableWorkBlockActions,
   workBlockIsComplete,
 } from './todayWorkBlocks.ts'
 import { applyBulkUndo } from './cleaningBulk.ts'
+import { resolveCleaningDay } from './scheduling.ts'
 
 const task = (id, room, floor, overrides = {}) => ({
   id,
@@ -122,4 +125,35 @@ test('mobilní work block layout nemá pevnou šířku ani horizontální overfl
   assert.match(css, /@media \(max-width: 430px\)[\s\S]*\.work-block-card\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+116px/)
   assert.match(css, /\.work-block-card\s*\{[^}]*min-width:\s*0/)
   assert.doesNotMatch(css, /\.work-block-card\s*\{[^}]*width:\s*\d{3,}px/)
+})
+
+test('skutečné schedule_days školy nepovolí pravidelné hlavní části v úterý ani ve čtvrtek', () => {
+  const catalog = [task('floor', 'Kuchyň', '1. patro', { plannerReason: null })]
+  for (const date of ['2026-09-08', '2026-09-10']) {
+    assert.equal(hasRegularCleaningDayForBuilding(catalog, resolveCleaningDay(date, []), { id: 'school', name: 'Škola' }), false)
+    assert.deepEqual(todayWorkVisibility(catalog, catalog, resolveCleaningDay(date, []), 'school').mainTasks, [])
+  }
+})
+
+test('pondělí, středa a pátek zachovají hlavní části podle uloženého harmonogramu', () => {
+  const catalog = [task('floor', 'Kuchyň', '1. patro', { plannerReason: null })]
+  for (const date of ['2026-09-07', '2026-09-09', '2026-09-11']) {
+    const visibility = todayWorkVisibility(catalog, catalog, resolveCleaningDay(date, []), 'school')
+    assert.equal(visibility.regularSchoolDay, true)
+    assert.deepEqual(visibility.mainTasks.map((item) => item.id), ['floor'])
+  }
+})
+
+test('mimořádný due-today úkol zůstane viditelný i mimo pravidelný školní den', () => {
+  const routine = task('floor', 'Kuchyň', '1. patro', { plannerReason: null })
+  const extraordinary = task('spill', 'Kuchyň', '1. patro', {
+    title: 'Uklidit rozlité pití',
+    frequency: 'mimořádně',
+    activityType: 'extraordinary',
+    plannerReason: null,
+  })
+  const visibility = todayWorkVisibility([routine, extraordinary], [extraordinary], resolveCleaningDay('2026-09-08', []), 'school')
+  assert.equal(visibility.regularSchoolDay, false)
+  assert.deepEqual(visibility.mainTasks, [])
+  assert.deepEqual(visibility.extraTasks.map((item) => item.id), ['spill'])
 })

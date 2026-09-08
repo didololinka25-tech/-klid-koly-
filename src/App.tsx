@@ -56,7 +56,7 @@ import { buildCalendarDaySummary, calendarDayCellScope, calendarDayPlanView, cal
 import type { CalendarSchoolEvent } from "./schoolCalendarApi";
 import { applySchoolCalendarScope, detectCleaningEventCollision, mappingForSchoolEvent, recommendCollisionResolution, type SchoolCalendarScopeMapping, type SchoolCalendarScopeType } from "./schoolCalendarCollision";
 import { assignmentOverlapsMonth, scheduleExceptionsConflict, weekMonday, weeklyResponsibilitiesForDate, workAssignmentsConflict, workerPlanningSaveError, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
-import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
+import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, todayWorkVisibility, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
 import { appHistoryState, refreshAreasForRealtimeTable, shouldReloadIdentity, shouldRunResumeRefresh, withAppHistoryState } from "./appStability";
 
 type Section =
@@ -1057,10 +1057,14 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
   const visible = section === "Dnes"
     ? tasks.filter((task) => task.active && task.dueToday)
     : tasks;
-  const requiredVisible = visible.filter((task) => task.plannerReason !== "wc-queue");
+  const schoolBuildingId = workplaces.find((workplace) => workplace.name === "Škola")?.id
+    ?? tasks.find((task) => task.building === "Škola")?.buildingId;
+  const todayWork = todayWorkVisibility(tasks, visible, cleaningDay, schoolBuildingId);
+  const mainWorkVisible = todayWork.mainTasks;
+  const requiredVisible = mainWorkVisible.filter((task) => task.plannerReason !== "wc-queue");
   const requiredVisibleDone = requiredVisible.filter((task) => task.done).length;
-  const optionalQueueRemaining = visible.some((task) => task.plannerReason === "wc-queue" && !task.done);
-  const todayExtras = visible.filter((task) => !isFinalCheckTask(task) && isExtraCleaningTask(task));
+  const optionalQueueRemaining = mainWorkVisible.some((task) => task.plannerReason === "wc-queue" && !task.done);
+  const todayExtras = todayWork.extraTasks.filter((task) => !isFinalCheckTask(task));
   const todayExtrasDone = todayExtras.filter((task) => task.done).length;
   const todayBuildingIds = [...new Set(visible.map((task) => task.buildingId).filter((id): id is string => Boolean(id)))];
   const todayCancelledWorkplaces = cleaningDays.filter((record) => record.kind === "cancelled_standard" && record.status === "active" && record.executionDate === todayPlanDate);
@@ -1143,24 +1147,25 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
           ) : !todayPlanLoaded.current && todayPlanStatus === "error" ? (
             <section className="plan-state error" role="alert"><h2>Nepodařilo se načíst dnešní plán.</h2><p>{todayPlanError}</p><button onClick={retryTodayPlan}>Zkusit znovu</button></section>
           ) : <>
-          {todayPlanStatus === "refreshing" && <p className="plan-refreshing" aria-live="polite">Aktualizuji dnešní plán…</p>}
-          {todayPlanStatus === "error" && <section className="plan-stale-error" role="alert"><span>Aktualizace plánu se nezdařila. Zobrazuji poslední načtený stav.</span><button onClick={retryTodayPlan}>Zkusit znovu</button></section>}
-          {displayCleaningDay.kind !== "preview" && visible.length > 0 && (
-            <ArrivalReminders entries={manual.entries.filter((entry) => entry.entryType === "arrival" && entry.active)} />
-          )}
+           {todayPlanStatus === "refreshing" && <p className="plan-refreshing" aria-live="polite">Aktualizuji dnešní plán…</p>}
+           {todayPlanStatus === "error" && <section className="plan-stale-error" role="alert"><span>Aktualizace plánu se nezdařila. Zobrazuji poslední načtený stav.</span><button onClick={retryTodayPlan}>Zkusit znovu</button></section>}
+           {cleaningDay.kind === "standard" && !todayWork.regularSchoolDay && <section className="today-day-context off-schedule" role="status"><b>Dnes není pravidelný úklidový den školy.</b></section>}
+           {displayCleaningDay.kind !== "preview" && (mainWorkVisible.length > 0 || todayExtras.length > 0) && (
+             <ArrivalReminders entries={manual.entries.filter((entry) => entry.entryType === "arrival" && entry.active)} />
+           )}
           {visible.length > 0 && <TodayExtras tasks={todayExtras} done={todayExtrasDone} onComplete={complete} pendingTaskIds={pendingTaskIds} />}
           {accessRole(profile) === "visitor" && (
             <p className="readonly-note">Návštěvnický přístup je pouze pro čtení.</p>
           )}
-          <TaskHierarchy
-            tasks={visible}
-            bulkActions={bulkActions}
-            onComplete={complete}
+           {todayWork.regularSchoolDay && <TaskHierarchy
+             tasks={mainWorkVisible}
+             bulkActions={bulkActions}
+             onComplete={complete}
             onCompleteAll={completeMany}
             onUndoBulk={undoBulkCompletion}
-            pendingTaskIds={pendingTaskIds}
-            guides={manual.entries.filter((entry) => entry.entryType === "guide" && entry.active)}
-          />
+             pendingTaskIds={pendingTaskIds}
+             guides={manual.entries.filter((entry) => entry.entryType === "guide" && entry.active)}
+           />}
           <DepartureChecks
             tasks={visible}
             onComplete={complete}

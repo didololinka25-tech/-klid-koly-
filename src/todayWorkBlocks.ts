@@ -1,5 +1,6 @@
 import { bulkTasks, findUndoableRoomAction } from './cleaningBulk.ts'
-import { isStandardCleaningTask } from './cleaningPresentation.ts'
+import { isExtraCleaningTask, isStandardCleaningTask } from './cleaningPresentation.ts'
+import { isTaskDueForCleaningDay, type CleaningDayContext } from './scheduling.ts'
 import type { Task } from './types'
 
 export type TodayWorkRoom = {
@@ -27,6 +28,58 @@ export type TodayBuildingWork = {
   buildingId?: string
   blocks: TodayWorkBlock[]
   wcQueue?: TodayWorkBlock
+}
+
+function taskScheduleInput(task: Task) {
+  return {
+    id: task.id,
+    frequency: task.frequency,
+    schedule_days: task.scheduleDays,
+    monthly_day: task.monthlyDay,
+    cleaning_cycle_length: task.cleaningCycleLength,
+    cleaning_cycle_offset: task.cleaningCycleOffset,
+    period_months: task.periodMonths,
+    period_week: task.periodWeek,
+    period_anchor_month: task.periodAnchorMonth,
+  }
+}
+
+/**
+ * Rozhoduje pouze podle uloženého harmonogramu daného pracoviště. Díky tomu
+ * obrazovka Dnes nevytváří běžnou školní práci jen z toho, že jsou ve stejný
+ * den splatné úkoly jiného pracoviště.
+ */
+export function hasRegularCleaningDayForBuilding(
+  tasks: Task[],
+  context: CleaningDayContext,
+  building: { id?: string; name: string },
+) {
+  if (!['standard', 'rescheduled', 'preview'].includes(context.kind)) return false
+  return tasks.some((task) => {
+    const sameBuilding = building.id ? task.buildingId === building.id : task.building === building.name
+    return sameBuilding
+      && task.active
+      && task.roomActive !== false
+      && isStandardCleaningTask(task)
+      && isTaskDueForCleaningDay(taskScheduleInput(task), context)
+  })
+}
+
+export function todayWorkVisibility(
+  allTasks: Task[],
+  dueTasks: Task[],
+  schoolContext: CleaningDayContext,
+  schoolBuildingId?: string,
+) {
+  const regularSchoolDay = hasRegularCleaningDayForBuilding(allTasks, schoolContext, {
+    id: schoolBuildingId,
+    name: 'Škola',
+  })
+  return {
+    regularSchoolDay,
+    mainTasks: regularSchoolDay ? dueTasks : [],
+    extraTasks: dueTasks.filter(isExtraCleaningTask),
+  }
 }
 
 const isWcRoom = (task: Task) => /^wc(?:\s|\s*\/|$)/i.test(task.room.trim())

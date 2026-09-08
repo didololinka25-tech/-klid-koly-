@@ -146,6 +146,8 @@ test('Dnes vede přímo od docházky přes práci navíc k pracovním celkům', 
   assert.match(today, /<TodayExtras tasks=\{todayExtras\}/)
   assert.ok(today.indexOf('<TodayExtras') < today.indexOf('<TaskHierarchy'))
   assert.ok(today.indexOf('<TaskHierarchy') < today.indexOf('<DepartureChecks'))
+  assert.match(today, /Dnes není pravidelný úklidový den školy\./)
+  assert.match(today, /todayWork\.regularSchoolDay && <TaskHierarchy/)
   assert.doesNotMatch(source, /Co jsem dnes udělal\/a|Vyberte místnosti a uložte je najednou|ShiftRoomCompletion/)
   assert.match(source, /WC – otevřená fronta/)
   assert.match(source, /hlavní části hotové/)
