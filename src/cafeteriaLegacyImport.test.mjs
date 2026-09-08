@@ -4,14 +4,14 @@ import test from 'node:test'
 import ExcelJS from 'exceljs'
 import { insertLegacyOrder, legacyApplySql } from '../scripts/lib/cafeteriaLegacyApply.mjs'
 import {
-  extractMenuColors, extractOrderCells, IMPORT_STATUSES, matchDiner, matchVariant, normalizeFontColor, parseLegacyQuantity, planImport,
+  extractMenuColors, extractOrderCells, IMPORT_STATUSES, isAuxiliaryOrderRow, matchDiner, matchVariant, normalizeFontColor, parseLegacyQuantity, planImport,
 } from '../scripts/lib/cafeteriaLegacyImport.mjs'
 
 const diner = { id: 'd1', full_name: 'Anna Testovací', portion_category_id: 'small' }
 const day = { id: 'day1', meal_date: '2026-09-07' }
 const variants = [
-  { id: 'v1', meal_day_id: 'day1', name: 'Sushi', active: true },
-  { id: 'v2', meal_day_id: 'day1', name: 'Rizoto', active: true },
+  { id: 'v1', meal_day_id: 'day1', name: 'Sushi', active: true, sort_order: 10 },
+  { id: 'v2', meal_day_id: 'day1', name: 'Rizoto', active: true, sort_order: 20 },
 ]
 const database = { diners: [diner], mealDays: [day], variants, orders: [], priceRules: [{ portion_category_id: 'small', valid_from: '2026-09-01', valid_to: null, price: 70, active: true }] }
 const source = (overrides = {}) => ({ mealDate: '2026-09-07', sourceParts: ['Testovací', 'Anna'], sourceName: 'Testovací Anna', value: 1, quantity: 1, quantityKind: 'order', color: '00AA00', ...overrides })
@@ -37,6 +37,24 @@ test('XLSX čte datum z hlavičky, quantity a text color bez pevné pozice sloup
   orders.getCell('G4').value = new Date(2026, 8, 7); orders.getCell('A5').value = 'Testovací'; orders.getCell('B5').value = 'Anna'; orders.getCell('G5').value = 2; orders.getCell('G5').font = { color: { argb: '00AA00' } }
   assert.deepEqual(extractMenuColors(menu).get('2026-09-07'), [{ name: 'Sushi', color: '00AA00' }])
   assert.deepEqual(extractOrderCells(orders)[0], { mealDate: '2026-09-07', sourceParts: ['Testovací', 'Anna'], sourceName: 'Testovací Anna', value: 2, quantity: 2, quantityKind: 'order', color: '00AA00' })
+})
+
+test('pomocné cenové a návštěvní řádky se do objednávek vůbec nezařadí', () => {
+  const workbook = new ExcelJS.Workbook(); const orders = workbook.addWorksheet('ZÁŘÍ_2026')
+  orders.getCell('D4').value = 1; orders.getCell('E4').value = 2; orders.getCell('F4').value = 3
+  orders.getCell('A5').value = '80'; orders.getCell('B5').value = 'Kč (velký oběd - od 8. třídy + dospělí)'; orders.getCell('D5').value = 1
+  orders.getCell('A6').value = '75'; orders.getCell('B6').value = 'návštěvy platí škola - malé'; orders.getCell('D6').value = 1
+  orders.getCell('A7').value = 'Testovací'; orders.getCell('B7').value = 'Anna'; orders.getCell('D7').value = 2
+
+  assert.equal(isAuxiliaryOrderRow(['80', 'Kč (velký oběd)']), true)
+  assert.equal(isAuxiliaryOrderRow(['75', 'návštěvy platí škola - malé']), true)
+  assert.deepEqual(extractOrderCells(orders).map((row) => [row.sourceName, row.quantity]), [['Testovací Anna', 2]])
+})
+
+test('neznámé jméno se pomocným filtrem neztratí a zůstane UNMATCHED_DINER', () => {
+  assert.equal(isAuxiliaryOrderRow(['Neznámý', 'Člověk']), false)
+  const result = planImport([source({ sourceParts: ['Neznámý', 'Člověk'], sourceName: 'Neznámý Člověk' })], database, new Map())
+  assert.equal(result[0].status, IMPORT_STATUSES.UNMATCHED_DINER)
 })
 
 test('měsíční list odvodí plná data z českého názvu a číselné hlavičky', () => {
@@ -132,10 +150,23 @@ test('single variant lze přiřadit bez barvy', () => {
 })
 
 test('varianty se mapují podle barvy zvlášť pro konkrétní den', () => {
-  const menu = [{ name: 'Sushi', color: '00AA00' }, { name: 'Rizoto', color: '000000' }]
+  const menu = [{ name: 'Úplně jiný text první varianty', color: '00AA00' }, { name: 'Jiný text druhé varianty', color: '000000' }]
   assert.equal(matchVariant(variants, menu, '00AA00').id, 'v1')
-  const reversed = [{ name: 'Sushi', color: '000000' }, { name: 'Rizoto', color: '00AA00' }]
+  const reversed = [{ name: 'První položka', color: '000000' }, { name: 'Druhá položka', color: '00AA00' }]
   assert.equal(matchVariant(variants, reversed, '00AA00').id, 'v2')
+})
+
+test('DB varianty se párují podle jednoznačného sort_order, ne vstupního pořadí nebo textu', () => {
+  const reversedDatabase = [variants[1], variants[0]]
+  const menu = [{ name: 'První menu text', color: 'AA0000' }, { name: 'Druhý menu text', color: '000000' }]
+  assert.equal(matchVariant(reversedDatabase, menu, 'AA0000').id, 'v1')
+  assert.equal(matchVariant(reversedDatabase, menu, '000000').id, 'v2')
+})
+
+test('nejednoznačné pořadí nebo rozdílný počet variant se odmítne', () => {
+  const menu = [{ name: 'První', color: 'AA0000' }, { name: 'Druhá', color: '000000' }]
+  assert.equal(matchVariant([{ ...variants[0], sort_order: 10 }, { ...variants[1], sort_order: 10 }], menu, 'AA0000'), null)
+  assert.equal(matchVariant(variants, [menu[0]], 'AA0000'), null)
 })
 
 test('neexistuje globální mapování červená=maso a nejasná barva se odmítne', () => {
@@ -184,6 +215,8 @@ test('importer je defaultně dry-run a apply je explicitní transakce', async ()
   assert.match(cli, /await client\.query\('rollback'\)/)
   assert.match(cli, /await client\.query\('commit'\)/)
   assert.match(cli, /SKIP_ALREADY_EXISTS/)
+  assert.match(cli, /select v\.id, v\.meal_day_id, v\.name, v\.active, v\.sort_order/i)
+  assert.match(cli, /order by d\.meal_date, v\.sort_order, v\.id/i)
 })
 
 function legacyApplyClient({ cutoffPassed }) {

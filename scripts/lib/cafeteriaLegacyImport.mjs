@@ -8,6 +8,28 @@ export function normalizePersonName(value) {
   return String(value ?? '').normalize('NFC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('cs-CZ')
 }
 
+function normalizeAuxiliaryLabel(value) {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLocaleLowerCase('cs-CZ')
+}
+
+/**
+ * Conservative allow-list of known non-person rows in the legacy order sheet.
+ * Unknown labels are deliberately kept so a real person can become
+ * UNMATCHED_DINER instead of disappearing silently.
+ */
+export function isAuxiliaryOrderRow(sourceParts) {
+  const label = normalizeAuxiliaryLabel(sourceParts.join(' '))
+  return /^\d+(?:[.,]\d+)?\s*kc\b/.test(label)
+    || /^cena\b(?:.*\bkc\b|\s*[:\-–—])/.test(label)
+    || /^(?:\d+\s+)?navstevy\b/.test(label)
+    || /^(?:souhrn|celkem)\b/.test(label)
+}
+
 export function normalizeFontColor(color) {
   const argb = String(color?.argb ?? '').replace(/^#/, '').toUpperCase()
   if (!/^(?:[0-9A-F]{6}|[0-9A-F]{8})$/.test(argb)) return null
@@ -203,12 +225,19 @@ export function matchDiner(sourceParts, diners) {
 
 export function matchVariant(dbVariants, menuVariants, orderColor) {
   if (dbVariants.length === 1) return dbVariants[0]
-  if (dbVariants.length < 2 || !orderColor) return null
+  if (dbVariants.length < 2 || dbVariants.length !== menuVariants.length || !orderColor) return null
   const color = normalizeFontColor({ argb: orderColor })
-  const matches = menuVariants.flatMap((menu) => menu.color === color
-    ? dbVariants.filter((variant) => normalizePersonName(variant.name) === normalizePersonName(menu.name)) : [])
-  const unique = [...new Map(matches.map((variant) => [variant.id, variant])).values()]
-  return unique.length === 1 ? unique[0] : null
+  if (!color) return null
+
+  const menuColors = menuVariants.map((variant) => normalizeFontColor({ argb: variant.color }))
+  if (menuColors.some((item) => !item) || new Set(menuColors).size !== menuColors.length) return null
+  const menuIndex = menuColors.findIndex((item) => item === color)
+  if (menuIndex < 0) return null
+
+  const sortOrders = dbVariants.map((variant) => Number(variant.sort_order))
+  if (sortOrders.some((item) => !Number.isInteger(item)) || new Set(sortOrders).size !== sortOrders.length) return null
+  const orderedDatabaseVariants = [...dbVariants].sort((a, b) => Number(a.sort_order) - Number(b.sort_order))
+  return orderedDatabaseVariants[menuIndex] ?? null
 }
 
 export function extractOrderCells(sheet) {
@@ -219,6 +248,7 @@ export function extractOrderCells(sheet) {
     const row = sheet.getRow(rowNumber); const sourceParts = []
     for (let column = 1; column < firstDateColumn; column += 1) { const text = cellText(row.getCell(column)); if (text) sourceParts.push(text) }
     if (sourceParts.length < 2) continue
+    if (isAuxiliaryOrderRow(sourceParts)) continue
     for (const [column, mealDate] of header.dates) {
       const cell = row.getCell(column); const parsed = parseLegacyQuantity(cell.value)
       if (parsed.kind === 'none') continue

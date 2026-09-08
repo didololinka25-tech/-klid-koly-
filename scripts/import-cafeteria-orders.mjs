@@ -61,7 +61,7 @@ async function loadDatabase(client, dates) {
   const [diners, days, variants, orders, prices] = await Promise.all([
     client.query('select id, full_name, portion_category_id from public.cafeteria_diners where active'),
     client.query("select id, meal_date::text from public.cafeteria_meal_days where meal_date between $1 and $2 and status = 'published'", [dates[0], dates.at(-1)]),
-    client.query('select v.id, v.meal_day_id, v.name, v.active from public.cafeteria_meal_variants v join public.cafeteria_meal_days d on d.id=v.meal_day_id where d.meal_date between $1 and $2', [dates[0], dates.at(-1)]),
+    client.query('select v.id, v.meal_day_id, v.name, v.active, v.sort_order from public.cafeteria_meal_variants v join public.cafeteria_meal_days d on d.id=v.meal_day_id where d.meal_date between $1 and $2 order by d.meal_date, v.sort_order, v.id', [dates[0], dates.at(-1)]),
     client.query('select o.diner_id, o.meal_day_id from public.cafeteria_orders o join public.cafeteria_meal_days d on d.id=o.meal_day_id where d.meal_date between $1 and $2', [dates[0], dates.at(-1)]),
     client.query('select portion_category_id, valid_from::text, valid_to::text, price, active from public.cafeteria_price_rules where valid_from <= $2 and (valid_to is null or valid_to >= $1)', [dates[0], dates.at(-1)]),
   ])
