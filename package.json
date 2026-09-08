@@ -10,6 +10,7 @@
     "test:sql:cafeteria-import": "node .pglite-test/run-cafeteria-legacy-import.mjs",
     "test:sql:access-approval": "node .pglite-test/run-access-approval.mjs",
     "test:sql:school-calendar-mapping": "node .pglite-test/run-school-calendar-mapping.mjs",
+    "test:sql:manual-attendance": "node .pglite-test/run-manual-attendance.mjs",
     "build": "vite build",
     "import:cafeteria-orders": "node scripts/import-cafeteria-orders.mjs",
     "preview": "vite preview"

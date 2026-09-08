@@ -28,4 +28,5 @@ export type Attendance = {
   date: string
   note?: string
   editedAt?: string
+  entrySource?: 'clock' | 'manual_backfill'
 }

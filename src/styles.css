@@ -859,6 +859,78 @@ h1 {
   color: #568078;
   font-size: 13px;
 }
+.manual-attendance-open {
+  min-height: 46px;
+  border: 1px solid #9cc8be;
+  border-radius: 11px;
+  background: #f5fbf9;
+  color: #165e56;
+  font-weight: 850;
+}
+.manual-attendance-badge {
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #e8f3ff;
+  color: #245f8d !important;
+  font-size: 10px !important;
+  font-weight: 850;
+}
+.attendance-note {
+  max-width: 32rem;
+  overflow-wrap: anywhere;
+}
+.manual-attendance-editor {
+  max-height: min(92vh, 720px);
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+}
+.manual-attendance-editor h2,
+.manual-attendance-editor p,
+.manual-attendance-editor .confirmation-actions {
+  margin-block: 0;
+}
+.manual-attendance-editor label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  font-weight: 750;
+}
+.manual-attendance-editor input,
+.manual-attendance-editor select,
+.manual-attendance-editor textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  border: 1px solid #c7ddd6;
+  border-radius: 9px;
+  padding: 9px 10px;
+  background: #fff;
+  font: inherit;
+}
+.manual-attendance-editor textarea { resize: vertical; }
+.manual-attendance-times {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+.manual-attendance-editor .form-error {
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: #ffe7e3;
+  color: #922f27;
+  font-weight: 750;
+}
+.manual-attendance-editor .confirmation-actions button.primary {
+  border-color: #165e56;
+  background: #165e56;
+  color: #fff;
+}
+@media (max-width: 380px) {
+  .manual-attendance-times { grid-template-columns: 1fr; }
+}
 .attendance-summary-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

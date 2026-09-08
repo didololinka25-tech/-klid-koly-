@@ -7,10 +7,10 @@ const migration = readFileSync(
   'utf8',
 )
 
-const laterAclMigrations = readFileSync(
-  new URL('../supabase/migrations/20260907120000_school_calendar_scope_mappings.sql', import.meta.url),
-  'utf8',
-)
+const laterAclMigrations = [
+  '../supabase/migrations/20260907120000_school_calendar_scope_mappings.sql',
+  '../supabase/migrations/20260908120000_manual_attendance_backfill.sql',
+].map((path) => readFileSync(new URL(path, import.meta.url), 'utf8')).join('\n')
 
 const frontendRpcNames = [
   ...readFileSync(new URL('./schoolRepository.ts', import.meta.url), 'utf8').matchAll(/\.rpc\(\s*['"]([a-z0-9_]+)['"]/g),

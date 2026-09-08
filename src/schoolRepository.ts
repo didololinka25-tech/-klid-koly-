@@ -84,18 +84,26 @@ export type ManualEntry = {
 export type ManualData = { entries: ManualEntry[]; available: boolean; editable: boolean }
 export type AttendanceWorker = { id: string; name: string; role: AccessRole }
 export type AttendanceSettings = { plannedShiftsPerWeek: number; configurable: boolean }
+export type ManualAttendanceDraft = {
+  workerId: string
+  buildingId: string
+  date: string
+  startedTime: string
+  endedTime: string
+  note: string
+}
 export type AttendanceAuditEntry = {
   id: string
   attendanceId: string
-  oldDate: string
-  oldStart: string
+  oldDate?: string
+  oldStart?: string
   oldEnd?: string
   newDate: string
   newStart: string
   newEnd?: string
   changedByName: string
   changedAt: string
-  changeKind: 'clock_out' | 'correction'
+  changeKind: 'manual_creation' | 'clock_out' | 'correction'
 }
 export type ContractType = 'dpp' | 'dpc' | 'other'
 export type WorkerContract = { id: string; workerId: string; contractType: ContractType; validFrom: string; validTo?: string; hourlyRate?: number; note: string; active: boolean; createdAt?: string; updatedAt?: string }
@@ -870,7 +878,7 @@ export const schoolRepository = {
     if (error) throw error
   },
   attendance: async (workerId: string): Promise<Attendance[]> => {
-    const { data, error } = await client().from('attendance').select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').eq('worker_id', workerId).order('started_at', { ascending: false })
+    const { data, error } = await client().from('attendance').select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,entry_source,buildings(name)').eq('worker_id', workerId).order('started_at', { ascending: false })
     if (error) throw error
     return (data ?? []).map(mapAttendance)
   },
@@ -969,6 +977,36 @@ export const schoolRepository = {
     if (error) throw attendanceError(error)
     if (!data) throw new Error('Opravená směna nebyla nalezena.')
   },
+  createManualAttendance: async (draft: ManualAttendanceDraft): Promise<Attendance> => {
+    if (!draft.workerId) throw new Error('Vyberte pracovníka.')
+    if (!draft.buildingId) throw new Error('Vyberte pracoviště.')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(draft.date)) throw new Error('Vyberte platné datum.')
+    if (!/^\d{2}:\d{2}$/.test(draft.startedTime) || !/^\d{2}:\d{2}$/.test(draft.endedTime)) {
+      throw new Error('Vyplňte čas příchodu i odchodu.')
+    }
+    if (draft.endedTime <= draft.startedTime) throw new Error('Odchod musí být po příchodu.')
+    if (draft.note.trim().length > 1000) throw new Error('Poznámka může mít nejvýše 1000 znaků.')
+
+    const db = client()
+    const { data: created, error: createError } = await db.rpc('create_manual_attendance', {
+      target_worker_id: draft.workerId,
+      target_building_id: draft.buildingId,
+      target_date: draft.date,
+      target_started_time: draft.startedTime,
+      target_ended_time: draft.endedTime,
+      target_note: draft.note.trim() || null,
+    })
+    if (createError) throw attendanceError(createError)
+    const createdRow = Array.isArray(created) ? created[0] : created
+    if (!createdRow?.id) throw new Error('Doplněná směna nebyla vrácena databází.')
+
+    const { data, error } = await db.from('attendance')
+      .select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,entry_source,buildings(name)')
+      .eq('id', createdRow.id)
+      .single()
+    if (error) throw error
+    return mapAttendance(data)
+  },
   deleteAttendance: async (id: string, workerId: string) => {
     const { data, error } = await client().from('attendance').delete().eq('id', id).eq('worker_id', workerId).select('id').maybeSingle()
     if (error) throw error
@@ -985,12 +1023,12 @@ export const schoolRepository = {
       now.toISOString(),
     )
     const values = attendanceStartValues(workerId, buildingId, now.toISOString(), pragueDateKey(now))
-    const { data, error } = await db.from('attendance').insert(values).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').single()
+    const { data, error } = await db.from('attendance').insert(values).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,entry_source,buildings(name)').single()
     if (error) throw attendanceError(error)
     return mapAttendance(data)
   },
   finishAttendance: async (id: string): Promise<Attendance> => {
-    const { data, error } = await client().from('attendance').update({ ended_at: new Date().toISOString() }).eq('id', id).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,buildings(name)').single()
+    const { data, error } = await client().from('attendance').update({ ended_at: new Date().toISOString() }).eq('id', id).select('id,worker_id,building_id,started_at,ended_at,attendance_date,note,entry_source,buildings(name)').single()
     if (error) throw attendanceError(error)
     return mapAttendance(data)
   },
@@ -1030,6 +1068,7 @@ function mapAttendance(row: any): Attendance {
     end: row.ended_at ?? undefined,
     date: row.attendance_date,
     note: row.note ?? undefined,
+    entrySource: row.entry_source === 'manual_backfill' ? 'manual_backfill' : 'clock',
   }
 }
 

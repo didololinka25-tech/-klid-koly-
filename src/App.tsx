@@ -23,6 +23,7 @@ import {
   type ManagedRoom,
   type ManualData,
   type ManualEntry,
+  type ManualAttendanceDraft,
   type Incident,
   type OperationsData,
   type PlanOptions,
@@ -852,6 +853,22 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
       throw error;
     }
   };
+  const createManualAttendance = async (draft: ManualAttendanceDraft) => {
+    try {
+      setNotice("");
+      await schoolRepository.createManualAttendance(draft);
+      await refreshAttendanceSilently();
+      setAttendanceRefresh((value) => value + 1);
+      setNotice("Chybějící docházka byla doplněna zpětně.");
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Zpětnou docházku se nepodařilo uložit.",
+      );
+      throw error;
+    }
+  };
   const refreshWorkerPlanning = async () => setWorkerPlanning(await schoolRepository.workerPlanning());
   const saveWorkerAssignment = async (item: WorkerWorkAssignment) => {
     try {
@@ -1223,6 +1240,7 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
           onAttendanceBuildingChange={setAttendanceBuildingId}
           ownRecords={attendance}
           onSaveAttendance={saveAttendance}
+          onCreateManualAttendance={createManualAttendance}
           onDeleteAttendance={deleteAttendance}
           onSaveSettings={saveAttendanceSettings}
         />
@@ -1531,6 +1549,7 @@ function AttendanceDashboard({
   onAttendanceBuildingChange,
   ownRecords,
   onSaveAttendance,
+  onCreateManualAttendance,
   onDeleteAttendance,
   onSaveSettings,
 }: {
@@ -1556,14 +1575,17 @@ function AttendanceDashboard({
     endedAt?: string,
     buildingId?: string,
   ) => Promise<void>;
+  onCreateManualAttendance: (draft: ManualAttendanceDraft) => Promise<void>;
   onDeleteAttendance: (id: string, workerId: string) => Promise<void>;
   onSaveSettings: (value: number) => Promise<void>;
 }) {
   const now = useCurrentTime();
   const [editingRecord, setEditingRecord] = useState<Attendance | null>(null);
   const [deletingRecord, setDeletingRecord] = useState<Attendance | null>(null);
+  const [addingManualRecord, setAddingManualRecord] = useState(false);
   const closeAttendanceEditor = useHistoryLayer(Boolean(editingRecord), "attendance-editor", () => setEditingRecord(null));
   const closeAttendanceDelete = useHistoryLayer(Boolean(deletingRecord), "attendance-delete-confirmation", () => setDeletingRecord(null));
+  const closeManualAttendance = useHistoryLayer(addingManualRecord, "manual-attendance", () => setAddingManualRecord(false));
   const [plannedShifts, setPlannedShifts] = useState(
     settings.plannedShiftsPerWeek,
   );
@@ -1640,6 +1662,9 @@ function AttendanceDashboard({
       <p className="attendance-owner">
         Zobrazená evidence: <b>{selectedName}</b>
       </p>
+      <button className="manual-attendance-open" onClick={() => setAddingManualRecord(true)}>
+        + Doplnit chybějící docházku
+      </button>
       {isOwn && (
         <TodayAttendance
           records={ownRecords}
@@ -1754,6 +1779,19 @@ function AttendanceDashboard({
               deletingRecord.workerId,
             );
             closeAttendanceDelete();
+          }}
+        />
+      )}
+      {addingManualRecord && (
+        <ManualAttendanceEditor
+          workerId={selectedWorkerId}
+          workerName={selectedName}
+          workplaces={workplaces}
+          defaultBuildingId={attendanceBuildingId}
+          onCancel={closeManualAttendance}
+          onSave={async (draft) => {
+            await onCreateManualAttendance(draft);
+            closeManualAttendance();
           }}
         />
       )}
@@ -2000,6 +2038,8 @@ function AttendanceHistory({
                   {formatTime(record.start)}–{record.end ? formatTime(record.end) : "probíhá"}
                 </span>
                 <span>{record.buildingName}</span>
+                {record.entrySource === "manual_backfill" && <span className="manual-attendance-badge">Doplněno zpětně</span>}
+                {record.note && <small className="attendance-note">{record.note}</small>}
                 <small>{formatDuration(shiftDuration(record, now))}</small>
               </div>
               <div className="attendance-history-actions">
@@ -2054,8 +2094,8 @@ function AttendanceAuditDialog({
         <div className="attendance-audit-list">
           {entries.map((entry) => (
             <article key={entry.id}>
-              <small>{entry.changeKind === "clock_out" ? "Zaznamenání odchodu" : "Ruční oprava"}</small>
-              <span><b>Původně:</b> {auditValue(entry.oldDate, entry.oldStart, entry.oldEnd)}</span>
+              <small>{entry.changeKind === "manual_creation" ? "Zpětné doplnění směny" : entry.changeKind === "clock_out" ? "Zaznamenání odchodu" : "Ruční oprava"}</small>
+              {entry.oldDate && entry.oldStart && <span><b>Původně:</b> {auditValue(entry.oldDate, entry.oldStart, entry.oldEnd)}</span>}
               <span><b>Nově:</b> {auditValue(entry.newDate, entry.newStart, entry.newEnd)}</span>
               <small>{entry.changedByName} · {new Intl.DateTimeFormat("cs-CZ", { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.changedAt))}</small>
             </article>
@@ -2063,6 +2103,76 @@ function AttendanceAuditDialog({
         </div>
         <div className="confirmation-actions"><button onClick={onClose}>Zavřít</button></div>
       </section>
+    </div>
+  );
+}
+
+function ManualAttendanceEditor({
+  workerId,
+  workerName,
+  workplaces,
+  defaultBuildingId,
+  onCancel,
+  onSave,
+}: {
+  workerId: string;
+  workerName: string;
+  workplaces: Workplace[];
+  defaultBuildingId: string;
+  onCancel: () => void;
+  onSave: (draft: ManualAttendanceDraft) => Promise<void>;
+}) {
+  const today = pragueDateKey();
+  const [date, setDate] = useState(today);
+  const [buildingId, setBuildingId] = useState(
+    workplaces.some((workplace) => workplace.id === defaultBuildingId)
+      ? defaultBuildingId
+      : workplaces[0]?.id ?? "",
+  );
+  const [startedTime, setStartedTime] = useState("15:00");
+  const [endedTime, setEndedTime] = useState("17:00");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <div className="confirmation-backdrop" role="presentation">
+      <form
+        className="confirmation-dialog manual-attendance-editor"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="manual-attendance-title"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          if (saving) return;
+          setError("");
+          setSaving(true);
+          try {
+            await onSave({ workerId, buildingId, date, startedTime, endedTime, note });
+          } catch (saveError) {
+            setError(saveError instanceof Error ? saveError.message : "Zpětnou docházku se nepodařilo uložit.");
+          } finally {
+            setSaving(false);
+          }
+        }}
+      >
+        <h2 id="manual-attendance-title">Doplnit chybějící docházku</h2>
+        <p className="hint">Pracovník: <b>{workerName}</b></p>
+        <label>Datum<input type="date" value={date} max={today} onChange={(event) => setDate(event.target.value)} required /></label>
+        <label>Pracoviště<select value={buildingId} onChange={(event) => setBuildingId(event.target.value)} required>
+          {workplaces.map((workplace) => <option key={workplace.id} value={workplace.id}>{workplace.name}</option>)}
+        </select></label>
+        <div className="manual-attendance-times">
+          <label>Čas příchodu<input type="time" value={startedTime} onChange={(event) => setStartedTime(event.target.value)} required /></label>
+          <label>Čas odchodu<input type="time" value={endedTime} onChange={(event) => setEndedTime(event.target.value)} required /></label>
+        </div>
+        <label>Poznámka <small>(volitelná)</small><textarea rows={3} maxLength={1000} value={note} onChange={(event) => setNote(event.target.value)} /></label>
+        <p className="hint">Záznam bude označený jako doplněný zpětně. Existující směnu nepřepíše.</p>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <div className="confirmation-actions">
+          <button type="button" onClick={onCancel} disabled={saving}>Zrušit</button>
+          <button className="primary" type="submit" disabled={saving || !buildingId}>{saving ? "Ukládám…" : "Doplnit docházku"}</button>
+        </div>
+      </form>
     </div>
   );
 }
