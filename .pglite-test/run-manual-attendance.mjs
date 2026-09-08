@@ -102,7 +102,7 @@ await db.exec(`
     ('${ids.kindergarten}', 'Školka', true);
 `)
 
-const migration = await readFile(new URL('../supabase/migrations/20260908120000_manual_attendance_backfill.sql', import.meta.url), 'utf8')
+const migration = await readFile(new URL('../supabase/migrations/20260908144827_manual_attendance_backfill.sql', import.meta.url), 'utf8')
 await db.exec(migration)
 await db.exec(migration)
 

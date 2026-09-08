@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 
 const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 const repository = readFileSync(new URL('./schoolRepository.ts', import.meta.url), 'utf8')
-const migration = readFileSync(new URL('../supabase/migrations/20260908120000_manual_attendance_backfill.sql', import.meta.url), 'utf8')
+const migration = readFileSync(new URL('../supabase/migrations/20260908144827_manual_attendance_backfill.sql', import.meta.url), 'utf8')
 
 test('Docházka nabízí mobilní zpětné doplnění všech požadovaných údajů', () => {
   assert.match(app, /Doplnit chybějící docházku/)
