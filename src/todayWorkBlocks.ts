@@ -66,12 +66,11 @@ export function hasRegularCleaningDayForBuilding(
 }
 
 export function todayWorkVisibility(
-  allTasks: Task[],
   dueTasks: Task[],
   schoolContext: CleaningDayContext,
   schoolBuildingId?: string,
 ) {
-  const regularSchoolDay = hasRegularCleaningDayForBuilding(allTasks, schoolContext, {
+  const regularSchoolDay = hasRegularCleaningDayForBuilding(dueTasks, schoolContext, {
     id: schoolBuildingId,
     name: 'Škola',
   })

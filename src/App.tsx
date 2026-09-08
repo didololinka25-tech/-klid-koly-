@@ -1059,7 +1059,7 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
     : tasks;
   const schoolBuildingId = workplaces.find((workplace) => workplace.name === "Škola")?.id
     ?? tasks.find((task) => task.building === "Škola")?.buildingId;
-  const todayWork = todayWorkVisibility(tasks, visible, cleaningDay, schoolBuildingId);
+  const todayWork = todayWorkVisibility(visible, cleaningDay, schoolBuildingId);
   const mainWorkVisible = todayWork.mainTasks;
   const requiredVisible = mainWorkVisible.filter((task) => task.plannerReason !== "wc-queue");
   const requiredVisibleDone = requiredVisible.filter((task) => task.done).length;
