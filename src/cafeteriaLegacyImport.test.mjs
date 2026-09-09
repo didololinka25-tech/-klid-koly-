@@ -4,7 +4,7 @@ import test from 'node:test'
 import ExcelJS from 'exceljs'
 import { insertLegacyOrder, legacyApplySql } from '../scripts/lib/cafeteriaLegacyApply.mjs'
 import {
-  extractMenuColors, extractOrderCells, IMPORT_STATUSES, isAuxiliaryOrderRow, matchDiner, matchVariant, normalizeFontColor, parseLegacyQuantity, planImport,
+  EXPLICIT_DINER_ALIASES, EXPLICIT_PER_DAY_COLOR_ALIASES, extractMenuColors, extractOrderCells, IMPORT_STATUSES, isAuxiliaryOrderRow, matchDiner, matchVariant, normalizeFontColor, parseLegacyQuantity, planImport,
 } from '../scripts/lib/cafeteriaLegacyImport.mjs'
 
 const diner = { id: 'd1', full_name: 'Anna Testovací', portion_category_id: 'small' }
@@ -174,14 +174,50 @@ test('neexistuje globální mapování červená=maso a nejasná barva se odmít
   assert.equal(matchVariant(variants, [], null), null)
 })
 
+test('každý potvrzený per-day color alias vybere aktivní variantu s daným sort_order', () => {
+  const dayVariants = [
+    { id: 'sort-1', active: true, sort_order: 1 },
+    { id: 'sort-2', active: true, sort_order: 2 },
+  ]
+  for (const [key, sortOrder] of Object.entries(EXPLICIT_PER_DAY_COLOR_ALIASES)) {
+    const [mealDate, color] = key.split('|')
+    assert.equal(matchVariant(dayVariants, [], color, mealDate)?.sort_order, sortOrder, key)
+  }
+})
+
+test('per-day alias neovlivní jiný den a chybějící aktivní sort_order zůstane ambiguous', () => {
+  const dayVariants = [
+    { id: 'sort-2', active: true, sort_order: 2 },
+    { id: 'sort-3', active: true, sort_order: 3 },
+  ]
+  assert.equal(matchVariant(dayVariants, [], '00FF00', '2026-09-02'), null)
+  assert.equal(matchVariant(dayVariants, [], '00FF00', '2026-09-01'), null)
+  const withInactiveTarget = [{ id: 'sort-1', active: false, sort_order: 1 }, ...dayVariants]
+  assert.equal(matchVariant(withInactiveTarget, [], '00FF00', '2026-09-01'), null)
+})
+
 test('diner match je přesný a řeší pořadí příjmení/jména a mezery', () => {
   assert.equal(matchDiner(['Testovací ', ' Anna'], [diner]).id, 'd1')
   assert.equal(matchDiner(['Jiná', 'Anna'], [diner]), null)
 })
 
+test('každý potvrzený diner alias vyžaduje přesný sourceName a cílové diner_id', () => {
+  for (const [sourceName, dinerId] of Object.entries(EXPLICIT_DINER_ALIASES)) {
+    const target = { id: dinerId, full_name: 'Produkční jméno' }
+    assert.equal(matchDiner(sourceName.split(' '), [target])?.id, dinerId, sourceName)
+    assert.equal(matchDiner([`${sourceName}x`], [target]), null, `${sourceName}: podobné jméno`)
+    assert.equal(matchDiner(sourceName.split(' '), [{ ...target, id: 'jiné-id' }]), null, `${sourceName}: chybějící cíl`)
+  }
+  const similar = source({ sourceParts: ['Kozlíková', 'Rozárkaa'], sourceName: 'Kozlíková Rozárkaa' })
+  const target = { ...diner, id: EXPLICIT_DINER_ALIASES['Kozlíková Rozárka'], full_name: 'Rozárie Kozlíková' }
+  assert.equal(planImport([similar], { ...database, diners: [target] }, new Map())[0].status, IMPORT_STATUSES.UNMATCHED_DINER)
+})
+
 test('plán rozlišuje CREATE, quantity 2, existing a unmatched', () => {
   const colors = new Map([['2026-09-07', [{ name: 'Sushi', color: '00AA00' }, { name: 'Rizoto', color: '000000' }]]])
-  assert.equal(planImport([source({ value: 2, quantity: 2 })], database, colors)[0].status, IMPORT_STATUSES.CREATE)
+  const quantityTwo = planImport([source({ value: 2, quantity: 2 })], database, colors)[0]
+  assert.equal(quantityTwo.status, IMPORT_STATUSES.CREATE)
+  assert.equal(quantityTwo.quantity, 2)
   assert.equal(planImport([source()], { ...database, orders: [{ diner_id: 'd1', meal_day_id: 'day1' }] }, colors)[0].status, IMPORT_STATUSES.SKIP_ALREADY_EXISTS)
   assert.equal(planImport([source({ sourceParts: ['Nikdo', 'Neznámý'] })], database, colors)[0].status, IMPORT_STATUSES.UNMATCHED_DINER)
 })
@@ -189,6 +225,15 @@ test('plán rozlišuje CREATE, quantity 2, existing a unmatched', () => {
 test('missing meal day a ambiguous variant se nezapisují', () => {
   assert.equal(planImport([source()], { ...database, mealDays: [] }, new Map())[0].status, IMPORT_STATUSES.MEAL_DAY_NOT_FOUND)
   assert.equal(planImport([source({ color: null })], database, new Map())[0].status, IMPORT_STATUSES.AMBIGUOUS_VARIANT)
+})
+
+test('Richter Štěpán 8. 9. bez barvy zůstane ambiguous a 28. 9. zůstane neimportovatelný', () => {
+  const richter = { id: 'richters', full_name: 'Štěpán Richter', portion_category_id: 'small' }
+  const septemberEighth = { id: 'day-8', meal_date: '2026-09-08' }
+  const db = { ...database, diners: [richter], mealDays: [septemberEighth], variants: variants.map((variant) => ({ ...variant, meal_day_id: 'day-8' })) }
+  const row = (mealDate, color) => source({ mealDate, sourceParts: ['Richter', 'Štěpán'], sourceName: 'Richter Štěpán', color })
+  assert.equal(planImport([row('2026-09-08', null)], db, new Map())[0].status, IMPORT_STATUSES.AMBIGUOUS_VARIANT)
+  assert.equal(planImport([row('2026-09-28', '000000')], db, new Map())[0].status, IMPORT_STATUSES.MEAL_DAY_NOT_FOUND)
 })
 
 test('quantity migrace používá sum(quantity) a rozsah 1 až 10', async () => {

@@ -4,6 +4,29 @@ export const IMPORT_STATUSES = Object.freeze({
   MEAL_DAY_NOT_FOUND: 'MEAL_DAY_NOT_FOUND', PRICE_RULE_NOT_FOUND: 'PRICE_RULE_NOT_FOUND',
 })
 
+export const EXPLICIT_DINER_ALIASES = Object.freeze({
+  'Kozlíková Rozárka': 'f03972d6-9e27-4986-9133-c4aa8e0eb4c5',
+  'Matějka Ondra': 'e925d6a9-37b2-40da-9168-c4fbe3725fae',
+  'Matějka Vítek': '8709d759-b542-4825-9d0b-7524963de1a6',
+  'Mičánek Maty': '0da4e629-5d22-4ab6-a525-635bcf200907',
+  'Mičánková Markétka': 'c7bd0ce8-9f81-4318-a05c-a74c40b6e5fa',
+  'Opatová Adélka': '641e60fa-08b4-497e-a98b-490d18349f04',
+  'Rechová Amálka': '44744078-bcf8-465f-8faf-c77244d52a97',
+  'Richterová Izabelka': 'c63d10da-3fe8-45fd-8b4e-170cefc299b0',
+})
+
+export const EXPLICIT_PER_DAY_COLOR_ALIASES = Object.freeze({
+  '2026-09-01|00FF00': 1,
+  '2026-09-01|93C47D': 1,
+  '2026-09-08|EA4335': 1,
+  '2026-09-09|EA4335': 1,
+  '2026-09-10|000000': 2,
+  '2026-09-10|EA4335': 1,
+  '2026-09-11|000000': 1,
+  '2026-09-11|FF0000': 2,
+  '2026-09-11|EA4335': 2,
+})
+
 export function normalizePersonName(value) {
   return String(value ?? '').normalize('NFC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('cs-CZ')
 }
@@ -217,26 +240,42 @@ function dinerKeys(fullName) {
 }
 
 export function matchDiner(sourceParts, diners) {
+  const exactSourceName = sourceParts.join(' ')
+  if (Object.prototype.hasOwnProperty.call(EXPLICIT_DINER_ALIASES, exactSourceName)) {
+    const dinerId = EXPLICIT_DINER_ALIASES[exactSourceName]
+    const matches = diners.filter((diner) => diner.id === dinerId)
+    return matches.length === 1 ? matches[0] : null
+  }
+
   const parts = sourceParts.map(normalizePersonName).filter(Boolean)
   const sourceKeys = new Set([parts.join(' '), [...parts].reverse().join(' ')])
   const matches = diners.filter((diner) => [...dinerKeys(diner.full_name)].some((key) => sourceKeys.has(key)))
   return matches.length === 1 ? matches[0] : null
 }
 
-export function matchVariant(dbVariants, menuVariants, orderColor) {
-  if (dbVariants.length === 1) return dbVariants[0]
-  if (dbVariants.length < 2 || dbVariants.length !== menuVariants.length || !orderColor) return null
+export function matchVariant(dbVariants, menuVariants, orderColor, mealDate = null) {
+  const activeDatabaseVariants = dbVariants.filter((variant) => variant.active !== false)
+  if (activeDatabaseVariants.length === 1) return activeDatabaseVariants[0]
+  if (activeDatabaseVariants.length < 2 || !orderColor) return null
   const color = normalizeFontColor({ argb: orderColor })
   if (!color) return null
 
+  const aliasKey = `${mealDate}|${color}`
+  if (mealDate && Object.prototype.hasOwnProperty.call(EXPLICIT_PER_DAY_COLOR_ALIASES, aliasKey)) {
+    const sortOrder = EXPLICIT_PER_DAY_COLOR_ALIASES[aliasKey]
+    const matches = activeDatabaseVariants.filter((variant) => Number(variant.sort_order) === sortOrder)
+    return matches.length === 1 ? matches[0] : null
+  }
+
+  if (activeDatabaseVariants.length !== menuVariants.length) return null
   const menuColors = menuVariants.map((variant) => normalizeFontColor({ argb: variant.color }))
   if (menuColors.some((item) => !item) || new Set(menuColors).size !== menuColors.length) return null
   const menuIndex = menuColors.findIndex((item) => item === color)
   if (menuIndex < 0) return null
 
-  const sortOrders = dbVariants.map((variant) => Number(variant.sort_order))
+  const sortOrders = activeDatabaseVariants.map((variant) => Number(variant.sort_order))
   if (sortOrders.some((item) => !Number.isInteger(item)) || new Set(sortOrders).size !== sortOrders.length) return null
-  const orderedDatabaseVariants = [...dbVariants].sort((a, b) => Number(a.sort_order) - Number(b.sort_order))
+  const orderedDatabaseVariants = [...activeDatabaseVariants].sort((a, b) => Number(a.sort_order) - Number(b.sort_order))
   return orderedDatabaseVariants[menuIndex] ?? null
 }
 
@@ -268,7 +307,7 @@ export function planImport(sourceRows, database, menuColors) {
     if (!mealDay) return { ...base, diner, status: IMPORT_STATUSES.MEAL_DAY_NOT_FOUND, reason: 'Jídelní den v databázi neexistuje.' }
     if (database.orders.some((order) => order.diner_id === diner.id && order.meal_day_id === mealDay.id)) return { ...base, diner, mealDay, status: IMPORT_STATUSES.SKIP_ALREADY_EXISTS, reason: 'Objednávka již existuje.' }
     const variants = database.variants.filter((variant) => variant.meal_day_id === mealDay.id && variant.active)
-    const variant = matchVariant(variants, menuColors.get(source.mealDate) ?? [], source.color)
+    const variant = matchVariant(variants, menuColors.get(source.mealDate) ?? [], source.color, source.mealDate)
     if (!variant) return { ...base, diner, mealDay, status: IMPORT_STATUSES.AMBIGUOUS_VARIANT, reason: 'Variantu nelze jednoznačně určit podle barvy pro tento den.' }
     const prices = database.priceRules.filter((rule) => rule.portion_category_id === diner.portion_category_id && rule.active && rule.valid_from <= source.mealDate && (!rule.valid_to || rule.valid_to >= source.mealDate)).sort((a, b) => b.valid_from.localeCompare(a.valid_from))
     if (!prices[0]) return { ...base, diner, mealDay, variant, status: IMPORT_STATUSES.PRICE_RULE_NOT_FOUND, reason: 'Chybí platné cenové pravidlo.' }
