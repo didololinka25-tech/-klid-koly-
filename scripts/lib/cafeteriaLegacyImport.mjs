@@ -13,6 +13,7 @@ export const EXPLICIT_DINER_ALIASES = Object.freeze({
   'Opatová Adélka': '641e60fa-08b4-497e-a98b-490d18349f04',
   'Rechová Amálka': '44744078-bcf8-465f-8faf-c77244d52a97',
   'Richterová Izabelka': 'c63d10da-3fe8-45fd-8b4e-170cefc299b0',
+  'Vyplašilová Mirka': '779ae838-44c0-4903-98f9-844a572435cb',
 })
 
 export const EXPLICIT_PER_DAY_COLOR_ALIASES = Object.freeze({
