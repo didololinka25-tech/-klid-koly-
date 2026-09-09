@@ -1,4 +1,4 @@
-import { sanitizeCalendarText } from './schoolCalendarParser.ts'
+import { sanitizeCalendarText } from './schoolCalendarSanitize.ts'
 import type { SchoolCalendarEvent } from './schoolCalendarTypes.ts'
 
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
