@@ -2584,6 +2584,42 @@ nav .active {
 .kitchen-single-meal small { color: #67817c; }
 .kitchen-page button:focus-visible, .kitchen-page input:focus-visible, .kitchen-page select:focus-visible { outline: 3px solid var(--focus, #2563eb); outline-offset: 2px; }
 
+.cleaning-recommendations { display: grid; gap: 10px; }
+.today-workforce { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 9px; padding: 9px 11px; border: 1px solid #d8e8e3; border-radius: 11px; background: #f6fbf9; font-size: 13px; }
+.today-workforce b { color: #165e56; }
+.today-workforce small { width: 100%; color: #9a4e43; }
+.cleaning-recommendations .section-heading { align-items: center; }
+.cleaning-recommendations .section-heading > button { min-height: 46px; padding: 9px 12px; border: 0; border-radius: 11px; background: #165e56; color: #fff; font-weight: 900; }
+.recommendation-list { display: grid; gap: 7px; }
+.recommendation-list article { min-width: 0; display: flex; justify-content: space-between; gap: 9px; padding: 10px; border: 1px solid #d7e7e2; border-left: 5px solid #7ba89d; border-radius: 11px; background: #fff; }
+.recommendation-list article.priority-high { border-left-color: #bf4438; background: #fff6f4; }
+.recommendation-list article.priority-increased { border-left-color: #d58a22; background: #fffaf0; }
+.recommendation-list span { min-width: 0; display: grid; gap: 2px; }
+.recommendation-list small { color: #5b746f; line-height: 1.35; }
+.recommendation-list em { align-self: start; padding: 3px 6px; border-radius: 999px; background: #eef5f2; color: #315e56; font-size: 10px; font-style: normal; font-weight: 900; text-transform: uppercase; }
+.actual-history summary { min-height: 44px; display: flex; align-items: center; color: #165e56; font-weight: 850; cursor: pointer; }
+.actual-history p { display: grid; gap: 2px; margin: 0; padding: 8px 0; border-top: 1px solid #e0ebe8; font-size: 13px; }
+.actual-history small { color: #6b817c; }
+.actual-cleaning-modal { width: min(100%, 620px); max-height: calc(100dvh - 24px); overflow-y: auto; }
+.actual-modal-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.actual-modal-heading h2 { margin: 2px 0 0; }
+.actual-modal-heading > button { width: 44px; height: 44px; padding: 0; border-radius: 50%; font-size: 24px; }
+.actual-cleaning-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.actual-cleaning-modal label { min-width: 0; display: grid; gap: 5px; font-size: 12px; font-weight: 850; }
+.actual-cleaning-modal input, .actual-cleaning-modal select, .actual-cleaning-modal textarea { width: 100%; min-width: 0; min-height: 46px; box-sizing: border-box; }
+.actual-room-list { display: grid; gap: 8px; }
+.actual-room-list article { min-width: 0; display: grid; gap: 6px; padding: 10px; border: 1px solid #d7e5e1; border-radius: 12px; }
+.actual-room-list article.completed { border-color: #57a68d; background: #f0faf6; }
+.actual-room-list article.skipped { border-color: #d28b62; background: #fff8f2; }
+.actual-room-list article > small { color: #627a74; }
+.actual-room-list article > div { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.actual-room-list button { min-height: 48px; padding: 7px; border: 1px solid #bcd4ce; border-radius: 10px; background: #fff; color: #165e56; font-weight: 850; }
+.actual-detail-work { border-top: 1px solid #d8e6e2; border-bottom: 1px solid #d8e6e2; padding: 4px 0 10px; }
+.actual-detail-work summary { min-height: 44px; display: flex; align-items: center; font-weight: 900; color: #165e56; cursor: pointer; }
+.availability-editor { margin-top: 10px; }
+.availability-editor .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 430px) { .actual-cleaning-meta { grid-template-columns: 1fr; } .actual-room-list article > div { grid-template-columns: 1fr; } }
+
 @media (min-width: 700px) {
   .kitchen-service-row { grid-template-columns: minmax(0, 1fr) minmax(280px, auto); align-items: center; }
   .kitchen-request-actions { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }

@@ -59,6 +59,7 @@ import { applySchoolCalendarScope, detectCleaningEventCollision, mappingForSchoo
 import { assignmentOverlapsMonth, scheduleExceptionsConflict, weekMonday, weeklyResponsibilitiesForDate, workAssignmentsConflict, workerPlanningSaveError, type PlanningWorker, type WeeklyWorkerResponsibility, type WorkerPlanningData, type WorkerScheduleException, type WorkerWorkAssignment } from "./workerPlanning";
 import { buildTodayWorkBlocks, mandatoryWorkBlockProgress, todayWorkVisibility, undoableWorkBlockActions, workBlockIsComplete, type TodayWorkBlock } from "./todayWorkBlocks";
 import { appHistoryState, refreshAreasForRealtimeTable, shouldReloadIdentity, shouldRunResumeRefresh, withAppHistoryState } from "./appStability";
+import { availabilityForDate, buildCleaningRecommendations, skipReasonLabel, type CleaningActualData, type CleaningActualDraft, type CleaningActualRecord, type CleaningSkipReason, type WorkerAvailabilityChange } from "./cleaningActual";
 
 type Section =
   | "Dnes"
@@ -184,10 +185,13 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
   });
   const [workplaces, setWorkplaces] = useState<Workplace[]>([]);
   const [workerPlanning, setWorkerPlanning] = useState<WorkerPlanningData>({ assignments: [], exceptions: [], rotationDefinitions: [], rotationSlots: [], available: false });
+  const [cleaningActual, setCleaningActual] = useState<CleaningActualData>({ areas: [], availability: [], records: [], available: false });
+  const [todayBlockedRoomIds, setTodayBlockedRoomIds] = useState<Set<string>>(() => new Set());
   const [attendanceBuildingId, setAttendanceBuildingId] = useState("");
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [schoolOpeningManualOpen, setSchoolOpeningManualOpen] = useState(false);
+  const [actualCleaningOpen, setActualCleaningOpen] = useState(false);
   const [attendanceRefresh, setAttendanceRefresh] = useState(0);
   const [attendanceSaving, setAttendanceSaving] = useState(false);
   const attendanceWriteLock = useRef(false);
@@ -220,6 +224,7 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
   const closeProfileEditor = useHistoryLayer(profileEditorOpen, "profile-editor", () => setProfileEditorOpen(false));
   const closeTaskEditor = useHistoryLayer(Boolean(editing), "cleaning-plan-editor", () => setEditing(null));
   const closeSchoolOpeningManual = useHistoryLayer(schoolOpeningManualOpen, "school-opening-manual", () => setSchoolOpeningManualOpen(false));
+  const closeActualCleaning = useHistoryLayer(actualCleaningOpen, "actual-cleaning", () => setActualCleaningOpen(false));
   const navigateToSection = useCallback((next: Section) => {
     if (next === section) return;
     const nextState = { section: next };
@@ -346,11 +351,12 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
         ]);
         setUsers([]);
       }
-      const [daysResult, operationsResult, manualResult, planningResult] = await Promise.allSettled([
+      const [daysResult, operationsResult, manualResult, planningResult, actualResult] = await Promise.allSettled([
         schoolRepository.cleaningDays(),
         schoolRepository.operations(),
         schoolRepository.manuals(activeProfile),
         schoolRepository.workerPlanning(),
+        schoolRepository.cleaningActual('2025-01-01', localDateKey()),
       ]);
       if (daysResult.status === "fulfilled") {
         setCleaningDays(daysResult.value.records);
@@ -360,6 +366,7 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
       if (operationsResult.status === "fulfilled") setOperations(operationsResult.value);
       if (manualResult.status === "fulfilled") setManual(manualResult.value);
       if (planningResult.status === "fulfilled") setWorkerPlanning(planningResult.value);
+      if (actualResult.status === "fulfilled") setCleaningActual(actualResult.value);
     },
     [],
   );
@@ -397,6 +404,9 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
   }, [profile]);
   const refreshWorkerPlanningSilently = useCallback(async () => {
     setWorkerPlanning(await schoolRepository.workerPlanning());
+  }, []);
+  const refreshCleaningActualSilently = useCallback(async () => {
+    setCleaningActual(await schoolRepository.cleaningActual('2025-01-01', localDateKey()));
   }, []);
   const refreshPlanOptionsSilently = useCallback(async () => {
     setPlanOptions(await schoolRepository.planOptions());
@@ -449,12 +459,13 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
       if (areas.includes("operations")) void refreshOperationsSilently().catch((error) => console.error("Realtime aktualizace Provozu selhala:", error));
       if (areas.includes("manual")) void refreshManualSilently().catch((error) => console.error("Realtime aktualizace Manuálu selhala:", error));
       if (areas.includes("worker-planning")) void refreshWorkerPlanningSilently().catch((error) => console.error("Realtime aktualizace pracovního plánu selhala:", error));
+      if (areas.includes("cleaning-actual")) void refreshCleaningActualSilently().catch((error) => console.error("Realtime aktualizace evidence úklidu selhala:", error));
       if (areas.includes("plan-options")) void refreshPlanOptionsSilently().catch((error) => console.error("Realtime aktualizace struktury plánu selhala:", error));
     });
     return () => {
       channel.unsubscribe();
     };
-  }, [session, profile, refreshTodaySilently, refreshAttendanceSilently, refreshCleaningDaysSilently, refreshOperationsSilently, refreshManualSilently, refreshWorkerPlanningSilently, refreshPlanOptionsSilently]);
+  }, [session, profile, refreshTodaySilently, refreshAttendanceSilently, refreshCleaningDaysSilently, refreshOperationsSilently, refreshManualSilently, refreshWorkerPlanningSilently, refreshCleaningActualSilently, refreshPlanOptionsSilently]);
   useEffect(() => {
     if (!session || !profile || !canViewSchool(profile)) return;
     const refreshInBackground = () => {
@@ -495,6 +506,32 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
       })
       .catch((error) => setNotice(error.message));
   }, [profile, selectedAttendanceWorker, attendanceRefresh]);
+  useEffect(() => {
+    if (!session || !profile || !canViewSchool(profile) || !tasks.length) {
+      setTodayBlockedRoomIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      schoolRepository.getSchoolCalendarEvents({ from: todayPlanDate, to: todayPlanDate }),
+      schoolRepository.schoolCalendarMappings(),
+    ]).then(([eventsResult, mappings]) => {
+      if (cancelled || !eventsResult.ok) return;
+      const dueTasks = tasks.filter((task) => task.active && task.dueToday && task.roomId);
+      const blocked = new Set<string>();
+      for (const event of eventsResult.events) {
+        const collision = detectCleaningEventCollision({ event, tasks: dueTasks, mappings: mappings.mappings, aliases: mappings.aliases });
+        if (!['ROOM_CONFLICT', 'BUILDING_CONFLICT'].includes(collision.kind)) continue;
+        collision.affectedTasks.forEach((task) => { if (task.roomId) blocked.add(task.roomId); });
+      }
+      setTodayBlockedRoomIds(blocked);
+    }).catch((error) => {
+      // School events are advisory. Their outage must never hide cleaning recommendations.
+      console.warn('Obsazenost ze školního kalendáře se nepodařilo načíst.', error instanceof Error ? error.message : 'Neznámá chyba');
+      if (!cancelled) setTodayBlockedRoomIds(new Set());
+    });
+    return () => { cancelled = true; };
+  }, [session, profile, tasks, todayPlanDate]);
   useEffect(() => {
     const activeWorkplaces = workplaces.filter((item) => item.active);
     if (!activeWorkplaces.some((item) => item.id === attendanceBuildingId)) {
@@ -892,6 +929,17 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
       throw error;
     }
   };
+  const saveAvailabilityChange = async (item: WorkerAvailabilityChange) => {
+    try {
+      setNotice("");
+      await schoolRepository.saveWorkerAvailabilityChange(item);
+      await Promise.all([refreshWorkerPlanning(), refreshCleaningActualSilently()]);
+      setNotice("Dostupnost pracovníka byla uložena a plán byl přepočítán.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Změnu dostupnosti se nepodařilo uložit.");
+      throw error;
+    }
+  };
   const savePlanningWorker = async (worker: PlanningWorker) => {
     try {
       setNotice("");
@@ -1083,6 +1131,13 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
   const optionalQueueRemaining = mainWorkVisible.some((task) => task.plannerReason === "wc-queue" && !task.done);
   const todayExtras = todayWork.extraTasks.filter((task) => !isFinalCheckTask(task));
   const todayExtrasDone = todayExtras.filter((task) => task.done).length;
+  const currentPlanningWorker = workerPlanning.planningWorkers?.find((worker) => worker.linkedProfileId === profile.id && worker.active);
+  const cleaningRecommendations = currentPlanningWorker ? buildCleaningRecommendations({
+    date: todayPlanDate, workerId: currentPlanningWorker.id, tasks, planning: workerPlanning,
+    areas: cleaningActual.areas, records: cleaningActual.records, blockedRoomIds: todayBlockedRoomIds,
+  }) : [];
+  const todayPlannedWorkers = availabilityForDate(todayPlanDate, workerPlanning, cleaningActual.availability);
+  const todayAbsentWorkers = cleaningActual.availability.filter((item) => item.active && item.date === todayPlanDate && ['absent', 'rescheduled'].includes(item.status));
   const todayBuildingIds = [...new Set(visible.map((task) => task.buildingId).filter((id): id is string => Boolean(id)))];
   const todayCancelledWorkplaces = cleaningDays.filter((record) => record.kind === "cancelled_standard" && record.status === "active" && record.executionDate === todayPlanDate);
   const todayContexts = todayBuildingIds.map((buildingId) => resolveCleaningDay(
@@ -1151,6 +1206,7 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
               onBuildingChange={setAttendanceBuildingId}
             />
           )}
+          {cleaningActual.available && <TodayWorkforce workers={todayPlannedWorkers} absent={todayAbsentWorkers} />}
           <button className="today-school-manual-link" onClick={() => setSchoolOpeningManualOpen(true)}>
             <span aria-hidden="true">🔑</span> Otevření / zavření školy
           </button>
@@ -1171,6 +1227,11 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
              <ArrivalReminders entries={manual.entries.filter((entry) => entry.entryType === "arrival" && entry.active)} />
            )}
           {visible.length > 0 && <TodayExtras tasks={todayExtras} done={todayExtrasDone} onComplete={complete} pendingTaskIds={pendingTaskIds} />}
+          {cleaningActual.available && currentPlanningWorker && <CleaningRecommendationsPanel
+            recommendations={cleaningRecommendations}
+            records={cleaningActual.records}
+            onOpenRecord={() => setActualCleaningOpen(true)}
+          />}
           {accessRole(profile) === "visitor" && (
             <p className="readonly-note">Návštěvnický přístup je pouze pro čtení.</p>
           )}
@@ -1262,7 +1323,7 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
         />
       )}
       {section === "Lidé a práce" && (
-        <WorkAssignmentOverview data={workerPlanning} profiles={attendanceWorkers} options={planOptions} canManage={canManageOperations(profile)} contracts={workerContracts} attendanceSettings={attendanceSettings} appSettings={appSettings} onSelectLinkedProfile={setSelectedAttendanceWorker} onSaveAttendanceSettings={saveAttendanceSettings} onSaveContract={saveWorkerContract} onSaveDppLimit={saveDppLimit} onSaveDpcSettings={saveDpcSettings} onSaveWorker={savePlanningWorker} onSaveAssignment={saveWorkerAssignment} onSaveException={saveScheduleException} onSaveRotation={saveCleaningRotationSlot} onSaveWeeklyResponsibility={saveWeeklyResponsibility} />
+        <WorkAssignmentOverview data={workerPlanning} cleaningActual={cleaningActual} profiles={attendanceWorkers} options={planOptions} canManage={canManageOperations(profile)} contracts={workerContracts} attendanceSettings={attendanceSettings} appSettings={appSettings} onSelectLinkedProfile={setSelectedAttendanceWorker} onSaveAttendanceSettings={saveAttendanceSettings} onSaveContract={saveWorkerContract} onSaveDppLimit={saveDppLimit} onSaveDpcSettings={saveDpcSettings} onSaveWorker={savePlanningWorker} onSaveAssignment={saveWorkerAssignment} onSaveException={saveScheduleException} onSaveAvailability={saveAvailabilityChange} onSaveRotation={saveCleaningRotationSlot} onSaveWeeklyResponsibility={saveWeeklyResponsibility} />
       )}
       {section === "Provoz" && (
         <OperationsScreen
@@ -1312,6 +1373,25 @@ export default function App({ onOpenLauncher }: { onOpenLauncher?: () => void } 
         />
       )}
       {schoolOpeningManualOpen && <SchoolOpeningManualModal onClose={closeSchoolOpeningManual} />}
+      {actualCleaningOpen && currentPlanningWorker && <ActualCleaningModal
+        date={todayPlanDate}
+        worker={currentPlanningWorker}
+        workers={workerPlanning.planningWorkers ?? []}
+        tasks={tasks}
+        recommendations={cleaningRecommendations}
+        planning={workerPlanning}
+        areas={cleaningActual.areas}
+        records={cleaningActual.records}
+        blockedRoomIds={todayBlockedRoomIds}
+        canRecordOthers={canManageOperations(profile)}
+        onClose={closeActualCleaning}
+        onSave={async (workerId, workDate, items) => {
+          await schoolRepository.saveCleaningActualBatch(workerId, workDate, items);
+          await refreshCleaningActualSilently();
+          setNotice("Skutečně provedený úklid je uložený.");
+          closeActualCleaning();
+        }}
+      />}
       <nav>
         {navigation.map((item) => (
           <button
@@ -3411,6 +3491,73 @@ function TodayExtras({ tasks, done, onComplete, pendingTaskIds }: {
   </section>;
 }
 
+function CleaningRecommendationsPanel({ recommendations, records, onOpenRecord }: {
+  recommendations: ReturnType<typeof buildCleaningRecommendations>;
+  records: CleaningActualRecord[];
+  onOpenRecord: () => void;
+}) {
+  const recent = records.slice(0, 4);
+  return <section className="panel cleaning-recommendations">
+    <div className="section-heading"><span><p className="eyebrow">DOPORUČENO DNES</p><h2>Co má dnes prioritu</h2></span><button onClick={onOpenRecord}>Zapsat úklid</button></div>
+    {recommendations.length ? <div className="recommendation-list">{recommendations.slice(0, 6).map((item) => <article key={item.id} className={`priority-${item.priority}`}>
+      <span><b>{item.title}</b><small>{item.reason}{item.recommendedPart ? ` · doporučená část ${item.recommendedPart}` : ''}</small></span>
+      <em>{({ high: 'Vysoká', increased: 'Zvýšená', normal: 'Běžná', low: 'Nízká' } as const)[item.priority]}</em>
+    </article>)}</div> : <p className="hint">Pro dnešek nejsou v hlavní oblasti další doporučení.</p>}
+    {recent.length > 0 && <details className="actual-history"><summary>Poslední zapsaný úklid</summary>{recent.map((item) => <p key={item.id}><b>{item.roomName ?? item.label}</b> · {item.outcome === 'completed' ? 'hotovo' : `vynecháno – ${skipReasonLabel(item.skipReason)}`}<small>{item.workerName ?? 'Pracovník'} · zapsal/a {item.recordedByName} · {formatDate(item.workDate)}</small></p>)}</details>}
+  </section>;
+}
+
+function TodayWorkforce({ workers, absent }: { workers: ReturnType<typeof availabilityForDate>; absent: WorkerAvailabilityChange[] }) {
+  return <section className="today-workforce"><b>Dnes pracují</b><span>{workers.length ? workers.map((item) => item.workerName).join(' · ') : 'Nikdo není naplánovaný'}</span>{absent.length > 0 && <small>Chybí: {absent.map((item) => item.workerName).join(' · ')}</small>}</section>;
+}
+
+function ActualCleaningModal({ date, worker, workers, tasks, recommendations, planning, areas, records, blockedRoomIds, canRecordOthers, onClose, onSave }: {
+  date: string;
+  worker: PlanningWorker;
+  workers: PlanningWorker[];
+  tasks: Task[];
+  recommendations: ReturnType<typeof buildCleaningRecommendations>;
+  planning: WorkerPlanningData;
+  areas: CleaningActualData['areas'];
+  records: CleaningActualRecord[];
+  blockedRoomIds: Set<string>;
+  canRecordOthers: boolean;
+  onClose: () => void;
+  onSave: (workerId: string, workDate: string, items: CleaningActualDraft[]) => Promise<void>;
+}) {
+  const [workerId, setWorkerId] = useState(worker.id);
+  const [workDate, setWorkDate] = useState(date);
+  const [states, setStates] = useState<Record<string, { outcome: '' | 'completed' | 'skipped'; reason: CleaningSkipReason }>>({});
+  const [detailRoomId, setDetailRoomId] = useState('');
+  const [detailLabel, setDetailLabel] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const selectedRecommendations = workerId === worker.id && workDate === date ? recommendations : buildCleaningRecommendations({
+    date: workDate, workerId, tasks, planning, areas, records,
+    blockedRoomIds: workDate === date ? blockedRoomIds : undefined,
+  });
+  const fallbackRooms: ReturnType<typeof buildCleaningRecommendations> = [...new Map<string, ReturnType<typeof buildCleaningRecommendations>[number]>(tasks.filter((task) => task.roomId).map((task) => [task.roomId!, { id: task.roomId!, roomId: task.roomId, buildingId: task.buildingId, floorId: task.floorId, title: task.room, reason: '', priority: 'normal' as const, tasks: tasks.filter((item) => item.roomId === task.roomId), blockedByCalendar: false }])).values()];
+  const rooms = selectedRecommendations.length ? selectedRecommendations : fallbackRooms;
+  const setOutcome = (roomId: string, outcome: 'completed' | 'skipped') => setStates((current) => ({ ...current, [roomId]: { outcome, reason: current[roomId]?.reason ?? 'occupied' } }));
+  return <div className="confirmation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="confirmation-dialog actual-cleaning-modal" role="dialog" aria-modal="true" aria-labelledby="actual-cleaning-title">
+      <div className="actual-modal-heading"><div><p className="eyebrow">PO SMĚNĚ</p><h2 id="actual-cleaning-title">Co se skutečně uklidilo</h2></div><button aria-label="Zavřít" onClick={onClose}>×</button></div>
+      <div className="actual-cleaning-meta"><label>Datum<input type="date" value={workDate} max={localDateKey()} onChange={(event) => setWorkDate(event.target.value)} /></label>{canRecordOthers && <label>Pracovník<select value={workerId} onChange={(event) => setWorkerId(event.target.value)}>{workers.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}</div>
+      <div className="actual-room-list">{rooms.map((room) => { const state = states[room.id]; return <article key={room.id} className={state?.outcome ? `selected ${state.outcome}` : ''}><b>{room.title}</b><small>{room.reason}</small><div><button type="button" onClick={() => setOutcome(room.id, 'completed')}>✓ Běžný úklid hotov</button><button type="button" onClick={() => setOutcome(room.id, 'skipped')}>Neuděláno</button></div>{state?.outcome === 'skipped' && <select aria-label={`Důvod vynechání ${room.title}`} value={state.reason} onChange={(event) => setStates((current) => ({ ...current, [room.id]: { outcome: 'skipped', reason: event.target.value as CleaningSkipReason } }))}><option value="occupied">Obsazeno</option><option value="no_time">Nebyl čas</option><option value="not_needed">Nebylo potřeba</option><option value="problem">Porucha / problém</option><option value="unavailable">Nedostupné</option><option value="other">Jiné</option></select>}</article>; })}</div>
+      <details className="actual-detail-work"><summary>+ Přidat další práci</summary><label>Místnost<select value={detailRoomId} onChange={(event) => setDetailRoomId(event.target.value)}><option value="">Vyberte místnost</option>{rooms.map((room) => <option key={room.id} value={room.id}>{room.title}</option>)}</select></label><label>Co bylo navíc<input value={detailLabel} placeholder="Např. odstranění vodního kamene" onChange={(event) => setDetailLabel(event.target.value)} /></label></details>
+      <label>Poznámka<textarea value={note} onChange={(event) => setNote(event.target.value)} /></label>
+      <div className="editor-actions"><button type="button" onClick={onClose}>Zrušit</button><button disabled={saving || !workDate || !workerId || (!Object.values(states).some((item) => item.outcome) && !detailLabel.trim())} onClick={async () => {
+        const items: CleaningActualDraft[] = rooms.flatMap((room) => {
+          const state = states[room.id]; if (!state?.outcome) return [];
+          const task = room.tasks[0]; return [{ buildingId: task.buildingId!, floorId: task.floorId, roomId: room.roomId, category: 'routine', outcome: state.outcome, skipReason: state.outcome === 'skipped' ? state.reason : null, label: 'Běžný úklid místnosti', note }];
+        });
+        if (detailLabel.trim() && detailRoomId) { const room = rooms.find((item) => item.id === detailRoomId)!; const task = room.tasks[0]; items.push({ buildingId: task.buildingId!, floorId: task.floorId, roomId: room.roomId, category: 'detail', outcome: 'completed', label: detailLabel.trim(), note }); }
+        setSaving(true); try { await onSave(workerId, workDate, items); } finally { setSaving(false); }
+      }}>{saving ? 'Ukládám…' : 'Uložit záznam'}</button></div>
+    </section>
+  </div>;
+}
+
 function ArrivalReminders({ entries }: { entries: ManualEntry[] }) {
   if (!entries.length) return null;
   return <section className="arrival-reminders"><p className="eyebrow">PO PŘÍCHODU</p>{entries.sort((a, b) => a.sortOrder - b.sortOrder).map((entry) => <p key={entry.id}><span>☀</span><b>{entry.title}</b>{entry.body && <small>{entry.body}</small>}</p>)}</section>;
@@ -3686,7 +3833,27 @@ function WorkerWeeklyResponsibilities({ worker, data, canManage, onSave }: { wor
   return <div className="weekly-responsibility-editor"><div className="person-duty-list">{keys.map((key) => { const current = currentFor(key); const assignedHere = current?.workerId === worker.id; const editing = editingKey === key; return <article key={key} className={assignedHere ? "assigned" : ""}><span><b>{weeklyResponsibilityLabels[key]}</b><small>{assignedHere ? worker.name : current?.workerName ?? "Nepřiřazeno"}</small></span>{canManage && <button onClick={() => setEditingKey(editing ? null : key)}>{assignedHere ? "Změnit" : "Přiřadit"}</button>}{editing && canManage && <div className="duty-edit-controls"><label>Platnost od pondělí<input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} />{!startsOnMonday && <small className="field-error">Vyberte pondělí.</small>}</label><div className="editor-actions"><button type="button" onClick={() => setEditingKey(null)}>Zrušit</button><button disabled={saving !== null || !startsOnMonday} onClick={async () => { setSaving(key); try { await onSave(key, assignedHere ? null : worker.id, effectiveFrom); setEditingKey(null); } finally { setSaving(null); } }}>{saving === key ? "Ukládám…" : assignedHere ? "Odebrat povinnost" : "Přiřadit"}</button></div></div>}</article>; })}</div><details className="duty-help"><summary>ⓘ Jak se povinnosti plánují</summary><p className="hint">Planner je rozloží mezi skutečné směny tohoto člověka. Má-li dost směn, každá povinnost dostane jiný den.</p></details></div>;
 }
 
-function WorkAssignmentOverview({ data, profiles, options, canManage, contracts, attendanceSettings, appSettings, onSelectLinkedProfile, onSaveAttendanceSettings, onSaveContract, onSaveDppLimit, onSaveDpcSettings, onSaveWorker, onSaveAssignment, onSaveException, onSaveRotation, onSaveWeeklyResponsibility }: { data: WorkerPlanningData; profiles: AttendanceWorker[]; options: PlanOptions; canManage: boolean; contracts: WorkerContract[]; attendanceSettings: AttendanceSettings; appSettings: AppSettings; onSelectLinkedProfile: (id: string) => void; onSaveAttendanceSettings: (value: number) => Promise<void>; onSaveContract: (contract: WorkerContract) => Promise<void>; onSaveDppLimit: (value: number) => Promise<void>; onSaveDpcSettings: (weeklyHours: number, referenceWeeks: number, monthlyThreshold: number) => Promise<void>; onSaveWorker: (item: PlanningWorker) => Promise<void>; onSaveAssignment: (item: WorkerWorkAssignment) => Promise<void>; onSaveException: (item: WorkerScheduleException) => Promise<void>; onSaveRotation: (slotIndex: number, workerId: string | null, effectiveFrom: string) => Promise<void>; onSaveWeeklyResponsibility: (key: WeeklyWorkerResponsibility["responsibilityKey"], workerId: string | null, effectiveFrom: string) => Promise<void> }) {
+const availabilityStatusLabel = (status: WorkerAvailabilityChange['status']) => ({ planned: 'Přijde podle plánu', absent: 'Nepřijde', rescheduled: 'Přijde jiný den', time_changed: 'Přijde v jiný čas', partial: 'Jen část směny', substitute: 'Zastupuje jiného pracovníka' } as const)[status];
+
+function WorkerAvailabilityEditor({ worker, workers, onCancel, onSave }: { worker: PlanningWorker; workers: PlanningWorker[]; onCancel: () => void; onSave: (item: WorkerAvailabilityChange) => Promise<void> }) {
+  const [date, setDate] = useState(localDateKey());
+  const [status, setStatus] = useState<WorkerAvailabilityChange['status']>('absent');
+  const [alternateDate, setAlternateDate] = useState('');
+  const [startsAt, setStartsAt] = useState('');
+  const [endsAt, setEndsAt] = useState('');
+  const [substitutesFor, setSubstitutesFor] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  return <form className="operation-editor availability-editor" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave({ id: '', workerId: worker.id, workerName: worker.name, date, status, alternateDate: status === 'rescheduled' ? alternateDate : null, startsAt: ['time_changed', 'partial'].includes(status) ? startsAt : null, endsAt: ['time_changed', 'partial'].includes(status) ? endsAt : null, substitutesForWorkerId: status === 'substitute' ? substitutesFor : null, note, active: true, createdAt: '', createdBy: '' }); } finally { setSaving(false); } }}>
+    <h3>Změna pro konkrétní den</h3><label>Datum<input required type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><label>Změna<select value={status} onChange={(event) => setStatus(event.target.value as WorkerAvailabilityChange['status'])}><option value="absent">Nepřijde</option><option value="rescheduled">Přijde jiný den</option><option value="time_changed">Přijde v jiný čas</option><option value="partial">Jen část směny</option><option value="substitute">Zastupuje jiného pracovníka</option><option value="planned">Přijde podle plánu</option></select></label>
+    {status === 'rescheduled' && <label>Náhradní datum<input required type="date" value={alternateDate} onChange={(event) => setAlternateDate(event.target.value)} /></label>}
+    {['time_changed', 'partial'].includes(status) && <div className="time-grid"><label>Od<input required type="time" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label><label>Do<input required type="time" value={endsAt} onChange={(event) => setEndsAt(event.target.value)} /></label></div>}
+    {status === 'substitute' && <label>Koho zastupuje<select required value={substitutesFor} onChange={(event) => setSubstitutesFor(event.target.value)}><option value="">Vyberte pracovníka</option>{workers.filter((item) => item.active && item.id !== worker.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+    <label>Důvod / poznámka<textarea value={note} onChange={(event) => setNote(event.target.value)} /></label><div className="editor-actions"><button type="button" onClick={onCancel}>Zrušit</button><button disabled={saving}>{saving ? 'Ukládám…' : 'Uložit změnu'}</button></div>
+  </form>;
+}
+
+function WorkAssignmentOverview({ data, cleaningActual, profiles, options, canManage, contracts, attendanceSettings, appSettings, onSelectLinkedProfile, onSaveAttendanceSettings, onSaveContract, onSaveDppLimit, onSaveDpcSettings, onSaveWorker, onSaveAssignment, onSaveException, onSaveAvailability, onSaveRotation, onSaveWeeklyResponsibility }: { data: WorkerPlanningData; cleaningActual: CleaningActualData; profiles: AttendanceWorker[]; options: PlanOptions; canManage: boolean; contracts: WorkerContract[]; attendanceSettings: AttendanceSettings; appSettings: AppSettings; onSelectLinkedProfile: (id: string) => void; onSaveAttendanceSettings: (value: number) => Promise<void>; onSaveContract: (contract: WorkerContract) => Promise<void>; onSaveDppLimit: (value: number) => Promise<void>; onSaveDpcSettings: (weeklyHours: number, referenceWeeks: number, monthlyThreshold: number) => Promise<void>; onSaveWorker: (item: PlanningWorker) => Promise<void>; onSaveAssignment: (item: WorkerWorkAssignment) => Promise<void>; onSaveException: (item: WorkerScheduleException) => Promise<void>; onSaveAvailability: (item: WorkerAvailabilityChange) => Promise<void>; onSaveRotation: (slotIndex: number, workerId: string | null, effectiveFrom: string) => Promise<void>; onSaveWeeklyResponsibility: (key: WeeklyWorkerResponsibility["responsibilityKey"], workerId: string | null, effectiveFrom: string) => Promise<void> }) {
   const today = localDateKey();
   const planningWorkers = data.planningWorkers ?? profiles.map((profile) => ({ id: profile.id, name: profile.name, linkedProfileId: profile.id, active: true }));
   const workerOptions = planningWorkers.filter((worker) => worker.active).map(({ id, name }) => ({ id, name }));
@@ -3700,6 +3867,7 @@ function WorkAssignmentOverview({ data, profiles, options, canManage, contracts,
   const [assignment, setAssignment] = useState<WorkerWorkAssignment | null>(null);
   const [exception, setException] = useState<WorkerScheduleException | null>(null);
   const [editingWorker, setEditingWorker] = useState<PlanningWorker | null>(null);
+  const [availabilityEditorOpen, setAvailabilityEditorOpen] = useState(false);
   const closePlanningWorkerEditor = useHistoryLayer(Boolean(editingWorker && selectedWorker), "planning-worker-editor", () => setEditingWorker(null));
   useEffect(() => { if (selectedWorker?.linkedProfileId) onSelectLinkedProfile(selectedWorker.linkedProfileId); }, [selectedWorker?.linkedProfileId]);
   const workerAssignments = selectedWorker ? data.assignments.filter((item) => item.workerId === selectedWorker.id).sort((a, b) => b.validFrom.localeCompare(a.validFrom)) : [];
@@ -3713,13 +3881,14 @@ function WorkAssignmentOverview({ data, profiles, options, canManage, contracts,
   const activeWorkplaces = [...new Set(activeAssignments.map((item) => item.buildingName).filter(Boolean))];
   const plannedWeekdays = new Set(activeAssignments.flatMap((item) => item.weekdays));
   const currentDuties = selectedWorker ? (data.weeklyResponsibilities ?? []).filter((item) => item.active && item.workerId === selectedWorker.id && item.validFrom <= today && (!item.validTo || item.validTo >= today)) : [];
+  const workerAreas = selectedWorker ? cleaningActual.areas.filter((item) => item.active && item.workerId === selectedWorker.id && item.validFrom <= today && (!item.validTo || item.validTo >= today)) : [];
   const shiftCountLabel = `${plannedWeekdays.size} ${plannedWeekdays.size === 1 ? "směna" : plannedWeekdays.size >= 2 && plannedWeekdays.size <= 4 ? "směny" : "směn"} týdně`;
 
   if (selectedWorker) return <div className="work-assignment-screen person-detail-screen">
     <button className="back-button" onClick={closeWorkerDetail}>← Lidé a práce</button>
-    <section className="panel person-detail-header"><div><div className="worker-name-row"><h2>{selectedWorker.name}</h2><small>{selectedWorker.linkedProfileId ? "Účet propojen" : "Bez účtu"}{selectedWorker.active ? "" : " · Neaktivní"}</small></div><p className="worker-summary-line">{activeWorkplaces.length > 0 ? activeWorkplaces.join(" + ") : "Bez aktivního pracoviště"} · {shiftCountLabel}</p>{currentDuties.length > 0 && <div className="worker-duty-chips">{currentDuties.map((item) => <span key={item.id}>{weeklyResponsibilityLabels[item.responsibilityKey].replace(" – 1× týdně", "")}</span>)}</div>}</div>{canManage && <button className="worker-profile-edit" onClick={() => setEditingWorker(selectedWorker)}>Upravit základní údaje</button>}</section>
+    <section className="panel person-detail-header"><div><div className="worker-name-row"><h2>{selectedWorker.name}</h2><small>{selectedWorker.linkedProfileId ? "Účet propojen" : "Bez účtu"}{selectedWorker.active ? "" : " · Neaktivní"}</small></div><p className="worker-summary-line">{activeWorkplaces.length > 0 ? activeWorkplaces.join(" + ") : "Bez aktivního pracoviště"} · {shiftCountLabel}</p>{workerAreas.length > 0 && <p className="worker-summary-line">Stálá oblast: {workerAreas.map((item) => item.title).join(' + ')}</p>}{currentDuties.length > 0 && <div className="worker-duty-chips">{currentDuties.map((item) => <span key={item.id}>{weeklyResponsibilityLabels[item.responsibilityKey].replace(" – 1× týdně", "")}</span>)}</div>}</div>{canManage && <button className="worker-profile-edit" onClick={() => setEditingWorker(selectedWorker)}>Upravit základní údaje</button>}</section>
     {editingWorker && <PlanningWorkerEditor item={editingWorker} profiles={profiles} onCancel={closePlanningWorkerEditor} onSave={async (value) => { await onSaveWorker(value); closePlanningWorkerEditor(); }} />}
-    <details className="worker-detail-accordion"><summary><span aria-hidden="true">📅</span><b>Rozvrh práce</b><i>›</i></summary><div className="worker-detail-accordion-content"><div className="subsection-heading"><h3>Aktivní pracovní období</h3>{canManage && <button onClick={() => { setException(null); setAssignment(blankAssignment(selectedWorker)); }}>+ Přidat další období</button>}</div><div className="worker-assignment-list">{workerAssignments.map((item) => <button className={item.active ? "" : "inactive"} key={item.id} disabled={!canManage} onClick={() => { setException(null); setAssignment(item); }}><span><b>{item.buildingName} · {item.areaLabel}</b><em>{weekdays.filter((_, index) => item.weekdays.includes(index + 1)).join(" · ")}</em><i>{formatDate(item.validFrom)}{item.validTo ? ` – ${formatDate(item.validTo)}` : " – bez konce"}{item.active ? "" : " · neaktivní"}</i></span>{canManage && <strong>Upravit ›</strong>}</button>)}{workerAssignments.length === 0 && <p className="hint">Zatím nemá uložené pracovní období.</p>}</div>{assignment && <WorkerAssignmentEditor item={assignment} workers={workerOptions} options={options} onCancel={() => setAssignment(null)} onSave={saveAssignment} />}<div className="subsection-heading schedule-exception-heading"><h3>Jednorázové změny směn</h3>{canManage && <button onClick={() => { setAssignment(null); setException(blankException(selectedWorker)); }}>+ Přidat výjimku</button>}</div><div className="person-exception-list">{workerExceptions.map((item) => <button key={item.id} disabled={!canManage} onClick={() => setException(item)}><b>{formatDate(item.date)}</b><span>{item.planned ? `Výjimečně pracuje · ${item.buildingName ?? "pracoviště"} · ${item.areaLabel ?? "oblast"}` : "Nepracuje"}</span>{item.note && <small>{item.note}</small>}</button>)}{workerExceptions.length === 0 && <p className="hint">Bez výjimek.</p>}</div>{exception && <WorkerExceptionEditor item={exception} workers={workerOptions} options={options} onCancel={() => setException(null)} onSave={saveException} />}</div></details>
+    <details className="worker-detail-accordion"><summary><span aria-hidden="true">📅</span><b>Rozvrh práce</b><i>›</i></summary><div className="worker-detail-accordion-content"><div className="subsection-heading"><h3>Aktivní pracovní období</h3>{canManage && <button onClick={() => { setException(null); setAssignment(blankAssignment(selectedWorker)); }}>+ Přidat další období</button>}</div><div className="worker-assignment-list">{workerAssignments.map((item) => <button className={item.active ? "" : "inactive"} key={item.id} disabled={!canManage} onClick={() => { setException(null); setAssignment(item); }}><span><b>{item.buildingName} · {item.areaLabel}</b><em>{weekdays.filter((_, index) => item.weekdays.includes(index + 1)).join(" · ")}</em><i>{formatDate(item.validFrom)}{item.validTo ? ` – ${formatDate(item.validTo)}` : " – bez konce"}{item.active ? "" : " · neaktivní"}</i></span>{canManage && <strong>Upravit ›</strong>}</button>)}{workerAssignments.length === 0 && <p className="hint">Zatím nemá uložené pracovní období.</p>}</div>{assignment && <WorkerAssignmentEditor item={assignment} workers={workerOptions} options={options} onCancel={() => setAssignment(null)} onSave={saveAssignment} />}<div className="subsection-heading schedule-exception-heading"><h3>Jednorázové změny směn</h3>{canManage && cleaningActual.available && <button onClick={() => setAvailabilityEditorOpen(true)}>+ Dostupnost / zástup</button>}{canManage && !cleaningActual.available && <button onClick={() => { setAssignment(null); setException(blankException(selectedWorker)); }}>+ Přidat výjimku</button>}</div>{cleaningActual.available ? <div className="person-exception-list">{cleaningActual.availability.filter((item) => item.workerId === selectedWorker.id).map((item) => <div key={item.id}><b>{formatDate(item.date)}</b><span>{availabilityStatusLabel(item.status)}</span>{item.note && <small>{item.note}</small>}</div>)}{cleaningActual.availability.every((item) => item.workerId !== selectedWorker.id) && <p className="hint">Bez jednorázových změn.</p>}</div> : <div className="person-exception-list">{workerExceptions.map((item) => <button key={item.id} disabled={!canManage} onClick={() => setException(item)}><b>{formatDate(item.date)}</b><span>{item.planned ? `Výjimečně pracuje · ${item.buildingName ?? "pracoviště"} · ${item.areaLabel ?? "oblast"}` : "Nepracuje"}</span>{item.note && <small>{item.note}</small>}</button>)}{workerExceptions.length === 0 && <p className="hint">Bez výjimek.</p>}</div>}{exception && <WorkerExceptionEditor item={exception} workers={workerOptions} options={options} onCancel={() => setException(null)} onSave={saveException} />}{availabilityEditorOpen && <WorkerAvailabilityEditor worker={selectedWorker} workers={planningWorkers} onCancel={() => setAvailabilityEditorOpen(false)} onSave={async (item) => { await onSaveAvailability(item); setAvailabilityEditorOpen(false); }} />}</div></details>
     <details className="worker-detail-accordion"><summary><span aria-hidden="true">🧹</span><b>Týdenní povinnosti</b><i>›</i></summary><div className="worker-detail-accordion-content"><WorkerWeeklyResponsibilities worker={selectedWorker} data={data} canManage={canManage} onSave={onSaveWeeklyResponsibility} /></div></details>
     <details className="worker-detail-accordion"><summary><span aria-hidden="true">📄</span><b>Smlouva a docházka</b><i>›</i></summary><div className="worker-detail-accordion-content">{selectedWorker.linkedProfileId ? <><WorkerContractsPanel workerId={selectedWorker.linkedProfileId} contracts={contracts.filter((item) => item.workerId === selectedWorker.linkedProfileId)} onSave={onSaveContract} /><div className="attendance-planning-setting"><div className="subsection-heading"><h3>Plánovaný počet směn týdně</h3></div><PlannedShiftsSetting settings={attendanceSettings} onSave={onSaveAttendanceSettings} /></div></> : <p className="hint">Smlouvu a docházku lze nastavit po propojení s uživatelem aplikace. Pracovní plán funguje i bez účtu.</p>}</div></details>
     <details className="advanced-settings"><summary>Pokročilé / záložní nastavení</summary><p className="hint">A/B/C je pouze záložní pořadí 4. patra pro období bez osobní týdenní odpovědnosti.</p><FourthFloorRotationEditor data={data} workers={workerOptions} canManage={canManage} onSave={onSaveRotation} /></details>

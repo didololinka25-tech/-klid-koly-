@@ -25,7 +25,7 @@ export function shouldRunResumeRefresh(lastRefreshAt: number, now: number, coold
   return now - lastRefreshAt >= cooldownMs
 }
 
-export type RealtimeRefreshArea = 'today' | 'attendance' | 'cleaning-days' | 'operations' | 'manual' | 'worker-planning' | 'plan-options'
+export type RealtimeRefreshArea = 'today' | 'attendance' | 'cleaning-days' | 'operations' | 'manual' | 'worker-planning' | 'plan-options' | 'cleaning-actual'
 
 export function refreshAreasForRealtimeTable(table: string): RealtimeRefreshArea[] {
   if (table === 'cleaning_completions') return ['today']
@@ -35,5 +35,7 @@ export function refreshAreasForRealtimeTable(table: string): RealtimeRefreshArea
   if (table === 'manual_entries') return ['manual']
   if (table === 'cleaning_tasks' || table === 'rooms' || table === 'floors') return ['plan-options', 'today']
   if (table === 'planning_workers' || table === 'worker_work_assignments' || table === 'worker_schedule_exceptions' || table === 'cleaning_rotation_slot_assignments' || table === 'worker_weekly_responsibilities') return ['worker-planning', 'today']
+  if (table === 'worker_cleaning_areas' || table === 'worker_availability_changes') return ['cleaning-actual', 'worker-planning', 'today']
+  if (table === 'cleaning_actual_records') return ['cleaning-actual']
   return []
 }

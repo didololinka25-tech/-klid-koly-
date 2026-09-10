@@ -16,6 +16,7 @@ import { calendarInvokeFailure, parseSchoolCalendarResponse, type CalendarSchool
 import { loadDynamicSchoolPlan, type DynamicSchoolPlanItem } from './dynamicSchoolPlanLoader'
 import { isAwaitingAccessApproval } from './system/access'
 import type { SchoolCalendarLocationAlias, SchoolCalendarScopeMapping, SchoolCalendarScopeType } from './schoolCalendarCollision'
+import type { CleaningActualData, CleaningActualDraft, WorkerAvailabilityChange, WorkerCleaningArea } from './cleaningActual'
 
 export type { DynamicSchoolPlanItem } from './dynamicSchoolPlanLoader'
 
@@ -737,6 +738,55 @@ export const schoolRepository = {
       editable: true, buildingScopeAvailable,
     }
   },
+  cleaningActual: async (from: string, to: string): Promise<CleaningActualData> => {
+    const db = client()
+    const [areaResult, availabilityResult, actualResult] = await Promise.all([
+      db.from('worker_cleaning_areas').select('id,planning_worker_id,building_id,floor_id,area_code,title,recommended_visits_per_week,rotation_mode,always_include_wc,valid_from,valid_to,active,planning_workers(display_name,linked_profile_id),buildings(name),floors(name)').eq('active', true),
+      db.from('worker_availability_changes').select('id,planning_worker_id,effective_date,availability_status,alternate_date,starts_at,ends_at,substitutes_for_planning_worker_id,note,active,created_at,created_by,planning_workers!worker_availability_changes_planning_worker_id_fkey(display_name)').eq('active', true).gte('effective_date', from).lte('effective_date', to),
+      db.from('cleaning_actual_records').select('id,work_date,subject_planning_worker_id,subject_profile_id,recorded_by,building_id,floor_id,room_id,task_id,category,outcome,skip_reason,label,note,occurred_at,active,planning_workers(display_name),profiles!cleaning_actual_records_recorded_by_fkey(full_name),buildings(name),floors(name),rooms(name)').eq('active', true).gte('work_date', from).lte('work_date', to).order('work_date', { ascending: false }).order('occurred_at', { ascending: false }).limit(1000),
+    ])
+    if ([areaResult.error, availabilityResult.error, actualResult.error].some((error) => missingRelation(error))) return { areas: [], availability: [], records: [], available: false }
+    const error = areaResult.error ?? availabilityResult.error ?? actualResult.error
+    if (error) throw error
+    return {
+      areas: (areaResult.data ?? []).map((row: any): WorkerCleaningArea => ({
+        id: row.id, workerId: row.planning_worker_id, workerName: row.planning_workers?.display_name ?? 'Pracovník', linkedProfileId: row.planning_workers?.linked_profile_id,
+        buildingId: row.building_id, buildingName: row.buildings?.name ?? 'Pracoviště', floorId: row.floor_id, floorName: row.floors?.name,
+        areaCode: row.area_code, title: row.title, visitsPerWeek: Number(row.recommended_visits_per_week), rotationMode: row.rotation_mode,
+        alwaysIncludeWc: Boolean(row.always_include_wc), validFrom: row.valid_from, validTo: row.valid_to, active: Boolean(row.active),
+      })),
+      availability: (availabilityResult.data ?? []).map((row: any): WorkerAvailabilityChange => ({
+        id: row.id, workerId: row.planning_worker_id, workerName: row.planning_workers?.display_name ?? 'Pracovník', date: row.effective_date,
+        status: row.availability_status, alternateDate: row.alternate_date, startsAt: row.starts_at, endsAt: row.ends_at,
+        substitutesForWorkerId: row.substitutes_for_planning_worker_id, note: row.note ?? '', active: Boolean(row.active), createdAt: row.created_at, createdBy: row.created_by,
+      })),
+      records: (actualResult.data ?? []).map((row: any) => ({
+        id: row.id, workDate: row.work_date, workerId: row.subject_planning_worker_id, workerName: row.planning_workers?.display_name,
+        subjectProfileId: row.subject_profile_id, recordedBy: row.recorded_by, recordedByName: row.profiles?.full_name ?? 'Uživatel',
+        buildingId: row.building_id, buildingName: row.buildings?.name ?? 'Pracoviště', floorId: row.floor_id, floorName: row.floors?.name,
+        roomId: row.room_id, roomName: row.rooms?.name, taskId: row.task_id, category: row.category, outcome: row.outcome,
+        skipReason: row.skip_reason, label: row.label, note: row.note ?? '', occurredAt: row.occurred_at, active: Boolean(row.active),
+      })),
+      available: true,
+    }
+  },
+  saveCleaningActualBatch: async (workerId: string, workDate: string, items: CleaningActualDraft[]) => {
+    const { data, error } = await client().rpc('save_cleaning_actual_batch', {
+      target_planning_worker_id: workerId, target_work_date: workDate,
+      target_items: items.map((item) => ({ ...item, building_id: item.buildingId, floor_id: item.floorId ?? null, room_id: item.roomId ?? null, task_id: item.taskId ?? null, skip_reason: item.skipReason ?? null })),
+    })
+    if (missingFunction(error)) throw new Error('Evidence skutečně provedeného úklidu ještě není v databázi aktivní.')
+    if (error) throw error
+    return (data ?? []) as string[]
+  },
+  saveWorkerAvailabilityChange: async (item: WorkerAvailabilityChange) => {
+    const { error } = await client().rpc('admin_save_worker_availability_change', {
+      target_id: item.id || null, target_planning_worker_id: item.workerId, target_date: item.date, target_status: item.status,
+      target_alternate_date: item.alternateDate || null, target_starts_at: item.startsAt || null, target_ends_at: item.endsAt || null,
+      target_substitutes_for: item.substitutesForWorkerId || null, target_note: item.note || '', target_active: item.active,
+    })
+    if (error) throw error
+  },
   workerPlanning: async (): Promise<WorkerPlanningData> => {
     const { data, error } = await client().rpc('get_worker_work_planning')
     if (missingFunction(error)) return { assignments: [], exceptions: [], rotationDefinitions: [], rotationSlots: [], available: false }
@@ -1032,7 +1082,7 @@ export const schoolRepository = {
     if (error) throw attendanceError(error)
     return mapAttendance(data)
   },
-  subscribe: (onChange: (table: 'cleaning_completions' | 'attendance' | 'cleaning_day_exceptions' | 'stock_items' | 'incidents' | 'manual_entries' | 'cleaning_tasks' | 'rooms' | 'floors' | 'planning_workers' | 'worker_work_assignments' | 'worker_schedule_exceptions' | 'cleaning_rotation_slot_assignments' | 'worker_weekly_responsibilities') => void): RealtimeChannel => client().channel('school-changes')
+  subscribe: (onChange: (table: 'cleaning_completions' | 'attendance' | 'cleaning_day_exceptions' | 'stock_items' | 'incidents' | 'manual_entries' | 'cleaning_tasks' | 'rooms' | 'floors' | 'planning_workers' | 'worker_work_assignments' | 'worker_schedule_exceptions' | 'cleaning_rotation_slot_assignments' | 'worker_weekly_responsibilities' | 'worker_cleaning_areas' | 'worker_availability_changes' | 'cleaning_actual_records') => void): RealtimeChannel => client().channel('school-changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_completions' }, () => onChange('cleaning_completions'))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, () => onChange('attendance'))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_day_exceptions' }, () => onChange('cleaning_day_exceptions'))
@@ -1047,6 +1097,9 @@ export const schoolRepository = {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'worker_schedule_exceptions' }, () => onChange('worker_schedule_exceptions'))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_rotation_slot_assignments' }, () => onChange('cleaning_rotation_slot_assignments'))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'worker_weekly_responsibilities' }, () => onChange('worker_weekly_responsibilities'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'worker_cleaning_areas' }, () => onChange('worker_cleaning_areas'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'worker_availability_changes' }, () => onChange('worker_availability_changes'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'cleaning_actual_records' }, () => onChange('cleaning_actual_records'))
     .subscribe(),
 }
 
