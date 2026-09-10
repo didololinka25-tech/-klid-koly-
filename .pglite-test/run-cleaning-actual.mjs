@@ -82,7 +82,7 @@ await db.exec(`
     ('${id.assignment}','${id.danaWorker}','${id.school}','${id.floor}','1. patro',array[1,3,5]::smallint[],'2026-09-01',null,true,'${id.adminProfile}','${id.adminProfile}');
 `)
 
-const migration = readFileSync(new URL('../supabase/migrations/20260909203841_cleaning_recommendations_and_actual_work.sql', import.meta.url), 'utf8')
+const migration = readFileSync(new URL('../supabase/migrations/20260910071257_cleaning_recommendations_and_actual_work.sql', import.meta.url), 'utf8')
 await db.exec(migration)
 
 async function asUser(userId, callback) {

@@ -75,7 +75,7 @@ test('Google blokace prostoru zvýší prioritu, ale chyba/absence Google dat do
 })
 
 test('migrace je additivní, backfilluje historii a zápis cizí práce povoluje jen správci', () => {
-  const sql = readFileSync(new URL('../supabase/migrations/20260909203841_cleaning_recommendations_and_actual_work.sql', import.meta.url), 'utf8')
+  const sql = readFileSync(new URL('../supabase/migrations/20260910071257_cleaning_recommendations_and_actual_work.sql', import.meta.url), 'utf8')
   assert.match(sql, /insert into public\.cleaning_actual_records[\s\S]*from public\.cleaning_completions/)
   assert.match(sql, /if not public\.is_admin\(\) and linked is distinct from actor/)
   assert.match(sql, /source_schedule_exception_id/)
