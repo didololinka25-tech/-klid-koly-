@@ -26,6 +26,7 @@ export const EXPLICIT_PER_DAY_COLOR_ALIASES = Object.freeze({
   '2026-09-11|000000': 1,
   '2026-09-11|FF0000': 2,
   '2026-09-11|EA4335': 2,
+  '2026-09-14|A64D79': 1,
 })
 
 export function normalizePersonName(value) {

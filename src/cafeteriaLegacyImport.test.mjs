@@ -196,6 +196,31 @@ test('per-day alias neovlivní jiný den a chybějící aktivní sort_order zůs
   assert.equal(matchVariant(withInactiveTarget, [], '00FF00', '2026-09-01'), null)
 })
 
+test('potvrzený alias Hujová 14. 9. mapuje A64D79 na sort_order 1 a zachová quantity 2', () => {
+  const dayVariants = [
+    { id: 'sekana', meal_day_id: 'day-14', active: true, sort_order: 1 },
+    { id: 'karbanatky', meal_day_id: 'day-14', active: true, sort_order: 2 },
+  ]
+  const dayDatabase = {
+    ...database,
+    mealDays: [{ id: 'day-14', meal_date: '2026-09-14' }],
+    variants: dayVariants,
+  }
+  const result = planImport([
+    source({ mealDate: '2026-09-14', value: 2, quantity: 2, color: 'A64D79' }),
+  ], dayDatabase, new Map())[0]
+
+  assert.equal(result.status, IMPORT_STATUSES.CREATE)
+  assert.equal(result.variant.id, 'sekana')
+  assert.equal(result.variant.sort_order, 1)
+  assert.equal(result.quantity, 2)
+  assert.equal(matchVariant(dayVariants, [], 'A64D79', '2026-09-15'), null)
+  assert.equal(matchVariant([
+    { id: 'sort-2', active: true, sort_order: 2 },
+    { id: 'sort-3', active: true, sort_order: 3 },
+  ], [], 'A64D79', '2026-09-14'), null)
+})
+
 test('diner match je přesný a řeší pořadí příjmení/jména a mezery', () => {
   assert.equal(matchDiner(['Testovací ', ' Anna'], [diner]).id, 'd1')
   assert.equal(matchDiner(['Jiná', 'Anna'], [diner]), null)
